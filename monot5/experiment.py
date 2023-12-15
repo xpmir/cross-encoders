@@ -5,16 +5,10 @@ from xpmir.distributed import DistributedHook
 from xpmir.learning.learner import Learner
 from xpmir.letor.learner import ValidationListener
 import xpmir.letor.trainers.pairwise as pairwise
-from xpmir.neural.cross import CrossScorer
-from experimaestro import experiment, setmeta
+from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
 from xpmir.learning.batchers import PowerAdaptativeBatcher
-from xpmir.learning.optim import (
-    TensorboardService,
-)
-from xpmir.papers.cli import paper_command
 from xpmir.rankers.standard import BM25
-from xpmir.text.huggingface import DualTransformerEncoder
 from xpmir.papers.results import PaperResults
 from xpmir.papers.helpers.samplers import (
     msmarco_v1_docpairs_efficient_sampler,
@@ -22,7 +16,9 @@ from xpmir.papers.helpers.samplers import (
     msmarco_v1_validation_dataset,
     prepare_collection,
 )
-from configuration import Monobert
+from xpmir.neural.generative.hf import T5CustomOutputGenerator, LoadFromT5
+from xpmir.neural.generative.cross import GenerativeCrossScorer
+from configuration import MonoT5
 import xpmir.interfaces.anserini as anserini
 from xpmir.rankers import scorer_retriever, RandomScorer
 from xpmir.experiments.ir import ir_experiment, ExperimentHelper
@@ -30,7 +26,7 @@ from xpmir.experiments.ir import ir_experiment, ExperimentHelper
 logging.basicConfig(level=logging.INFO)
 
 
-def get_retrievers(cfg: Monobert):
+def get_retrievers(cfg: MonoT5):
     """Returns retrievers
 
 
@@ -60,11 +56,11 @@ def get_retrievers(cfg: Monobert):
 
 @ir_experiment()
 def run(
-    helper: ExperimentHelper, cfg: Monobert
+    helper: ExperimentHelper, cfg: MonoT5
 ) -> PaperResults:
     """monoBERT model"""
 
-    launcher_learner = find_launcher(cfg.monobert.requirements)
+    launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
     device = cfg.device
@@ -80,7 +76,7 @@ def run(
     # Setup indices and validation/test base retrievers
     retrievers, model_based_retrievers = get_retrievers(cfg)
     val_retrievers = partial(
-        retrievers, store=documents, k=cfg.monobert.validation_top_k
+        retrievers, store=documents, k=cfg.learner.validation_top_k
     )
     test_retrievers = partial(
         retrievers, store=documents, k=cfg.retrieval.k
@@ -103,23 +99,25 @@ def run(
 
     # Define the different launchers
 
-    # define the trainer for monobert
+    # define the trainer for mono_t5
     monobert_trainer = pairwise.PairwiseTrainer(
         lossfn=pairwise.PointwiseCrossEntropyLoss(),
         sampler=msmarco_v1_docpairs_efficient_sampler(
-            sample_rate=cfg.monobert.sample_rate,
-            sample_max=cfg.monobert.sample_max,
+            sample_rate=cfg.learner.sample_rate,
+            sample_max=cfg.learner.sample_max,
             launcher=launcher_preprocessing,
         ),
         batcher=PowerAdaptativeBatcher(),
-        batch_size=cfg.monobert.optimization.batch_size,
+        batch_size=cfg.learner.optimization.batch_size,
     )
-
-    monobert_scorer: CrossScorer = CrossScorer(
-        encoder=DualTransformerEncoder(
-            model_id=cfg.base, trainable=True, maxlen=512, dropout=0.1
-        )
-    ).tag("scorer", "monobert")
+    
+    
+    generator = T5CustomOutputGenerator(tokens=["true","false", "<pad>"], hf_id=cfg.base)
+    
+    mono_scorer = GenerativeCrossScorer(
+        generator=generator,
+        relevant_token_id=0
+    ).tag("scorer", "mono_t5")
 
     # The validation listener evaluates the full retriever
     # (retriever + scorer) and keep the best performing model
@@ -130,10 +128,10 @@ def run(
         retriever=model_based_retrievers(
             documents,
             retrievers=val_retrievers,
-            scorer=monobert_scorer,
+            scorer=mono_scorer,
             device=device,
         ),
-        validation_interval=cfg.monobert.validation_interval,
+        validation_interval=cfg.learner.validation_interval,
         metrics={"RR@10": True, "AP": False, "nDCG": False},
     )
 
@@ -145,19 +143,21 @@ def run(
         # How to train the model
         trainer=monobert_trainer,
         # The model to train
-        model=monobert_scorer,
+        model=mono_scorer,
         # Optimization settings
-        steps_per_epoch=cfg.monobert.optimization.steps_per_epoch,
-        optimizers=cfg.monobert.optimization.optimizer,
-        max_epochs=cfg.monobert.optimization.max_epochs,
+        steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
+        optimizers=cfg.learner.optimization.optimizer,
+        max_epochs=cfg.learner.optimization.max_epochs,
         # The listeners (here, for validation)
         listeners=[validation],
         # The hook used for evaluation
-        hooks=[setmeta(DistributedHook(models=[monobert_scorer]), True)],
+        hooks=[setmeta(DistributedHook(models=[generator]), True)],
     )
 
     # Submit job and link
-    outputs = learner.submit(launcher=launcher_learner)
+    outputs = learner.submit(launcher=launcher_learner, init_tasks=[
+        LoadFromT5(t5_model=generator)
+    ])
     helper.tensorboard_service.add(learner, learner.logpath)
 
     # Evaluate the neural model on test collections
@@ -166,17 +166,17 @@ def run(
         tests.evaluate_retriever(
             partial(
                 model_based_retrievers,
-                scorer=monobert_scorer,
+                scorer=mono_scorer,
                 retrievers=test_retrievers,
                 device=device,
             ),
             launcher_evaluate,
-            model_id=f"monobert-{metric_name}",
+            model_id=f"mono_t5-{metric_name}",
             init_tasks=[load_model],
         )
 
     return PaperResults(
-        models={"monobert-RR@10": outputs.listeners[validation.id]["RR@10"]},
+        models={"mono_t5-RR@10": outputs.listeners[validation.id]["RR@10"]},
         evaluations=tests,
-        tb_logs={"monobert-RR@10": learner.logpath},
+        tb_logs={"mono_t5-RR@10": learner.logpath},
     )

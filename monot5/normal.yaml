@@ -1,0 +1,47 @@
+id: monot5
+title: "monoT5 trained on MS-Marco"
+description: |
+    Implementation of 
+    
+        Nogueira, R., Jiang, Z., Lin, J., 2020. Document Ranking with a Pretrained Sequence-to-Sequence Model. arXiv:2003.06713 [cs].
+
+    This model has been trained on MsMarco v1, and uses the t5-base model
+
+gpu: true
+file: experiment
+base: "t5-base"
+
+preprocessing:
+    requirements: duration=6h & cpu(mem=4G, cores=8)
+
+indexation:
+    requirements: duration=6h & cpu(mem=4G, cores=8)
+
+validation:
+    # Use 500 topics for validation
+    size: 500
+
+learner:
+    optimization:
+        # 100k steps
+        steps_per_epoch: 100
+        max_epochs: 1_000
+
+        # ... with batch 128
+        batch_size: 128
+
+        # Learning rate
+        optimizer_name: sgd
+        re_no_l2_regularization: ["\\.layer_norm\\.weight$", "\\.final_layer_norm\\.weight$"]
+        scheduler: False
+        weight_decay: 5e-5
+        lr: 1e-3
+
+    # (in epochs)
+    validation_interval: 100
+    requirements: duration=4 days & cpu(mem=10G) & cuda(mem=24G) * 2
+
+retrieval:
+    requirements: duration=12h & cpu(mem=10G) & cuda(mem=24G) * 2
+    k: 1000
+

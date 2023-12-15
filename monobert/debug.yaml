@@ -9,6 +9,7 @@ description: |
 gpu: true
 base: "microsoft/MiniLM-L12-H384-uncased"
 dev_test_size: 50
+file: experiment
 
 validation:
     size: 10
