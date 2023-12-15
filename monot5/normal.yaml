@@ -1,8 +1,8 @@
 id: monot5
 title: "monoT5 trained on MS-Marco"
 description: |
-    Implementation of 
-    
+    Implementation of
+
         Nogueira, R., Jiang, Z., Lin, J., 2020. Document Ranking with a Pretrained Sequence-to-Sequence Model. arXiv:2003.06713 [cs].
 
     This model has been trained on MsMarco v1, and uses the t5-base model
@@ -44,4 +44,3 @@ learner:
 retrieval:
     requirements: duration=12h & cpu(mem=10G) & cuda(mem=24G) * 2
     k: 1000
-

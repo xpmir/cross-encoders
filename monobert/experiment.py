@@ -6,13 +6,9 @@ from xpmir.learning.learner import Learner
 from xpmir.letor.learner import ValidationListener
 import xpmir.letor.trainers.pairwise as pairwise
 from xpmir.neural.cross import CrossScorer
-from experimaestro import experiment, setmeta
+from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
 from xpmir.learning.batchers import PowerAdaptativeBatcher
-from xpmir.learning.optim import (
-    TensorboardService,
-)
-from xpmir.papers.cli import paper_command
 from xpmir.rankers.standard import BM25
 from xpmir.text.huggingface import DualTransformerEncoder
 from xpmir.papers.results import PaperResults
@@ -59,9 +55,7 @@ def get_retrievers(cfg: Monobert):
 
 
 @ir_experiment()
-def run(
-    helper: ExperimentHelper, cfg: Monobert
-) -> PaperResults:
+def run(helper: ExperimentHelper, cfg: Monobert) -> PaperResults:
     """monoBERT model"""
 
     launcher_learner = find_launcher(cfg.monobert.requirements)

@@ -55,9 +55,7 @@ def get_retrievers(cfg: MonoT5):
 
 
 @ir_experiment()
-def run(
-    helper: ExperimentHelper, cfg: MonoT5
-) -> PaperResults:
+def run(helper: ExperimentHelper, cfg: MonoT5) -> PaperResults:
     """monoBERT model"""
 
     launcher_learner = find_launcher(cfg.learner.requirements)
@@ -110,14 +108,14 @@ def run(
         batcher=PowerAdaptativeBatcher(),
         batch_size=cfg.learner.optimization.batch_size,
     )
-    
-    
-    generator = T5CustomOutputGenerator(tokens=["true","false", "<pad>"], hf_id=cfg.base)
-    
-    mono_scorer = GenerativeCrossScorer(
-        generator=generator,
-        relevant_token_id=0
-    ).tag("scorer", "mono_t5")
+
+    generator = T5CustomOutputGenerator(
+        tokens=["true", "false", "<pad>"], hf_id=cfg.base
+    )
+
+    mono_scorer = GenerativeCrossScorer(generator=generator, relevant_token_id=0).tag(
+        "scorer", "mono_t5"
+    )
 
     # The validation listener evaluates the full retriever
     # (retriever + scorer) and keep the best performing model
@@ -155,9 +153,9 @@ def run(
     )
 
     # Submit job and link
-    outputs = learner.submit(launcher=launcher_learner, init_tasks=[
-        LoadFromT5(t5_model=generator)
-    ])
+    outputs = learner.submit(
+        launcher=launcher_learner, init_tasks=[LoadFromT5(t5_model=generator)]
+    )
     helper.tensorboard_service.add(learner, learner.logpath)
 
     # Evaluate the neural model on test collections
