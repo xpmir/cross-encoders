@@ -21,7 +21,7 @@ from xpmir.papers.helpers.samplers import (
 from configuration import Monobert
 import xpmir.interfaces.anserini as anserini
 from xpmir.rankers import scorer_retriever, RandomScorer
-from xpmir.experiments.ir import ir_experiment, ExperimentHelper
+from xpmir.experiments.ir import ir_experiment, IRExperimentHelper
 
 logging.basicConfig(level=logging.INFO)
 
@@ -55,7 +55,7 @@ def get_retrievers(cfg: Monobert):
 
 
 @ir_experiment()
-def run(helper: ExperimentHelper, cfg: Monobert) -> PaperResults:
+def run(helper: IRExperimentHelper, cfg: Monobert) -> PaperResults:
     """monoBERT model"""
 
     launcher_learner = find_launcher(cfg.monobert.requirements)

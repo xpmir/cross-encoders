@@ -21,7 +21,7 @@ from xpmir.neural.generative.cross import GenerativeCrossScorer
 from configuration import MonoT5
 import xpmir.interfaces.anserini as anserini
 from xpmir.rankers import scorer_retriever, RandomScorer
-from xpmir.experiments.ir import ir_experiment, ExperimentHelper
+from xpmir.experiments.ir import ir_experiment, IRExperimentHelper
 
 logging.basicConfig(level=logging.INFO)
 
@@ -55,7 +55,7 @@ def get_retrievers(cfg: MonoT5):
 
 
 @ir_experiment()
-def run(helper: ExperimentHelper, cfg: MonoT5) -> PaperResults:
+def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
     """monoBERT model"""
 
     launcher_learner = find_launcher(cfg.learner.requirements)
@@ -98,7 +98,7 @@ def run(helper: ExperimentHelper, cfg: MonoT5) -> PaperResults:
     # Define the different launchers
 
     # define the trainer for mono_t5
-    monobert_trainer = pairwise.PairwiseTrainer(
+    trainer = pairwise.PairwiseTrainer(
         lossfn=pairwise.PointwiseCrossEntropyLoss(),
         sampler=msmarco_v1_docpairs_efficient_sampler(
             sample_rate=cfg.learner.sample_rate,
@@ -108,11 +108,14 @@ def run(helper: ExperimentHelper, cfg: MonoT5) -> PaperResults:
         batcher=PowerAdaptativeBatcher(),
         batch_size=cfg.learner.optimization.batch_size,
     )
-
+    
+    # Modifies a T5 model so it only outputs 3 tokens (including pad which is used as <BOS>)
     generator = T5CustomOutputGenerator(
         tokens=["true", "false", "<pad>"], hf_id=cfg.base
     )
 
+    # Creates a generative cross-scorer that computes P(token | q/d template)
+    # where q/d template is by default: Document: [D] Query [Q] Relevant:
     mono_scorer = GenerativeCrossScorer(generator=generator, relevant_token_id=0).tag(
         "scorer", "mono_t5"
     )
@@ -139,7 +142,7 @@ def run(helper: ExperimentHelper, cfg: MonoT5) -> PaperResults:
         device=device,
         random=random,
         # How to train the model
-        trainer=monobert_trainer,
+        trainer=trainer,
         # The model to train
         model=mono_scorer,
         # Optimization settings

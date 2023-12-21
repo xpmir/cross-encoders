@@ -7,7 +7,10 @@ description: |
 
     This model has been trained on MsMarco v1, and uses the t5-base model
 
+    Parameters based on [PyGaggle](https://raw.githubusercontent.com/vjeronymo2/pygaggle/master/pygaggle/run/finetune_monot5.py)
+
 gpu: true
+parent: common
 file: experiment
 base: "t5-base"
 
@@ -31,11 +34,14 @@ learner:
         batch_size: 128
 
         # Learning rate
-        optimizer_name: sgd
+        optimizer_name: adafactor
         re_no_l2_regularization: ["\\.layer_norm\\.weight$", "\\.final_layer_norm\\.weight$"]
-        scheduler: False
         weight_decay: 5e-5
         lr: 1e-3
+
+        # Use scheduler
+        scheduler: true
+        num_warmup_steps: 1_000
 
     # (in epochs)
     validation_interval: 100
