@@ -10,7 +10,6 @@ description: |
     Parameters based on [PyGaggle](https://raw.githubusercontent.com/vjeronymo2/pygaggle/master/pygaggle/run/finetune_monot5.py)
 
 gpu: true
-parent: common
 file: experiment
 base: "t5-base"
 
