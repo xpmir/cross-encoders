@@ -37,11 +37,11 @@ class Preprocessing:
 
 
 @configuration()
-class Monobert(RerankerMSMarcoV1Configuration):
+class MonoMLM(RerankerMSMarcoV1Configuration):
     indexation: Indexation = Factory(Indexation)
     retrieval: Retrieval = Factory(Retrieval)
 
-    monobert: Learner = Factory(Learner)
+    learner: Learner = Factory(Learner)
     preprocessing: Preprocessing = Factory(Preprocessing)
 
     dev_test_size: int = 0

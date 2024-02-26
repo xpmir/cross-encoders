@@ -19,7 +19,7 @@ validation:
     # Use 500 topics for validation
     size: 500
 
-monobert:
+learner:
     optimization:
         steps_per_epoch: 64
         batch_size: 64

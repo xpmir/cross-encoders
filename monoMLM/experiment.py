@@ -1,32 +1,31 @@
-from functools import partial
 import logging
+from functools import partial
 
-from xpmir.distributed import DistributedHook
-from xpmir.learning.learner import Learner
-from xpmir.letor.learner import ValidationListener
-import xpmir.letor.trainers.pairwise as pairwise
-from xpmir.neural.cross import CrossScorer
+from configuration import MonoMLM
 from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
-from xpmir.learning.batchers import PowerAdaptativeBatcher
-from xpmir.rankers.standard import BM25
-from xpmir.text.huggingface import DualTransformerEncoder
-from xpmir.papers.results import PaperResults
-from xpmir.papers.helpers.samplers import (
-    msmarco_v1_docpairs_efficient_sampler,
-    msmarco_v1_tests,
-    msmarco_v1_validation_dataset,
-    prepare_collection,
-)
-from configuration import Monobert
+
 import xpmir.interfaces.anserini as anserini
-from xpmir.rankers import scorer_retriever, RandomScorer
-from xpmir.experiments.ir import ir_experiment, IRExperimentHelper
+import xpmir.letor.trainers.pairwise as pairwise
+from xpmir.distributed import DistributedHook
+from xpmir.experiments.ir import IRExperimentHelper, ir_experiment
+from xpmir.learning.batchers import PowerAdaptativeBatcher
+from xpmir.learning.learner import Learner
+from xpmir.letor.learner import ValidationListener
+from xpmir.neural.cross import CrossScorer
+from xpmir.papers.helpers.samplers import (
+    msmarco_v1_docpairs_efficient_sampler, msmarco_v1_tests,
+    msmarco_v1_validation_dataset, prepare_collection)
+from xpmir.papers.results import PaperResults
+from xpmir.rankers import RandomScorer, scorer_retriever
+from xpmir.rankers.standard import BM25
+from xpmir.text.huggingface import HFCLSEncoder, HFStringTokenizer
+from xpmir.text import TokenizedTextEncoder
 
 logging.basicConfig(level=logging.INFO)
 
 
-def get_retrievers(cfg: Monobert):
+def get_retrievers(cfg: MonoMLM):
     """Returns retrievers
 
 
@@ -55,10 +54,10 @@ def get_retrievers(cfg: Monobert):
 
 
 @ir_experiment()
-def run(helper: IRExperimentHelper, cfg: Monobert) -> PaperResults:
-    """monoBERT model"""
+def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
+    """monoMLM model training"""
 
-    launcher_learner = find_launcher(cfg.monobert.requirements)
+    launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
     device = cfg.device
@@ -74,7 +73,7 @@ def run(helper: IRExperimentHelper, cfg: Monobert) -> PaperResults:
     # Setup indices and validation/test base retrievers
     retrievers, model_based_retrievers = get_retrievers(cfg)
     val_retrievers = partial(
-        retrievers, store=documents, k=cfg.monobert.validation_top_k
+        retrievers, store=documents, k=cfg.learner.validation_top_k
     )
     test_retrievers = partial(
         retrievers, store=documents, k=cfg.retrieval.k
@@ -97,23 +96,24 @@ def run(helper: IRExperimentHelper, cfg: Monobert) -> PaperResults:
 
     # Define the different launchers
 
-    # define the trainer for monobert
-    monobert_trainer = pairwise.PairwiseTrainer(
+    # define the trainer for monomlm
+    monomlm_trainer = pairwise.PairwiseTrainer(
         lossfn=pairwise.PointwiseCrossEntropyLoss(),
         sampler=msmarco_v1_docpairs_efficient_sampler(
-            sample_rate=cfg.monobert.sample_rate,
-            sample_max=cfg.monobert.sample_max,
+            sample_rate=cfg.learner.sample_rate,
+            sample_max=cfg.learner.sample_max,
             launcher=launcher_preprocessing,
         ),
         batcher=PowerAdaptativeBatcher(),
-        batch_size=cfg.monobert.optimization.batch_size,
+        batch_size=cfg.learner.optimization.batch_size,
     )
 
-    monobert_scorer: CrossScorer = CrossScorer(
-        encoder=DualTransformerEncoder(
-            model_id=cfg.base, trainable=True, maxlen=512, dropout=0.1
+    monomlm_scorer: CrossScorer = CrossScorer(
+        encoder=TokenizedTextEncoder(
+            tokenizer=HFStringTokenizer.from_pretrained_id(cfg.base),
+            encoder=HFCLSEncoder.from_pretrained_id(cfg.base),
         )
-    ).tag("scorer", "monobert")
+    ).tag("scorer", cfg.id)
 
     # The validation listener evaluates the full retriever
     # (retriever + scorer) and keep the best performing model
@@ -124,10 +124,10 @@ def run(helper: IRExperimentHelper, cfg: Monobert) -> PaperResults:
         retriever=model_based_retrievers(
             documents,
             retrievers=val_retrievers,
-            scorer=monobert_scorer,
+            scorer=monomlm_scorer,
             device=device,
         ),
-        validation_interval=cfg.monobert.validation_interval,
+        validation_interval=cfg.learner.validation_interval,
         metrics={"RR@10": True, "AP": False, "nDCG": False},
     )
 
@@ -137,17 +137,17 @@ def run(helper: IRExperimentHelper, cfg: Monobert) -> PaperResults:
         device=device,
         random=random,
         # How to train the model
-        trainer=monobert_trainer,
+        trainer=monomlm_trainer,
         # The model to train
-        model=monobert_scorer,
+        model=monomlm_scorer,
         # Optimization settings
-        steps_per_epoch=cfg.monobert.optimization.steps_per_epoch,
-        optimizers=cfg.monobert.optimization.optimizer,
-        max_epochs=cfg.monobert.optimization.max_epochs,
+        steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
+        optimizers=cfg.learner.optimization.optimizer,
+        max_epochs=cfg.learner.optimization.max_epochs,
         # The listeners (here, for validation)
         listeners=[validation],
         # The hook used for evaluation
-        hooks=[setmeta(DistributedHook(models=[monobert_scorer]), True)],
+        hooks=[setmeta(DistributedHook(models=[monomlm_scorer]), True)],
     )
 
     # Submit job and link
@@ -160,17 +160,17 @@ def run(helper: IRExperimentHelper, cfg: Monobert) -> PaperResults:
         tests.evaluate_retriever(
             partial(
                 model_based_retrievers,
-                scorer=monobert_scorer,
+                scorer=monomlm_scorer,
                 retrievers=test_retrievers,
                 device=device,
             ),
             launcher_evaluate,
-            model_id=f"monobert-{metric_name}",
+            model_id=f"{cfg.id}-{metric_name}",
             init_tasks=[load_model],
         )
 
     return PaperResults(
-        models={"monobert-RR@10": outputs.listeners[validation.id]["RR@10"]},
+        models={"{cfg.id}-RR@10": outputs.listeners[validation.id]["RR@10"]},
         evaluations=tests,
-        tb_logs={"monobert-RR@10": learner.logpath},
+        tb_logs={"{cfg.id}-RR@10": learner.logpath},
     )

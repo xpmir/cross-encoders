@@ -4,7 +4,11 @@
 
 Reproduces **Passage Re-ranking with BERT (Rodrigo Nogueira, Kyunghyun Cho). 2019. https://arxiv.org/abs/1901.04085**.
 
-- `monobert/normal`: training with bert-base-uncased. Hugging-face: [xpmir/monobert](https://huggingface.co/xpmir/monobert)
+- `monoMLM/monobert`: training with bert-base-uncased. Hugging-face: [xpmir/monobert](https://huggingface.co/xpmir/monobert)
+
+Some derivatives:
+
+- `monoMLM/monoelectra`: training with [electra](https://huggingface.co/google/electra-base-generator)
 
 ## MonoT5
 
