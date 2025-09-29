@@ -1,8 +1,8 @@
 import logging
 from functools import partial
 
-from configuration import MonoMLM
-from experimaestro import setmeta
+from monoMLM.configuration import MonoMLM
+from experimaestro import setmeta, tag
 from experimaestro.launcherfinder import find_launcher
 
 import xpmir.interfaces.anserini as anserini
@@ -35,18 +35,18 @@ def get_retrievers(cfg: MonoMLM):
     """
     launcher_index = cfg.indexation.launcher
 
-    base_model = BM25().tag("model", "bm25")
+    base_model = BM25.C()
 
     retrievers = partial(
         anserini.retriever,
         anserini.index_builder(launcher=launcher_index),
         model=base_model,
-    )  #: Anserini based retrievers
+    )
 
     model_based_retrievers = partial(
         scorer_retriever,
         batch_size=cfg.retrieval.batch_size,
-        batcher=PowerAdaptativeBatcher(),
+        batcher=PowerAdaptativeBatcher.C(),
         device=cfg.device,
     )  #: Model-based retrievers
 
@@ -80,7 +80,7 @@ def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
     )  #: Test retrievers
 
     # Search and evaluate with a random re-ranker
-    random_scorer = RandomScorer(random=random).tag("scorer", "random")
+    random_scorer = RandomScorer.C(random=random)
     tests.evaluate_retriever(
         partial(
             model_based_retrievers,
@@ -97,19 +97,19 @@ def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
     # Define the different launchers
 
     # define the trainer for monomlm
-    monomlm_trainer = pairwise.PairwiseTrainer(
-        lossfn=pairwise.PointwiseCrossEntropyLoss(),
+    monomlm_trainer = pairwise.PairwiseTrainer.C(
+        lossfn=pairwise.PointwiseCrossEntropyLoss.C(),
         sampler=msmarco_v1_docpairs_efficient_sampler(
             sample_rate=cfg.learner.sample_rate,
             sample_max=cfg.learner.sample_max,
             launcher=launcher_preprocessing,
         ),
-        batcher=PowerAdaptativeBatcher(),
+        batcher=PowerAdaptativeBatcher.C(),
         batch_size=cfg.learner.optimization.batch_size,
     )
 
-    monomlm_scorer: CrossScorer = CrossScorer(
-        encoder=TokenizedTextEncoder(
+    monomlm_scorer: CrossScorer = CrossScorer.C(
+        encoder=TokenizedTextEncoder.C(
             tokenizer=HFStringTokenizer.from_pretrained_id(cfg.base),
             encoder=HFCLSEncoder.from_pretrained_id(cfg.base),
         )
@@ -118,7 +118,7 @@ def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
     # The validation listener evaluates the full retriever
     # (retriever + scorer) and keep the best performing model
     # on the validation set
-    validation = ValidationListener(
+    validation = ValidationListener.C(
         id="bestval",
         dataset=ds_val,
         retriever=model_based_retrievers(
@@ -132,7 +132,7 @@ def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
     )
 
     # The learner trains the model
-    learner = Learner(
+    learner = Learner.C(
         # Misc settings
         device=device,
         random=random,
@@ -147,7 +147,7 @@ def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
         # The listeners (here, for validation)
         listeners=[validation],
         # The hook used for evaluation
-        hooks=[setmeta(DistributedHook(models=[monomlm_scorer]), True)],
+        hooks=[setmeta(DistributedHook.C(models=[monomlm_scorer]), True)],
     )
 
     # Submit job and link

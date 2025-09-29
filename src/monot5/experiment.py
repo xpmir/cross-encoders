@@ -18,7 +18,7 @@ from xpmir.papers.helpers.samplers import (
 )
 from xpmir.neural.generative.hf import T5CustomOutputGenerator, LoadFromT5
 from xpmir.neural.generative.cross import GenerativeCrossScorer
-from configuration import MonoT5
+from monot5.configuration import MonoT5
 import xpmir.interfaces.anserini as anserini
 from xpmir.rankers import scorer_retriever, RandomScorer
 from xpmir.experiments.ir import ir_experiment, IRExperimentHelper
@@ -36,7 +36,7 @@ def get_retrievers(cfg: MonoT5):
     """
     launcher_index = cfg.indexation.launcher
 
-    base_model = BM25().tag("model", "bm25")
+    base_model = BM25.C()
 
     retrievers = partial(
         anserini.retriever,
