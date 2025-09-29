@@ -47,7 +47,7 @@ def get_retrievers(cfg: MonoT5):
     model_based_retrievers = partial(
         scorer_retriever,
         batch_size=cfg.retrieval.batch_size,
-        batcher=PowerAdaptativeBatcher(),
+        batcher=PowerAdaptativeBatcher.C(),
         device=cfg.device,
     )  #: Model-based retrievers
 
@@ -81,7 +81,7 @@ def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
     )  #: Test retrievers
 
     # Search and evaluate with a random re-ranker
-    random_scorer = RandomScorer(random=random).tag("scorer", "random")
+    random_scorer = RandomScorer.C(random=random).tag("scorer", "random")
     tests.evaluate_retriever(
         partial(
             model_based_retrievers,
@@ -98,32 +98,32 @@ def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
     # Define the different launchers
 
     # define the trainer for mono_t5
-    trainer = pairwise.PairwiseTrainer(
-        lossfn=pairwise.PointwiseCrossEntropyLoss(),
+    trainer = pairwise.PairwiseTrainer.C(
+        lossfn=pairwise.PointwiseCrossEntropyLoss.C(),
         sampler=msmarco_v1_docpairs_efficient_sampler(
             sample_rate=cfg.learner.sample_rate,
             sample_max=cfg.learner.sample_max,
             launcher=launcher_preprocessing,
         ),
-        batcher=PowerAdaptativeBatcher(),
+        batcher=PowerAdaptativeBatcher.C(),
         batch_size=cfg.learner.optimization.batch_size,
     )
     
     # Modifies a T5 model so it only outputs 3 tokens (including pad which is used as <BOS>)
-    generator = T5CustomOutputGenerator(
+    generator = T5CustomOutputGenerator.C(
         tokens=["true", "false", "<pad>"], hf_id=cfg.base
     )
 
     # Creates a generative cross-scorer that computes P(token | q/d template)
     # where q/d template is by default: Document: [D] Query [Q] Relevant:
-    mono_scorer = GenerativeCrossScorer(generator=generator, relevant_token_id=0).tag(
+    mono_scorer = GenerativeCrossScorer.C(generator=generator, relevant_token_id=0).tag(
         "scorer", "mono_t5"
     )
 
     # The validation listener evaluates the full retriever
     # (retriever + scorer) and keep the best performing model
     # on the validation set
-    validation = ValidationListener(
+    validation = ValidationListener.C(
         id="bestval",
         dataset=ds_val,
         retriever=model_based_retrievers(
@@ -137,7 +137,7 @@ def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
     )
 
     # The learner trains the model
-    learner = Learner(
+    learner = Learner.C(
         # Misc settings
         device=device,
         random=random,
@@ -152,12 +152,12 @@ def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
         # The listeners (here, for validation)
         listeners=[validation],
         # The hook used for evaluation
-        hooks=[setmeta(DistributedHook(models=[generator]), True)],
+        hooks=[setmeta(DistributedHook.C(models=[generator]), True)],
     )
 
     # Submit job and link
     outputs = learner.submit(
-        launcher=launcher_learner, init_tasks=[LoadFromT5(t5_model=generator)]
+        launcher=launcher_learner, init_tasks=[LoadFromT5.C(t5_model=generator)]
     )
     helper.tensorboard_service.add(learner, learner.logpath)
 
