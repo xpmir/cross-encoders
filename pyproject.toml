@@ -1,0 +1,31 @@
+[project]
+name = "cross-encoders"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "datamaestro>=1.5.2",
+    "datamaestro-text>=2025.9.11",
+    "experimaestro>=2.0.0a3",
+    "experimaestro-ir[anserini,neural]",
+    "ir-datasets",
+    "pandas>=2.3.1",
+    "tensorboard>=2.20.0",
+]
+
+[tool.uv]
+
+override-dependencies = [
+    "nmslib ; sys_platform == 'never'",
+]
+
+[tool.uv.sources]
+ir-datasets = { git = "https://github.com/bpiwowar/ir_datasets.git" }
+datamaestro-text = { git = "https://github.com/experimaestro/datamaestro_text.git", rev = "adcc9bd2" }
+experimaestro-ir = { git = "https://github.com/experimaestro/experimaestro-ir", rev = "8d3e991" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]

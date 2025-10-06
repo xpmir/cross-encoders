@@ -1,32 +1,31 @@
-from functools import partial
 import logging
+from functools import partial
 
+from monoMLM.configuration import MonoMLM
+from experimaestro import setmeta, tag
+from experimaestro.launcherfinder import find_launcher
+
+import xpmir.interfaces.anserini as anserini
+import xpmir.letor.trainers.pairwise as pairwise
 from xpmir.distributed import DistributedHook
+from xpmir.experiments.ir import IRExperimentHelper, ir_experiment
+from xpmir.learning.batchers import PowerAdaptativeBatcher
 from xpmir.learning.learner import Learner
 from xpmir.letor.learner import ValidationListener
-import xpmir.letor.trainers.pairwise as pairwise
-from experimaestro import setmeta
-from experimaestro.launcherfinder import find_launcher
-from xpmir.learning.batchers import PowerAdaptativeBatcher
-from xpmir.rankers.standard import BM25
-from xpmir.papers.results import PaperResults
+from xpmir.neural.cross import CrossScorer
 from xpmir.papers.helpers.samplers import (
-    msmarco_v1_docpairs_efficient_sampler,
-    msmarco_v1_tests,
-    msmarco_v1_validation_dataset,
-    prepare_collection,
-)
-from xpmir.neural.generative.hf import T5CustomOutputGenerator, LoadFromT5
-from xpmir.neural.generative.cross import GenerativeCrossScorer
-from configuration import MonoT5
-import xpmir.interfaces.anserini as anserini
-from xpmir.rankers import scorer_retriever, RandomScorer
-from xpmir.experiments.ir import ir_experiment, IRExperimentHelper
+    msmarco_v1_docpairs_efficient_sampler, msmarco_v1_tests,
+    msmarco_v1_validation_dataset, prepare_collection)
+from xpmir.papers.results import PaperResults
+from xpmir.rankers import RandomScorer, scorer_retriever
+from xpmir.rankers.standard import BM25
+from xpmir.text.huggingface import HFCLSEncoder, HFStringTokenizer
+from xpmir.text import TokenizedTextEncoder
 
 logging.basicConfig(level=logging.INFO)
 
 
-def get_retrievers(cfg: MonoT5):
+def get_retrievers(cfg: MonoMLM):
     """Returns retrievers
 
 
@@ -36,18 +35,18 @@ def get_retrievers(cfg: MonoT5):
     """
     launcher_index = cfg.indexation.launcher
 
-    base_model = BM25().tag("model", "bm25")
+    base_model = BM25.C()
 
     retrievers = partial(
         anserini.retriever,
         anserini.index_builder(launcher=launcher_index),
         model=base_model,
-    )  #: Anserini based retrievers
+    )
 
     model_based_retrievers = partial(
         scorer_retriever,
         batch_size=cfg.retrieval.batch_size,
-        batcher=PowerAdaptativeBatcher(),
+        batcher=PowerAdaptativeBatcher.C(),
         device=cfg.device,
     )  #: Model-based retrievers
 
@@ -55,8 +54,8 @@ def get_retrievers(cfg: MonoT5):
 
 
 @ir_experiment()
-def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
-    """monoBERT model"""
+def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
+    """monoMLM model training"""
 
     launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
@@ -81,7 +80,7 @@ def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
     )  #: Test retrievers
 
     # Search and evaluate with a random re-ranker
-    random_scorer = RandomScorer(random=random).tag("scorer", "random")
+    random_scorer = RandomScorer.C(random=random)
     tests.evaluate_retriever(
         partial(
             model_based_retrievers,
@@ -97,39 +96,35 @@ def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
 
     # Define the different launchers
 
-    # define the trainer for mono_t5
-    trainer = pairwise.PairwiseTrainer(
-        lossfn=pairwise.PointwiseCrossEntropyLoss(),
+    # define the trainer for monomlm
+    monomlm_trainer = pairwise.PairwiseTrainer.C(
+        lossfn=pairwise.PointwiseCrossEntropyLoss.C(),
         sampler=msmarco_v1_docpairs_efficient_sampler(
             sample_rate=cfg.learner.sample_rate,
             sample_max=cfg.learner.sample_max,
             launcher=launcher_preprocessing,
         ),
-        batcher=PowerAdaptativeBatcher(),
+        batcher=PowerAdaptativeBatcher.C(),
         batch_size=cfg.learner.optimization.batch_size,
     )
-    
-    # Modifies a T5 model so it only outputs 3 tokens (including pad which is used as <BOS>)
-    generator = T5CustomOutputGenerator(
-        tokens=["true", "false", "<pad>"], hf_id=cfg.base
-    )
 
-    # Creates a generative cross-scorer that computes P(token | q/d template)
-    # where q/d template is by default: Document: [D] Query [Q] Relevant:
-    mono_scorer = GenerativeCrossScorer(generator=generator, relevant_token_id=0).tag(
-        "scorer", "mono_t5"
-    )
+    monomlm_scorer: CrossScorer = CrossScorer.C(
+        encoder=TokenizedTextEncoder.C(
+            tokenizer=HFStringTokenizer.from_pretrained_id(cfg.base),
+            encoder=HFCLSEncoder.from_pretrained_id(cfg.base),
+        )
+    ).tag("scorer", cfg.id)
 
     # The validation listener evaluates the full retriever
     # (retriever + scorer) and keep the best performing model
     # on the validation set
-    validation = ValidationListener(
+    validation = ValidationListener.C(
         id="bestval",
         dataset=ds_val,
         retriever=model_based_retrievers(
             documents,
             retrievers=val_retrievers,
-            scorer=mono_scorer,
+            scorer=monomlm_scorer,
             device=device,
         ),
         validation_interval=cfg.learner.validation_interval,
@@ -137,14 +132,14 @@ def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
     )
 
     # The learner trains the model
-    learner = Learner(
+    learner = Learner.C(
         # Misc settings
         device=device,
         random=random,
         # How to train the model
-        trainer=trainer,
+        trainer=monomlm_trainer,
         # The model to train
-        model=mono_scorer,
+        model=monomlm_scorer,
         # Optimization settings
         steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
         optimizers=cfg.learner.optimization.optimizer,
@@ -152,13 +147,11 @@ def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
         # The listeners (here, for validation)
         listeners=[validation],
         # The hook used for evaluation
-        hooks=[setmeta(DistributedHook(models=[generator]), True)],
+        hooks=[setmeta(DistributedHook.C(models=[monomlm_scorer]), True)],
     )
 
     # Submit job and link
-    outputs = learner.submit(
-        launcher=launcher_learner, init_tasks=[LoadFromT5(t5_model=generator)]
-    )
+    outputs = learner.submit(launcher=launcher_learner)
     helper.tensorboard_service.add(learner, learner.logpath)
 
     # Evaluate the neural model on test collections
@@ -167,17 +160,17 @@ def run(helper: IRExperimentHelper, cfg: MonoT5) -> PaperResults:
         tests.evaluate_retriever(
             partial(
                 model_based_retrievers,
-                scorer=mono_scorer,
+                scorer=monomlm_scorer,
                 retrievers=test_retrievers,
                 device=device,
             ),
             launcher_evaluate,
-            model_id=f"mono_t5-{metric_name}",
+            model_id=f"{cfg.id}-{metric_name}",
             init_tasks=[load_model],
         )
 
     return PaperResults(
-        models={"mono_t5-RR@10": outputs.listeners[validation.id]["RR@10"]},
+        models={"{cfg.id}-RR@10": outputs.listeners[validation.id]["RR@10"]},
         evaluations=tests,
-        tb_logs={"mono_t5-RR@10": learner.logpath},
+        tb_logs={"{cfg.id}-RR@10": learner.logpath},
     )

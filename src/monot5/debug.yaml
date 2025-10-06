@@ -13,10 +13,10 @@ file: experiment
 base: "t5-small"
 
 preprocessing:
-    requirements: duration=6h & cpu(mem=4G, cores=8)
+    requirements: duration=6h & cpu(cores=8)
 
 indexation:
-    requirements: duration=6h & cpu(mem=4G, cores=8)
+    requirements: duration=6h & cpu(cores=8)
 
 validation:
     size: 100
@@ -36,8 +36,8 @@ learner:
 
     # (in epochs)
     validation_interval: 2
-    requirements: duration=1 days & cpu(mem=2G) & cuda(mem=5G)
+    requirements: duration=1 days & cuda(mem=5G)
 
 retrieval:
-    requirements: duration=12 hours & cpu(mem=2G) & cuda(mem=5G)
+    requirements: duration=12 hours & cuda(mem=5G)
     k: 100
