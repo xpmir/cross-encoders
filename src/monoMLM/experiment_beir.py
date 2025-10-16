@@ -170,7 +170,7 @@ def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
     random_scorer = RandomScorer.C(random=random).tag("scorer", "random")
     for evaluation in tests.evaluations(model_id=f"{cfg.id}-base"):
         # IR documents
-        documents = evaluation.dataset.documents.tag("data", evaluation.key)
+        documents = evaluation.dataset.documents
 
         # Build the retriever for those
         test_retrievers = partial(
