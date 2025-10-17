@@ -172,18 +172,22 @@ def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
         # IR documents
         documents = evaluation.dataset.documents
 
-        # Build the retriever for those
-        test_retrievers = partial(
-            retrievers, store=documents, k=cfg.retrieval.k
-        )  #: Test retrievers
-
         # Search and evaluate with the base model
-        evaluation.evaluate(test_retrievers, launcher=cfg.indexation.launcher)
+        evaluation.evaluate(
+            retriever=retrievers(
+                documents=documents,
+                store=documents, 
+                k=cfg.retrieval.k
+            ), 
+            launcher=cfg.indexation.launcher
+        )
+
+        test_retrievers = partial(retrievers, store=documents, k=cfg.retrieval.k)
 
         # Search and evaluate with a random re-ranker
         evaluation.evaluate(
-            partial(
-                model_based_retrievers,
+            retriever=model_based_retrievers(
+                documents=documents,
                 retrievers=test_retrievers,
                 scorer=random_scorer,
                 device=None,
@@ -252,30 +256,17 @@ def run(helper: IRExperimentHelper, cfg: MonoMLM) -> PaperResults:
     # Evaluate the neural model on test collections
     for metric_name in validation.monitored():
         load_model = outputs.listeners[validation.id][metric_name]
-        tests.evaluate_retriever(
-            partial(
-                model_based_retrievers,
-                scorer=monomlm_scorer,
-                retrievers=test_retrievers,
-                device=device,
-            ),
-            launcher_evaluate,
-            model_id=f"{cfg.id}-{metric_name}",
-            init_tasks=[load_model],
-        )
         for evaluation in tests.evaluations(model_id=f"{cfg.id}-{metric_name}"):
             # IR documents
             documents = evaluation.dataset.documents.tag("data", evaluation.key)
 
             # Build the retriever for those
-            test_retrievers = partial(
-                retrievers, store=documents, k=cfg.retrieval.k
-            )  #: Test retrievers
+            test_retrievers = partial(retrievers, store=documents, k=cfg.retrieval.k)
 
             # Search and evaluate with a random re-ranker
             evaluation.evaluate(
-                retriever=partial(
-                    model_based_retrievers,
+                retriever=model_based_retrievers(
+                    documents=documents,
                     scorer=monomlm_scorer,
                     retrievers=test_retrievers,
                     device=device,
