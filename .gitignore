@@ -1,0 +1,60 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Distributions and packaging
+.eggs/
+*.egg
+*.whl
+*.mo
+*.pot
+*.log
+*.sqlite3
+*.db
+
+# OS-specific
+.DS_Store
+.Trash
+Thumbs.db
+
+# Environments
+.env
+.venv
+env/
+venv/
+UV_HOME/
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*~
+.Rproj.user/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# MyPy
+.mypy_cache/
+
+# Coverage reports
+.coverage
+.coverage.*
+
+# Sphinx documentation
+docs/_build/
+
+# Experimaestro generated files
+xp_*.yaml
+
+# Logs
+logs/
+*.log
+
+# Temp files
+tmp/
+*.tmp

@@ -5,6 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "datamaestro>=1.5.2",
+    "datamaestro-text<2026.1.1",
     "experimaestro",
     "experimaestro-ir",
     "pandas>=3.0.0",
