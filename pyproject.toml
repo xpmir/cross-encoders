@@ -1,0 +1,25 @@
+[project]
+name = "sota-cross-encoders"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "experimaestro",
+    "experimaestro-ir",
+    "pandas>=3.0.0",
+    "transformers>=5.0.0",
+    "xpm-torch",
+]
+
+[tool.uv.workspace]
+members = [
+    "xpm-torch",
+    "experimaestro-python",
+    "experimaestro-ir",
+]
+
+[tool.uv.sources]
+xpm-torch = { workspace = true }
+experimaestro = { workspace = true }
+experimaestro-ir = { workspace = true }
