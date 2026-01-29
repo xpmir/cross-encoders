@@ -8,7 +8,7 @@ dependencies = [
     "datamaestro>=1.5.2",
     "datamaestro-text<=2026.1.1",
     "experimaestro",
-    "experimaestro-ir",
+    "experimaestro-ir[anserini,neural]",
     "ir-datasets",
     "pandas>=3.0.0",
     "transformers>=5.0.0",
@@ -25,5 +25,5 @@ members = [
 [tool.uv.sources]
 xpm-torch = { workspace = true }
 experimaestro = { workspace = true }
-experimaestro-ir = { workspace = true }
 ir-datasets = { git = "https://github.com/bpiwowar/ir_datasets.git" }
+experimaestro-ir = { workspace = true }
