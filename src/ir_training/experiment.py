@@ -3,16 +3,19 @@
 import logging
 from functools import partial
 from typing import List
+import numpy as np
+import pandas as pd
+from transformers import AutoConfig
 
 from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
 
-import numpy as np
-import pandas as pd
-import xpmir.interfaces.anserini as anserini
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 from xpm_torch import Random
 from xpm_torch.batchers import PowerAdaptativeBatcher
+from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
+from xpm_torch.trainers import LossTrainer
+from xpm_torch.learner import Learner
 
 from xpmir.papers.helpers.samplers import (
     msmarco_v1_docpairs_efficient_sampler,
@@ -20,8 +23,17 @@ from xpmir.papers.helpers.samplers import (
     prepare_collection,
     msmarco_hofstaetter_ensemble_hard_negatives,
 )
-from xpmir.rankers import scorer_retriever
-from xpmir.rankers.standard import BM25, Model
+import xpmir.interfaces.anserini as anserini
+from xpmir.rankers.standard import BM25
+from xpmir.neural.huggingface import HFCrossScorer
+from xpmir.rankers import Documents, Retriever, scorer_retriever, document_cache
+from stats import run_statistical_tests
+
+from xpmir.letor.distillation.pairwise import (
+    DistillationPairwiseTrainer,
+    MSEDifferenceLoss,
+)
+from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
 
 #TODO add support for those
 # from xpmir.index.sparse import (
@@ -30,25 +42,11 @@ from xpmir.rankers.standard import BM25, Model
 #     Sparse2BMPConverter,
 # )
 
-from xpmir.rankers import Documents, Retriever, document_cache
-from xpmir.neural.huggingface import HFCrossScorer
-from stats import run_statistical_tests
-
-from xpmir.letor.distillation.pairwise import (
-    DistillationPairwiseTrainer,
-    MSEDifferenceLoss,
-)
-
-from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
-from xpm_torch.trainers import LossTrainer
-from xpm_torch.learner import Learner
-from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
-
 # from xpmir.letor.distillation.pairwise import PairwiseTrainer, PointwiseCrossEntropyLoss
-
 
 from configuration import Losses, CE_FineTuning
 from tests import build_tests, minified_tests, nfcorpus_validation_dataset, paper_tests
+from format import dataframe_to_latex
 
 logging.basicConfig(level=logging.INFO)
 
@@ -171,8 +169,11 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         ce_trainer: LossTrainer = build_trainer(cfg)
 
         # Build the model
-        scorer_model: FrankenCrossScorer = build_scorer_model(
-            cfg, attn_patches=cfg.attn_patches
+        
+        config = AutoConfig.from_pretrained(cfg.base)
+        scorer_model = HFCrossScorer.C(
+            hf_id=cfg.base,
+            max_length=config.max_position_embeddings,
         )
         scorer_model.tag("scorer", cfg.id)
 
@@ -186,7 +187,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 documents=train_documents,
                 retrievers=val_retrievers,
                 scorer=scorer_model,
-                device=device,
             ).tag("retriever", retriever_tag),
             validation_interval=cfg.learner.validation_interval,
             metrics={"RR@10": True, "AP": False, "nDCG": False},
@@ -199,7 +199,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 documents=val_documents,
                 retrievers=val_retrievers_zs,
                 scorer=scorer_model,
-                device=device,
             ).tag("retriever", retriever_tag),
             validation_interval=cfg.learner.validation_interval,
             metrics={"RR@10": True, "AP": False, "nDCG": False},
@@ -258,7 +257,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                     model_based_retrievers,
                     scorer=scorer_model,
                     retrievers=test_retrievers,
-                    device=device,
                 ),
                 launcher_evaluate,
                 model_id=f"{cfg.id}-{metric_name}-{seed}",
@@ -283,7 +281,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                     documents=train_documents,
                     retrievers=val_retrievers,
                     scorer=baseline_scorer_model,
-                    device=device,
                 ).tag("retriever", retriever_tag),
                 validation_interval=cfg.learner.validation_interval,
                 metrics={"RR@10": True, "AP": False, "nDCG": False},
@@ -296,7 +293,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                     documents=val_documents,
                     retrievers=val_retrievers_zs,
                     scorer=baseline_scorer_model,
-                    device=device,
                 ).tag("retriever", retriever_tag),
                 validation_interval=cfg.learner.validation_interval,
                 metrics={"RR@10": True, "AP": False, "nDCG": False},
@@ -350,7 +346,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                         model_based_retrievers,
                         scorer=baseline_scorer_model,
                         retrievers=test_retrievers,
-                        device=device,
                     ),
                     launcher_evaluate,
                     model_id=f"baseline-{cfg.id}-{metric_name}-{seed}",

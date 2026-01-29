@@ -1,4 +1,4 @@
-id: debug_masked_minilm_margin_mse_step1
+id: debug_CE_training
 title: "MiniLM-v2 masking experiment"
 description: Fine-tune a MiniLM-v2 model with a margin MSE loss on BM25 negatives while applying masking.
 
