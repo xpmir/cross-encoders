@@ -748,16 +748,17 @@ wheels = [
 
 [[package]]
 name = "datamaestro-text"
-version = "2025.9.11"
+version = "2026.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "datamaestro" },
+    { name = "experimaestro" },
     { name = "ir-datasets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/54/7c/0e150f11c1f5f658a8913ff43e93add7e4d549cbcd628aae929a6374482c/datamaestro_text-2025.9.11.tar.gz", hash = "sha256:8ad4c2dfeb3dd3874e4c5ac4e63b84b410068a9059deb70c9261da6bc9ca69fd", size = 77202, upload-time = "2025-09-11T19:56:24.157Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bb/2f/16083e1227604facad11d79b3865726e72a08434ebae3ee7f9937279e8e2/datamaestro_text-2026.1.1.tar.gz", hash = "sha256:6b10452e366a1d8905eabb0b78c5ad45d7987033c61fd03d6cf619bf06481f97", size = 64277, upload-time = "2026-01-01T16:49:45.684Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2c/e4/9bdb298e59a2d54778689083b5020f3a610da88c902f7818042e988864b8/datamaestro_text-2025.9.11-py3-none-any.whl", hash = "sha256:acf07442a12f9b474ce9a96a4b88992846dcb8f59f064dec2eef76969bb4548b", size = 92221, upload-time = "2025-09-11T19:56:23.07Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/fe/c01f21e8ff7aa431483b103361a1480f5042055a530ef8bdecda730d06a3/datamaestro_text-2026.1.1-py3-none-any.whl", hash = "sha256:fcb76398dd929711df94aff48763930aee106ba5d9f3f38bb1519815c23eb7ac", size = 94812, upload-time = "2026-01-01T16:49:43.73Z" },
 ]
 
 [[package]]
@@ -1022,7 +1023,7 @@ requires-dist = [
     { name = "docstring-parser" },
     { name = "experimaestro", editable = "experimaestro-python" },
     { name = "impact-index", specifier = "==0.30.*" },
-    { name = "ir-datasets" },
+    { name = "ir-datasets", git = "https://github.com/bpiwowar/ir_datasets.git" },
     { name = "ir-measures", specifier = ">=0.3.3" },
     { name = "omegaconf", specifier = ">=2.2" },
     { name = "pyserini", marker = "extra == 'anserini'", specifier = ">=0.20.0" },
@@ -1602,7 +1603,7 @@ wheels = [
 [[package]]
 name = "ir-datasets"
 version = "0.5.11"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/bpiwowar/ir_datasets.git#1eee5d2b0bdfa5667b3f7c985c2715d3a2a77bcd" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "ijson" },
@@ -1619,10 +1620,6 @@ dependencies = [
     { name = "warc3-wet" },
     { name = "warc3-wet-clueweb09" },
     { name = "zlib-state" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/80/c6/f02811c51fec845ee87a10bb3675516a2d71935b203e5ddb80b7eb59b1da/ir_datasets-0.5.11.tar.gz", hash = "sha256:06c90af634ae5063c813286b35065debca1a974d26e136403d899f3ecd7ad463", size = 758463, upload-time = "2025-06-24T07:58:31.375Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/38/73fa582d6997362d9b4901b2a8ba1177b2d2896aa59ab8d069a3884e2e0d/ir_datasets-0.5.11-py3-none-any.whl", hash = "sha256:ae78549e5a7fa45e50462b7acb9f0765fc344fec6054108bf3dd063050555206", size = 866095, upload-time = "2025-06-24T07:58:29.958Z" },
 ]
 
 [[package]]
@@ -4200,6 +4197,7 @@ dependencies = [
     { name = "datamaestro-text" },
     { name = "experimaestro" },
     { name = "experimaestro-ir" },
+    { name = "ir-datasets" },
     { name = "pandas" },
     { name = "transformers" },
     { name = "xpm-torch" },
@@ -4208,9 +4206,10 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "datamaestro", specifier = ">=1.5.2" },
-    { name = "datamaestro-text", specifier = "<2026.1.1" },
+    { name = "datamaestro-text", specifier = "<=2026.1.1" },
     { name = "experimaestro", editable = "experimaestro-python" },
     { name = "experimaestro-ir", editable = "experimaestro-ir" },
+    { name = "ir-datasets", git = "https://github.com/bpiwowar/ir_datasets.git" },
     { name = "pandas", specifier = ">=3.0.0" },
     { name = "transformers", specifier = ">=5.0.0" },
     { name = "xpm-torch", editable = "xpm-torch" },
