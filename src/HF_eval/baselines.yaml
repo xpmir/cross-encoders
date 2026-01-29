@@ -24,7 +24,7 @@ indexation:
 
 retrieval:
   requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
-  batch_size: 128
+  batch_size: 64
   k: 1000
 
 #just for debugging
