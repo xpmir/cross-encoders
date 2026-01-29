@@ -142,25 +142,6 @@ class Layer_params:
 
 
 @configuration()
-class Attn_patch:
-    mask_attention_from : List[str]
-    """tokens from which attention will be masked
-    can be  in 'cls', 'query', 'document' or 'sep_1', 'sep_2'
-    """
-
-    mask_attention_to : List[str]
-    """tokens to which attention will be masked
-    can be in 'cls', 'query', 'document' or 'sep_1', 'sep_2'
-    """
-
-    # use Layer_params for both start and end; defaults use single int values
-    start_layer: Any = 0
-    """Start layer for attention masking (use .value for single layer or .values_range for a range)"""
-
-    end_layer: Any = -1
-    """End layer for attention masking (use .value for single layer or .values_range for a range)"""
-
-@configuration()
 class Evaluation:
     test_max_topics: int = 0
     """Development test size (0 to leave it like this)"""
@@ -172,7 +153,7 @@ class Evaluation:
     """Whether to evaluate on all BEIR datasets (minus the 5 not publicly available)"""
 
 @configuration()
-class FrankenCE_Finetuning(RerankerMSMarcoV1Configuration):
+class CE_FineTuning(RerankerMSMarcoV1Configuration):
     
     nb_repetitions: int = field(default=1)
     """Number of repetitions of the training process"""
@@ -194,56 +175,6 @@ class FrankenCE_Finetuning(RerankerMSMarcoV1Configuration):
     base: str = "bert-base-uncased"
     """Identifier for the base model"""
 
-    pooling_method: str = PoolingMethod.CLS.value
-    """Pooling method to use for the Ettin based scorer: cls or mean"""
-
-    attn_patches: List[Attn_patch] = []    
-
-    compare_with_baseline: bool = False
-    """After evaluations are done, whether to test statistical significance against a baseline.
-    By default, the baseline is BM25 + the CE simply fine-tuned on the same setup."""
-
-@configuration()
-class   MidFusionCE_Finetuning(RerankerMSMarcoV1Configuration):
-    
-    nb_repetitions: int = field(default=1)
-    """Number of repetitions of the training process"""
-    
-    indexation: Indexation = Factory(Indexation)
-    retrieval: Retrieval = Factory(Retrieval)
-
-    learner: xpm_torch_Learner = Factory(xpm_torch_Learner)
-    
-    preprocessing: Preprocessing = Factory(Preprocessing)
-
-    evaluation: Evaluation = Factory(Evaluation)
-
-    ## Retriever Model
-    retriever: str = ""
-    """Identifier for the retriever model. If empty, uses BM25."""
-    
-    ## Cross Encoder Model
-    base: str = "bert-base-uncased"
-    """Identifier for the base model"""
-
-    merge_layer: Any = 6
-    """Layer at which to split the model for mid-fusion : value or values_range"""
-
-    drop_layer: Any = 0
-    """Layer at which to drop backbone layers, Layer_params : value or values_range"""
-
-    compress_dim: Any = 1
-    """Factor to use for dimension compression in the model."""
-
-    use_self_attention: bool = True
-    """Whether to use self-attention in the fusion layers"""
-
-    random_top_layers: bool = False
-    """Whether to initialize the top layers randomly instead of copying from the base model"""
-
-    freeze_base: bool = False
-    """Whether to freeze the base model during finetuning"""
-    
     pooling_method: str = PoolingMethod.CLS.value
     """Pooling method to use for the Ettin based scorer: cls or mean"""
 

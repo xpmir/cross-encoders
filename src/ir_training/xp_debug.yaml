@@ -13,58 +13,6 @@ nb_repetitions: 1
 base: microsoft/MiniLM-L12-H384-uncased # jhu-clsp/ettin-encoder-32m  microsoft/MiniLM-L12-H384-uncased
 retriever: "" #BM25
 
-attn_patches:
-    - mask_attention_from:
-        - "query"
-        - "sep_1"
-        - "document"
-        - "sep_2"
-      mask_attention_to:
-        - "cls"
-      start_layer: 2
-      end_layer: 8
-    # Document can't use SEP1 for attention sink (nor CLS, handled above)
-    - mask_attention_from:
-        - "document"
-      mask_attention_to:
-        - "sep_1"
-      start_layer: 2
-      end_layer: 8
-    # Query can't use SEP2 for attention sink (nor CLS, handled above)
-    - mask_attention_from:
-        - "query"
-      mask_attention_to:
-        - "sep_2"
-      start_layer: 2
-      end_layer: 8
-    # SEP can attend to nothing (remove their attention sinks to see the impact)
-    - mask_attention_from:
-        - "sep_1"
-      mask_attention_to:
-        - "cls"
-        - "query"
-        - "document"
-        - "sep_2"
-      start_layer: 2
-      end_layer: 8
-    - mask_attention_from:
-        - "sep_2"
-      mask_attention_to:
-        - "cls"
-        - "query"
-        - "sep_1"
-        - "document"
-      start_layer: 2
-      end_layer: 8
-    ### Step 1: Cut Attention from CLS to Document
-    - mask_attention_from:
-        - "cls"
-      mask_attention_to:
-        - "document"
-        - "sep_2"
-        - "sep_2"
-        - "sep_2"
-
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
 
@@ -72,8 +20,7 @@ indexation:
     requirements: duration=8h & cpu(cores=5)
 
 validation:
-    # Use 500 topics for validation
-    size: 500
+    size: 500 # Use 500 topics for validation
 
 # This set of hyperparameters follows: https://github.com/huggingface/sentence-transformers/blob/9f76b5790fa8f0175ccdc27e41f9ae348f557144/examples/training/ms_marco/train_cross-encoder-v2.py
 learner:
@@ -94,7 +41,7 @@ learner:
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
-    batch_size: 128
+    batch_size: 64
     k: 1000
 
 evaluation:

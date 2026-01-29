@@ -45,7 +45,6 @@ class BaselinesConfig(NeuralIRExperiment):
 def run(
     helper: IRExperimentHelper, cfg: BaselinesConfig
 ) -> PaperResults:
-    
 
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_index = find_launcher(cfg.indexation.requirements)

@@ -22,33 +22,38 @@ from xpmir.papers.helpers.samplers import (
 )
 from xpmir.rankers import scorer_retriever
 from xpmir.rankers.standard import BM25, Model
-from xpmir.index.sparse import (
-    SparseRetriever,
-    SparseRetrieverIndexBuilder,
-    Sparse2BMPConverter,
-)
-from xpmir.rankers import Documents, Retriever, document_cache
 
+#TODO add support for those
+# from xpmir.index.sparse import (
+#     SparseRetriever,
+#     SparseRetrieverIndexBuilder,
+#     Sparse2BMPConverter,
+# )
+
+from xpmir.rankers import Documents, Retriever, document_cache
+from xpmir.neural.huggingface import HFCrossScorer
 from stats import run_statistical_tests
 
 from xpmir.letor.distillation.pairwise import (
     DistillationPairwiseTrainer,
     MSEDifferenceLoss,
 )
-from xpm_torch.trainers.pairwise import PairwiseTrainer, PointwiseCrossEntropyLoss
+
+from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
-from xpm_torch.validation import AggregatorValidationListener, ValidationListener
-from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
+from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
+
+# from xpmir.letor.distillation.pairwise import PairwiseTrainer, PointwiseCrossEntropyLoss
 
 
-from configuration import Attn_patch, Losses, FrankenCE_Finetuning, PoolingMethod
+from configuration import Losses, CE_FineTuning
 from tests import build_tests, minified_tests, nfcorpus_validation_dataset, paper_tests
 
 logging.basicConfig(level=logging.INFO)
 
 
-def get_model_based_retrievers(cfg: FrankenCE_Finetuning):
+def get_model_based_retrievers(cfg: CE_FineTuning):
     model_based_retrievers = partial(
         scorer_retriever,
         batch_size=cfg.retrieval.batch_size,
@@ -58,7 +63,7 @@ def get_model_based_retrievers(cfg: FrankenCE_Finetuning):
     return model_based_retrievers
 
 
-def build_trainer(cfg: FrankenCE_Finetuning) -> LossTrainer:
+def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
     try:
         loss_member = Losses(cfg.learner.loss)
     except ValueError:
@@ -76,18 +81,18 @@ def build_trainer(cfg: FrankenCE_Finetuning) -> LossTrainer:
         )
 
     # TODO: name properly the BCE loss function in the configuration as well
-    elif loss_member is Losses.PointWiseMSE:
-        launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
-        return PairwiseTrainer.C(
-            lossfn=PointwiseCrossEntropyLoss.C(),
-            sampler=msmarco_v1_docpairs_efficient_sampler(
-                sample_rate=cfg.learner.sample_rate,
-                sample_max=cfg.learner.sample_max,
-                launcher=launcher_preprocessing,
-            ),
-            batcher=PowerAdaptativeBatcher.C(),
-            batch_size=cfg.learner.optimization.batch_size,
-        )
+    # elif loss_member is Losses.PointWiseMSE:
+    #     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+    #     return PairwiseTrainer.C(
+    #         lossfn=PointwiseCrossEntropyLoss.C(),
+    #         sampler=msmarco_v1_docpairs_efficient_sampler(
+    #             sample_rate=cfg.learner.sample_rate,
+    #             sample_max=cfg.learner.sample_max,
+    #             launcher=launcher_preprocessing,
+    #         ),
+    #         batcher=PowerAdaptativeBatcher.C(),
+    #         batch_size=cfg.learner.optimization.batch_size,
+    #     )
 
     else:
         raise NotImplementedError(
@@ -96,7 +101,7 @@ def build_trainer(cfg: FrankenCE_Finetuning) -> LossTrainer:
 
 
 @learning_experiment()
-def run(helper: LearningExperimentHelper, cfg: FrankenCE_Finetuning):
+def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     """MiniLM-v2 model training"""
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_bmp = find_launcher(cfg.indexation.sparse2bmp_requirements)
