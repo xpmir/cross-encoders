@@ -13,7 +13,7 @@ To install this repository, first ensure you have `git` and `uv` installed.
 
 1.  Clone the repository and its submodules:
     ```bash
-    git clone --recurse-submodules <repository_url>
+    git clone --recurse-submodules git@git.isir.upmc.fr:morand/sota-cross-encoders.git
     cd sota-cross-encoders
     ```
     If you have already cloned the repository without `--recurse-submodules`, you can initialize and update them with:
