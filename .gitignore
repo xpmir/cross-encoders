@@ -37,6 +37,7 @@ UV_HOME/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+.ipynb
 
 # MyPy
 .mypy_cache/
