@@ -186,11 +186,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
         retriever_tag = cfg.retriever
         # Caches the Splade index task for a document collection
-        val_retrievers = partial(
+        val_retrievers_factory = partial(
             splade_val_retrievers,
             model=splade_encoder,
         )
-        val_retrievers_zs = val_retrievers
 
         test_retrievers = partial(splade_retriever, retriever_tag, splade_encoder)
     else:
@@ -208,7 +207,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 .tag("data", documents.id)
             )
 
-        retrievers = partial(
+        val_retrievers_factory = partial(
             anserini.retriever,
             anserini.index_builder(launcher=launcher_index),
             model=base_model,
@@ -230,9 +229,14 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             cfg.validation, launcher=launcher_preprocessing
         )
 
-        val_retrievers = partial(
-            retrievers, store=train_documents, k=cfg.learner.validation_top_k
-        )
+        if cfg.retriever:
+            # We don't use BM25, but a given sparse retriever
+            val_retrievers = val_retrievers_factory
+        else:   
+            val_retrievers = partial(
+                val_retrievers_factory, store=train_documents, k=cfg.learner.validation_top_k
+            )
+            
     # NanoBEIR validation datasets
     elif cfg.learner.validation == Validation.NanoBEIR.value:
         validations, validation_documents = nanobeir_validation_datasets(
@@ -286,19 +290,24 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         elif cfg.learner.validation == Validation.NanoBEIR.value:
             validation = []
             for name, ds_val_zs, val_docs in nb_val_items:
-                val_retriever_factory = partial(
-                    retrievers, store=val_docs, k=cfg.learner.validation_top_k
-                )
-                retr = model_based_retrievers(
+                if cfg.retriever:
+                    # We don't use BM25, but a given sparse retriever
+                    val_retriever_ood = val_retrievers_factory
+                else:   
+                    val_retriever_ood = partial(
+                        val_retrievers_factory, store=val_docs, k=cfg.learner.validation_top_k
+                    )
+
+                retriever = model_based_retrievers(
                     documents=val_docs,
-                    retrievers=val_retriever_factory,
+                    retrievers=val_retriever_ood,
                     scorer=scorer_model,
                 ).tag("retriever", retriever_tag)
 
                 listener = ValidationListener.C(
                     id=f"bestval_zs_{name}",
                     dataset=ds_val_zs,
-                    retriever=retr,
+                    retriever=retriever,
                     validation_interval=cfg.learner.validation_interval,
                     metrics={"RR@10": True, "AP": False, "nDCG": False},
                 )
