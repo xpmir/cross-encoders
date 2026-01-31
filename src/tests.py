@@ -1,27 +1,14 @@
-from typing import Union
 from functools import lru_cache
-from datamaestro_text.data.ir import Documents, Adhoc
 from datamaestro import prepare_dataset
 
 from xpmir.datasets.adapters import RandomFold
 from xpmir.evaluation import Evaluations, EvaluationsCollection
 from xpmir.measures import AP, RR, nDCG
-from xpmir.papers import configuration
+from xpmir.papers.helpers.samplers import prepare_collection
 from configuration import Evaluation
 
 import logging
 logger = logging.getLogger(__name__)
-
-@configuration
-class ValidationSample:
-    seed: int = 123
-    size: int = 500
-
-
-@lru_cache
-def prepare_collection(prepare_str: str) -> Union[Documents, Adhoc]:
-    """Prepare a dataset and caches the result"""
-    return prepare_dataset(prepare_str)
 
 
 def check_datasets_docs(evaluations_collection: EvaluationsCollection):
@@ -33,20 +20,6 @@ def check_datasets_docs(evaluations_collection: EvaluationsCollection):
 
 
 MEASURES = [AP, nDCG @ 10, RR @ 10]
-
-@lru_cache
-def nfcorpus_validation_dataset(
-    cfg: ValidationSample, launcher=None
-):
-    """Sample dev topics to get a validation subset on the NFCorpus dataset."""
-    candidate_ds = prepare_collection("irds.beir.nfcorpus.dev")
-
-    return RandomFold.C(
-        dataset=candidate_ds,
-        seed=cfg.seed,
-        fold=0,
-        sizes=[cfg.size],
-    ).submit(launcher=launcher)
 
 @lru_cache
 def minified_tests(test_topic_nb: int, check_docs: bool = True) -> EvaluationsCollection:

@@ -2,7 +2,6 @@
 
 import logging
 from functools import partial
-from typing import List
 import numpy as np
 import pandas as pd
 from transformers import AutoConfig
@@ -18,7 +17,6 @@ from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 
 from xpmir.papers.helpers.samplers import (
-    msmarco_v1_docpairs_efficient_sampler,
     msmarco_v1_validation_dataset,
     prepare_collection,
     msmarco_hofstaetter_ensemble_hard_negatives,
@@ -26,8 +24,7 @@ from xpmir.papers.helpers.samplers import (
 import xpmir.interfaces.anserini as anserini
 from xpmir.rankers.standard import BM25
 from xpmir.neural.huggingface import HFCrossScorer
-from xpmir.rankers import Documents, Retriever, scorer_retriever, document_cache
-from stats import run_statistical_tests
+from xpmir.rankers import Documents, Retriever, scorer_retriever
 
 from xpmir.letor.distillation.pairwise import (
     DistillationPairwiseTrainer,
@@ -44,9 +41,10 @@ from xpmir.letor.validation import AggregatorValidationListener, ValidationListe
 
 # from xpmir.letor.distillation.pairwise import PairwiseTrainer, PointwiseCrossEntropyLoss
 
-from configuration import Losses, CE_FineTuning
-from tests import build_tests, minified_tests, nfcorpus_validation_dataset, paper_tests
+from configuration import Losses, CE_FineTuning, Validation
+from tests import build_tests
 from format import dataframe_to_latex
+from validations import nanobeir_validation_datasets
 
 logging.basicConfig(level=logging.INFO)
 
@@ -110,15 +108,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     #: Model-based retrievers
     train_documents = prepare_collection("irds.msmarco-passage.documents")
 
-    ds_val = msmarco_v1_validation_dataset(
-        cfg.validation, launcher=launcher_preprocessing
-    )
-
-    val_documents = prepare_collection("irds.beir.nfcorpus.documents")
-    ds_val_zs = nfcorpus_validation_dataset(
-        cfg.validation, launcher=launcher_preprocessing
-    )
-
     tests = build_tests(cfg.evaluation)
 
     # Setup indices and validation/test base retrievers
@@ -145,21 +134,54 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         model=base_model,
     )
 
-    val_retrievers = partial(
-        retrievers, store=train_documents, k=cfg.learner.validation_top_k
-    )
-    val_retrievers_zs = partial(
-        retrievers, store=val_documents, k=cfg.learner.validation_top_k
-    )
+    if cfg.learner.validation == Validation.MSMARCO.value:
+        # Full MSMARCO validation dataset
+        ds_val = msmarco_v1_validation_dataset(
+            cfg.validation, launcher=launcher_preprocessing
+        )
+
+        val_retrievers = partial(
+            retrievers, store=train_documents, k=cfg.learner.validation_top_k
+        )
+    # NanoBEIR validation datasets
+    elif cfg.learner.validation == Validation.NanoBEIR.value:
+        validations, validation_documents = nanobeir_validation_datasets(cfg.validation, launcher_preprocessing)
+        
+        # Normalize into list of (name, dataset, documents)
+        val_items = []
+        if isinstance(validations, dict):
+            # validations: name -> dataset
+            for name, ds in validations.items():
+                docs = validation_documents.get(name) if isinstance(validation_documents, dict) else validation_documents
+                val_items.append((name, ds, docs))
+        else:
+            # validations: iterable of datasets
+            if isinstance(validation_documents, (list, tuple)) and len(validation_documents) == len(validations):
+                for ds, docs in zip(validations, validation_documents):
+                    name = getattr(ds, "id", None) or getattr(ds, "name", None) or str(len(val_items))
+                    val_items.append((name, ds, docs))
+            else:
+                # single documents object used for all validations
+                for idx, ds in enumerate(validations):
+                    name = getattr(ds, "id", None) or getattr(ds, "name", None) or f"nb_{idx}"
+                    val_items.append((name, ds, validation_documents))
+        
+        # keep val_items for later use when building listeners after the scorer is created
+        nb_val_items = val_items
+
+    else:
+        raise NotImplementedError(
+            f"Validation dataset {cfg.learner.validation} is not implemented yet."
+        )
 
     retriever_tag = "bm25"
-    test_retrievers = partial(bm25_retriever, retriever_tag)
+    # test_retrievers = partial(bm25_retriever, retriever_tag)
 
-    # evaluate base retrievers alone
-    tests.evaluate_retriever(
-        test_retrievers,
-        launcher=launcher_evaluate,
-    )
+    # # evaluate base retrievers alone
+    # tests.evaluate_retriever(
+    #     test_retrievers,
+    #     launcher=launcher_evaluate,
+    # )
 
     ### TRAINING CROSS ENCODER
     for i in range(cfg.nb_repetitions):
@@ -180,36 +202,53 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         # The validation listener evaluates the full retriever
         # (retriever + scorer) and keep the best performing model
         # on the validation set
-        validation = ValidationListener.C(
-            id="bestval",
-            dataset=ds_val,
-            retriever=model_based_retrievers(
-                documents=train_documents,
-                retrievers=val_retrievers,
-                scorer=scorer_model,
-            ).tag("retriever", retriever_tag),
-            validation_interval=cfg.learner.validation_interval,
-            metrics={"RR@10": True, "AP": False, "nDCG": False},
-        )
+        if cfg.learner.validation == Validation.MSMARCO.value:
+            validation = [
+                ValidationListener.C(
+                    id="bestval",
+                    dataset=ds_val,
+                    retriever=model_based_retrievers(
+                        documents=train_documents,
+                        retrievers=val_retrievers,
+                        scorer=scorer_model,
+                    ).tag("retriever", retriever_tag),
+                    validation_interval=cfg.learner.validation_interval,
+                    metrics={"RR@10": True, "AP": False, "nDCG": False},
+                    ).tag("validation", "msmarco")
+            ]
+        elif cfg.learner.validation == Validation.NanoBEIR.value:
+            validation = []
+            for name, ds_val_zs, val_docs in nb_val_items:
+                val_retriever_factory = partial(
+                    retrievers, store=val_docs, k=cfg.learner.validation_top_k
+                )
+                retr = model_based_retrievers(
+                    documents=val_docs,
+                    retrievers=val_retriever_factory,
+                    scorer=scorer_model,
+                ).tag("retriever", retriever_tag)
 
-        validation_zs = ValidationListener.C(
-            id="bestval_zs",
-            dataset=ds_val_zs,
-            retriever=model_based_retrievers(
-                documents=val_documents,
-                retrievers=val_retrievers_zs,
-                scorer=scorer_model,
-            ).tag("retriever", retriever_tag),
-            validation_interval=cfg.learner.validation_interval,
-            metrics={"RR@10": True, "AP": False, "nDCG": False},
-        )
+                listener = ValidationListener.C(
+                    id=f"bestval_zs_{name}",
+                    dataset=ds_val_zs,
+                    retriever=retr,
+                    validation_interval=cfg.learner.validation_interval,
+                    metrics={"RR@10": True, "AP": False, "nDCG": False},
+                )
+                validation.append(listener)
 
-        aggregator_validation = AggregatorValidationListener.C(
-            listeners=[validation, validation_zs],
-            id="aggregated_validation",
-            validation_interval=cfg.learner.validation_interval,
-            metrics={"RR@10": True, "AP": False, "nDCG": False},
-        )
+            # Aggregator includes the main (if present) plus all per-dataset listeners
+            aggregator_validation = AggregatorValidationListener.C(
+                listeners=validation,
+                id="aggregated_validation",
+                validation_interval=cfg.learner.validation_interval,
+                metrics={"RR@10": True, "AP": False, "nDCG": False},
+            ).tag("validation", "nanobeir")
+            validation.append(aggregator_validation)
+        else:
+            raise NotImplementedError(
+                f"Validation dataset {cfg.learner.validation} is not implemented yet."
+            )
 
         hooks = [
             # setmeta(DistributedHook.C(models=[scorer_model]), True),
@@ -236,7 +275,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             max_epochs=cfg.learner.optimization.max_epochs,
             checkpoint_interval=cfg.learner.checkpoint_interval,
             # The listeners (here, for validation)
-            listeners=[validation, validation_zs, aggregator_validation],
+            listeners=validation,
             # The hook used for evaluation
             hooks=hooks,
             # fabric settings
@@ -248,109 +287,23 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         # Submit job and link
         outputs = learner.submit(launcher=launcher_learner)
 
+        # If we track MSMARCO, use default validation, else (for NanoBEIR) use the aggregator 
+        tracked_validation = validation[0] if cfg.learner.validation == Validation.MSMARCO.value else validation[-1]
+
         # Evaluate the neural model on test collections
-        for metric_name in validation.monitored():
-            load_model = outputs.listeners[validation.id][metric_name]
-            # load_model = outputs.checkpoints[200]
-            tests.evaluate_retriever(
-                partial(
-                    model_based_retrievers,
-                    scorer=scorer_model,
-                    retrievers=test_retrievers,
-                ),
-                launcher_evaluate,
-                model_id=f"{cfg.id}-{metric_name}-{seed}",
-                init_tasks=[load_model],
-            )
-
-        ### Compute the baseline comparison if required ###
-        if cfg.compare_with_baseline:
-            # Build the baseline: pass an empty list of attention patches
-            baseline_scorer_model: FrankenCrossScorer = build_scorer_model(
-                cfg, attn_patches=[]
-            )
-            baseline_scorer_model.tag("scorer", f"baseline-{cfg.id}")
-
-            # The validation listener evaluates the full retriever
-            # (retriever + scorer) and keep the best performing model
-            # on the validation set
-            validation_baseline = ValidationListener.C(
-                id="bestval",
-                dataset=ds_val,
-                retriever=model_based_retrievers(
-                    documents=train_documents,
-                    retrievers=val_retrievers,
-                    scorer=baseline_scorer_model,
-                ).tag("retriever", retriever_tag),
-                validation_interval=cfg.learner.validation_interval,
-                metrics={"RR@10": True, "AP": False, "nDCG": False},
-            )
-
-            validation_zs_baseline = ValidationListener.C(
-                id="bestval_zs",
-                dataset=ds_val_zs,
-                retriever=model_based_retrievers(
-                    documents=val_documents,
-                    retrievers=val_retrievers_zs,
-                    scorer=baseline_scorer_model,
-                ).tag("retriever", retriever_tag),
-                validation_interval=cfg.learner.validation_interval,
-                metrics={"RR@10": True, "AP": False, "nDCG": False},
-            )
-
-            aggregator_validation_baseline = AggregatorValidationListener.C(
-                listeners=[validation_baseline, validation_zs_baseline],
-                id="aggregated_validation",
-                validation_interval=cfg.learner.validation_interval,
-                metrics={"RR@10": True, "AP": False, "nDCG": False},
-            )
-
-            # The learner trains the model
-            baseline_learner = Learner.C(
-                # Misc settings
-                random=random,
-                # How to train the model
-                trainer=ce_trainer,
-                # The model to train
-                model=baseline_scorer_model,
-                # Optimization settings
-                steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
-                optimizers=cfg.learner.optimization.optimizer,
-                max_epochs=cfg.learner.optimization.max_epochs,
-                checkpoint_interval=cfg.learner.checkpoint_interval,
-                # The listeners (here, for validation)
-                listeners=[
-                    validation_baseline,
-                    validation_zs_baseline,
-                    aggregator_validation_baseline,
-                ],
-                # The hook used for evaluation
-                hooks=hooks,
-                # fabric settings
-                strategy=cfg.learner.strategy,
-                precision=cfg.learner.precision,
-                accelerator=cfg.learner.accelerator,
-            )
-
-            # Submit job and link
-            baseline_outputs = baseline_learner.submit(launcher=launcher_learner)
-
-            # Evaluate the neural model on test collections
-            for metric_name in validation_baseline.monitored():
-                load_baseline = baseline_outputs.listeners[validation_baseline.id][
-                    metric_name
-                ]
-                # load_model = outputs.checkpoints[200]
-                tests.evaluate_retriever(
-                    partial(
-                        model_based_retrievers,
-                        scorer=baseline_scorer_model,
-                        retrievers=test_retrievers,
-                    ),
-                    launcher_evaluate,
-                    model_id=f"baseline-{cfg.id}-{metric_name}-{seed}",
-                    init_tasks=[load_baseline],
-                )
+        # for metric_name in tracked_validation.monitored():
+        #     load_model = outputs.listeners[tracked_validation.id][metric_name]
+        #     # load_model = outputs.checkpoints[200]
+        #     tests.evaluate_retriever(
+        #         partial(
+        #             model_based_retrievers,
+        #             scorer=scorer_model,
+        #             retrievers=test_retrievers,
+        #         ),
+        #         launcher_evaluate,
+        #         model_id=f"{cfg.id}-{metric_name}-{seed}",
+        #         init_tasks=[load_model],
+        #     )
 
         # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
         # the linking works only if the task was generated and scheduled by experimaestro, so that the learner.logpath is set.
@@ -376,23 +329,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     if not helper.xp.resultspath.exists():
         helper.xp.resultspath.mkdir(parents=True, exist_ok=True)
 
-    if cfg.compare_with_baseline:
-        logging.info("Loading detailed results for each runs, across each setups")
-        detailed_df = run_statistical_tests(
-            tests.per_model, nb_repetitions=cfg.nb_repetitions
-        )
-
-        logging.info("Detailed results across each setups:")
-        logging.info(detailed_df)
-
-        detailed_output_file = (
-            helper.xp.resultspath / "statistical_significance_results.csv"
-        )
-        detailed_df.to_csv(detailed_output_file, index=True)
-        logging.info(
-            f"Statistical significance results saved to {detailed_output_file}"
-        )
-
     output_file = helper.xp.resultspath / "results.csv"
     df_grouped.to_csv(output_file, index=False)
     logging.info(f"Results saved to {output_file}")
@@ -402,7 +338,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         df_grouped,
         caption="Evaluation Results",
         label="tab:eval_results",
-        sig_df=detailed_df if cfg.compare_with_baseline else None,
+        sig_df=None,
     )
     latex_output_file = helper.xp.resultspath / "results.tex"
     with open(latex_output_file, "w") as f:

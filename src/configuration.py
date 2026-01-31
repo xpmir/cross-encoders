@@ -29,6 +29,15 @@ class PoolingMethod(str, Enum):
     MEAN = "mean"
     """Mean pooling"""
 
+class Validation(str, Enum):
+    """Possible validation subsets"""
+
+    MSMARCO = "msmarco"
+    """MSMARCO dev set"""
+
+    NanoBEIR = "nanobeir"
+    """A small subset of BEIR datasets designed specifically for validation"""
+
 @configuration()
 class Indexation(LauncherSpecification):
     batch_size: int = 512
@@ -58,6 +67,9 @@ class xpm_torch_Learner:
     loss: str = Losses.marginMSE.value
     """Loss function to use"""
 
+    validation: str = Validation.MSMARCO.value
+    """ The validation subset to use """
+
     ## Lighnting Fabric parameters see https://lightning.ai/docs/fabric/stable/api/generated/lightning.fabric.fabric.Fabric.html#lightning.fabric.fabric.Fabric 
 
     strategy: str = "auto"
@@ -80,66 +92,6 @@ class Retrieval:
 @configuration()
 class Preprocessing:
     requirements: str = "duration=12h & cpu(cores=4)"
-
-@configuration()
-class Layer_params:
-    """Either a single layer (value) or an explicit range (values_range)."""
-    value: Optional[int] = 0
-    values_range: Optional[Tuple[int, int]] = None
-
-    def get_content(self) -> Any:
-        if self.value is not None:
-            return self.value
-        if self.values_range is not None:
-            return self.values_range
-        raise ValueError("Either value or values_range must be set.")
-
-    def get_content_as_list(self) -> str:
-        if self.value is not None:
-            return [self.value]
-        if self.values_range is not None:
-            return list(range(self.values_range[0], self.values_range[1]))
-        raise ValueError("Either value or values_range must be set.")
-    
-    def _validate(self):
-        if self.value is not None and not isinstance(self.value, int):
-            raise TypeError(f"value must be an int or None, got {self.value!r}")
-        if self.values_range is not None:
-            if not (
-                isinstance(self.values_range, (tuple, list))
-                and len(self.values_range) == 2
-                and isinstance(self.values_range[0], int)
-                and isinstance(self.values_range[1], int)
-                and self.values_range[1] >= self.values_range[0]
-            ):
-                raise TypeError(
-                    f"values_range must be a pair of ints (start <= end), got {self.values_range!r}"
-                )
-        if self.value is not None and self.values_range is not None:
-            logging.warning("Both value and values_range are set. Defaulting to value.")
-        if self.value is None and self.values_range is None:
-            raise ValueError("Either value or values_range must be set.")
-        
-    @staticmethod
-    def from_any(obj: Any, default: int = 0) -> "Layer_params":
-        """Normalize int, dict/DictConfig or Layer_params into a Layer_params instance."""
-        from omegaconf import DictConfig  # local import to avoid top-level dependency issues
-        if isinstance(obj, Layer_params):
-            return obj
-        if isinstance(obj, int):
-            return Layer_params(value=obj)
-        if obj is None:
-            return Layer_params(value=default)
-        if isinstance(obj, DictConfig) or isinstance(obj, dict):
-            od = dict(obj)
-            if "value" in od:
-                return Layer_params(value=int(od["value"]))
-            if "values_range" in od:
-                vr = od["values_range"]
-                if isinstance(vr, (list, tuple)) and len(vr) == 2:
-                    return Layer_params(value=None, values_range=(int(vr[0]), int(vr[1] + 1))) # Add +1 to include the upper_bound specified in the config
-        raise TypeError(f"Cannot convert {obj!r} to Layer_params")
-
 
 @configuration()
 class Evaluation:
