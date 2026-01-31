@@ -9,6 +9,7 @@ from transformers import AutoConfig
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch.batchers import PowerAdaptativeBatcher
+from xpm_torch.utils.hugginface import get_hf_config
 
 from datamaestro_text.data.ir import Documents
 
@@ -98,7 +99,13 @@ def run(
         for scorer_hf_id in cfg.scorers_hf_id:
             # evaluating the zero-shot ability
 
+            logging.info(f"Loading config for {scorer_hf_id} ")
+            # TODO fix
+
+            #config = get_hf_config(scorer_hf_id)
             config = AutoConfig.from_pretrained(scorer_hf_id)
+            logging.info(config)
+
             scorer = HFCrossScorer.C(
                 hf_id=scorer_hf_id,
                 max_length=config.max_position_embeddings,

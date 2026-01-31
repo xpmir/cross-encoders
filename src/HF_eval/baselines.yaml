@@ -2,7 +2,8 @@ id: cross_scorer_evaluation
 title: cross_scorer_evaluation
 description: Experiment whose purpose is to evaluate HF Cross-scorers
 
-#pre_experiment: ../pre_experiment.py
+# TODO still not working for now...
+# pre_experiment: ../pre_experiment.py
 module: HF_eval.baselines
 
 gpu: true
