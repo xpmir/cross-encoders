@@ -11,7 +11,7 @@ seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
 base: microsoft/MiniLM-L12-H384-uncased # jhu-clsp/ettin-encoder-32m  microsoft/MiniLM-L12-H384-uncased
-retriever: "" #BM25
+retriever: "naver/splade-v3-distilbert" #BM25
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)

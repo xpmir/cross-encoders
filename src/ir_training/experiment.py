@@ -22,22 +22,26 @@ from xpmir.papers.helpers.samplers import (
     msmarco_hofstaetter_ensemble_hard_negatives,
 )
 import xpmir.interfaces.anserini as anserini
-from xpmir.rankers.standard import BM25
+from xpmir.rankers.standard import BM25, Model
 from xpmir.neural.huggingface import HFCrossScorer
-from xpmir.rankers import Documents, Retriever, scorer_retriever
+from xpmir.rankers import Documents, Retriever, document_cache, scorer_retriever
 
 from xpmir.letor.distillation.pairwise import (
     DistillationPairwiseTrainer,
     MSEDifferenceLoss,
 )
 from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
+from xpmir.text.huggingface.base import HFMaskedLanguageModel
+from xpmir.text.huggingface.tokenizers import HFTokenizer, HFTokenizerAdapter
 
 #TODO add support for those
-# from xpmir.index.sparse import (
-#     SparseRetriever,
-#     SparseRetrieverIndexBuilder,
-#     Sparse2BMPConverter,
-# )
+from xpmir.index.sparse import (
+    SparseRetriever,
+    SparseRetrieverIndexBuilder,
+    Sparse2BMPConverter,
+)
+from xpmir.text.adapters import TopicTextConverter
+from xpmir.neural.splade import SpladeTextEncoderV2, MaxAggregation
 
 # from xpmir.letor.distillation.pairwise import PairwiseTrainer, PointwiseCrossEntropyLoss
 
@@ -113,26 +117,112 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     # Setup indices and validation/test base retrievers
     model_based_retrievers = get_model_based_retrievers(cfg)
 
-    # Only BM25 for now - will add SPLADE later
-    base_model = BM25.C()
-
-    def bm25_retriever(name, documents: Documents) -> Retriever.C:
-        return (
-            anserini.AnseriniRetriever.C(
-                k=cfg.retrieval.k,
-                model=base_model,
-                index=anserini.index_builder(launcher=launcher_index)(documents),
-                store=documents,
-            )
-            .tag("first_stage", name)
-            .tag("data", documents.id)
+    if cfg.retriever:
+        # We don't use BM25, but a given sparse retriever
+        tokenizer = HFTokenizer.C(model_id=cfg.retriever)
+        splade_encoder = SpladeTextEncoderV2.C(
+            tokenizer=HFTokenizerAdapter.C(
+                tokenizer=tokenizer, converter=TopicTextConverter.C()
+            ),
+            encoder=HFMaskedLanguageModel.from_pretrained_id(cfg.retriever),
+            aggregation=MaxAggregation.C(),
+            maxlen=256,
         )
 
-    retrievers = partial(
-        anserini.retriever,
-        anserini.index_builder(launcher=launcher_index),
-        model=base_model,
-    )
+        @document_cache
+        def splade_index(documents: Documents):
+            logging.info(
+                "Indexing %s (%s documents) with %s",
+                documents.id,
+                documents.count,
+                launcher_index,
+            )
+
+            index = SparseRetrieverIndexBuilder.C(
+                batch_size=cfg.indexation.batch_size,
+                batcher=PowerAdaptativeBatcher.C(),
+                encoder=splade_encoder,
+                documents=documents,
+                ordered_index=False,
+                max_docs=cfg.indexation.max_indexed,
+            ).submit(launcher=launcher_index)
+
+            # Just submit the convertion for now
+            Sparse2BMPConverter.C(
+                index=index, block_size=32, compress_range=True
+            ).submit(launcher=launcher_bmp)
+
+            return index
+
+        def splade_retriever(
+            name,
+            encoder,
+            documents: Documents,
+        ) -> Retriever.C:
+            return (
+                SparseRetriever.C(
+                    index=splade_index()(documents),
+                    topk=cfg.retrieval.k,
+                    batchsize=1,
+                    encoder=encoder,
+                    in_memory=False,
+                )
+                .tag("first_stage", name)
+                .tag("data", documents.id)
+            )
+
+        def splade_val_retrievers(
+            documents: Documents,
+            *,
+            model: Model = None,
+        ) -> Retriever.C:
+            return SparseRetriever.C(
+                index=splade_index()(documents),
+                topk=cfg.learner.validation_top_k,
+                batchsize=1,
+                encoder=model,
+                in_memory=True,
+            )
+
+        retriever_tag = cfg.retriever
+        # Caches the Splade index task for a document collection
+        val_retrievers = partial(
+            splade_val_retrievers,
+            model=splade_encoder,
+        )
+        val_retrievers_zs = val_retrievers
+
+        test_retrievers = partial(splade_retriever, retriever_tag, splade_encoder)
+    else:
+        base_model = BM25.C()
+
+        def bm25_retriever(name, documents: Documents) -> Retriever.C:
+            return (
+                anserini.AnseriniRetriever.C(
+                    k=cfg.retrieval.k,
+                    model=base_model,
+                    index=anserini.index_builder(launcher=launcher_index)(documents),
+                    store=documents,
+                )
+                .tag("first_stage", name)
+                .tag("data", documents.id)
+            )
+
+        retrievers = partial(
+            anserini.retriever,
+            anserini.index_builder(launcher=launcher_index),
+            model=base_model,
+        )
+        retriever_tag = "bm25"
+
+        test_retrievers = partial(bm25_retriever, retriever_tag)
+
+        # evaluate base retrievers alone
+        tests.evaluate_retriever(
+            test_retrievers,
+            launcher=launcher_evaluate,
+        )
+
 
     if cfg.learner.validation == Validation.MSMARCO.value:
         # Full MSMARCO validation dataset
@@ -145,43 +235,20 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         )
     # NanoBEIR validation datasets
     elif cfg.learner.validation == Validation.NanoBEIR.value:
-        validations, validation_documents = nanobeir_validation_datasets(cfg.validation, launcher_preprocessing)
-        
-        # Normalize into list of (name, dataset, documents)
-        val_items = []
-        if isinstance(validations, dict):
-            # validations: name -> dataset
-            for name, ds in validations.items():
-                docs = validation_documents.get(name) if isinstance(validation_documents, dict) else validation_documents
-                val_items.append((name, ds, docs))
-        else:
-            # validations: iterable of datasets
-            if isinstance(validation_documents, (list, tuple)) and len(validation_documents) == len(validations):
-                for ds, docs in zip(validations, validation_documents):
-                    name = getattr(ds, "id", None) or getattr(ds, "name", None) or str(len(val_items))
-                    val_items.append((name, ds, docs))
-            else:
-                # single documents object used for all validations
-                for idx, ds in enumerate(validations):
-                    name = getattr(ds, "id", None) or getattr(ds, "name", None) or f"nb_{idx}"
-                    val_items.append((name, ds, validation_documents))
-        
-        # keep val_items for later use when building listeners after the scorer is created
-        nb_val_items = val_items
+        validations, validation_documents = nanobeir_validation_datasets(
+            cfg.validation, launcher=launcher_preprocessing
+        )
+
+        # Build a simple list of (name, validation_dataset, documents) for later use
+        nb_val_items = [
+            (name, validations[name], validation_documents[name])
+            for name in validations.keys()
+        ]
 
     else:
         raise NotImplementedError(
             f"Validation dataset {cfg.learner.validation} is not implemented yet."
         )
-
-    retriever_tag = "bm25"
-    # test_retrievers = partial(bm25_retriever, retriever_tag)
-
-    # # evaluate base retrievers alone
-    # tests.evaluate_retriever(
-    #     test_retrievers,
-    #     launcher=launcher_evaluate,
-    # )
 
     ### TRAINING CROSS ENCODER
     for i in range(cfg.nb_repetitions):
@@ -291,19 +358,19 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         tracked_validation = validation[0] if cfg.learner.validation == Validation.MSMARCO.value else validation[-1]
 
         # Evaluate the neural model on test collections
-        # for metric_name in tracked_validation.monitored():
-        #     load_model = outputs.listeners[tracked_validation.id][metric_name]
-        #     # load_model = outputs.checkpoints[200]
-        #     tests.evaluate_retriever(
-        #         partial(
-        #             model_based_retrievers,
-        #             scorer=scorer_model,
-        #             retrievers=test_retrievers,
-        #         ),
-        #         launcher_evaluate,
-        #         model_id=f"{cfg.id}-{metric_name}-{seed}",
-        #         init_tasks=[load_model],
-        #     )
+        for metric_name in tracked_validation.monitored():
+            load_model = outputs.listeners[tracked_validation.id][metric_name]
+            # load_model = outputs.checkpoints[200]
+            tests.evaluate_retriever(
+                partial(
+                    model_based_retrievers,
+                    scorer=scorer_model,
+                    retrievers=test_retrievers,
+                ),
+                launcher_evaluate,
+                model_id=f"{cfg.id}-{metric_name}-{seed}",
+                init_tasks=[load_model],
+            )
 
         # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
         # the linking works only if the task was generated and scheduled by experimaestro, so that the learner.logpath is set.
