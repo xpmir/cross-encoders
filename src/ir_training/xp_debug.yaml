@@ -46,4 +46,5 @@ retrieval:
 
 evaluation:
     test_max_topics: 100
-    all_datasets: false
+    all_datasets: true
+    in_domain_only: false

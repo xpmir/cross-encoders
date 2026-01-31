@@ -220,9 +220,65 @@ def BEIR_tests(test_topic_nb: int) -> EvaluationsCollection:
     )
 
 @lru_cache
+def Robust04_test(test_topic_nb: int) -> EvaluationsCollection:
+    """ Robust04 dataset """
+    robust04 = prepare_dataset("irds.disks45.nocr.trec-robust-2004")
+    if test_topic_nb > 0:
+        (robust04,) = RandomFold.folds(
+            seed=0, sizes=[test_topic_nb], dataset=robust04
+        )
+
+    return EvaluationsCollection(
+        robust04=Evaluations(robust04, MEASURES),
+    )
+
+@lru_cache
+def LoTTE_tests(test_topic_nb: int) -> EvaluationsCollection:
+    """ LoTTE Search dataset """
+    lotte_writing = prepare_dataset("irds.lotte.writing.test.search")
+    if test_topic_nb > 0:
+        (lotte_writing,) = RandomFold.folds(
+            seed=0, sizes=[test_topic_nb], dataset=lotte_writing
+        )
+
+    lotte_recreation = prepare_dataset("irds.lotte.recreation.test.search")
+    if test_topic_nb > 0:
+        (lotte_recreation,) = RandomFold.folds(
+            seed=0, sizes=[test_topic_nb], dataset=lotte_recreation
+        )
+
+    lotte_science = prepare_dataset("irds.lotte.science.test.search")
+    if test_topic_nb > 0:
+        (lotte_science,) = RandomFold.folds(
+            seed=0, sizes=[test_topic_nb], dataset=lotte_science
+        )
+
+    lotte_technology = prepare_dataset("irds.lotte.technology.test.search")
+    if test_topic_nb > 0:
+        (lotte_technology,) = RandomFold.folds(
+            seed=0, sizes=[test_topic_nb], dataset=lotte_technology
+        )
+
+    lotte_lifestyle = prepare_dataset("irds.lotte.lifestyle.test.search")
+    if test_topic_nb > 0:
+        (lotte_lifestyle,) = RandomFold.folds(
+            seed=0, sizes=[test_topic_nb], dataset=lotte_lifestyle
+        )
+    
+    return EvaluationsCollection(
+        lotte_writing=Evaluations(lotte_writing, MEASURES),
+        lotte_recreation=Evaluations(lotte_recreation, MEASURES),
+        lotte_science=Evaluations(lotte_science, MEASURES),
+        lotte_technology=Evaluations(lotte_technology, MEASURES),
+        lotte_lifestyle=Evaluations(lotte_lifestyle, MEASURES),
+    )
+
+@lru_cache
 def paper_tests(test_topic_nb: int, include_OOD: bool = True, check_docs: bool = True) -> EvaluationsCollection:
     """Returns the pool of queries for the evaluations to include in the paper.
     As of now, this list includes all of BEIR (minus the 5 datasets not publicly available) 
+    + Robust04
+    + LoTTE (Search)
     + the 2 TREC-DL 19 and 20 datasets, i.e.:
     - MS Marco v1 (dev set)
     - TREC DL 2019
@@ -252,18 +308,32 @@ def paper_tests(test_topic_nb: int, include_OOD: bool = True, check_docs: bool =
             seed=0, sizes=[test_topic_nb], dataset=v1_dev
         )
 
+        (dl19,) = RandomFold.folds(
+            seed=0, sizes=[test_topic_nb], dataset=dl19
+        )
+
+        (dl20,) = RandomFold.folds(
+            seed=0, sizes=[test_topic_nb], dataset=dl20
+        )
+
     # Out of domain - BEIR (optional)        
     if include_OOD:
-        ood = BEIR_tests(test_topic_nb)
+        beir = BEIR_tests(test_topic_nb)
+        robust04 = Robust04_test(test_topic_nb)
+        lotte = LoTTE_tests(test_topic_nb)
     else:
         # Empty collection
-        ood = EvaluationsCollection()
+        beir = EvaluationsCollection()
+        robust04 = EvaluationsCollection()
+        lotte = EvaluationsCollection()
 
     paper_tests =  EvaluationsCollection(
         msmarco_dev=Evaluations(v1_dev, MEASURES),
         trec2019=Evaluations(dl19, MEASURES),
         trec2020=Evaluations(dl20, MEASURES),
-        **ood.collection
+        **beir.collection,
+        **robust04.collection,
+        **lotte.collection,
     )
 
     if check_docs:
