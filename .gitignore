@@ -37,7 +37,7 @@ UV_HOME/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-.ipynb
+*.ipynb
 
 # MyPy
 .mypy_cache/
@@ -48,9 +48,6 @@ UV_HOME/
 
 # Sphinx documentation
 docs/_build/
-
-# Experimaestro generated files
-xp_*.yaml
 
 # Logs
 logs/
