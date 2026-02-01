@@ -148,9 +148,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             ).submit(launcher=launcher_index)
 
             # Just submit the convertion for now
-            Sparse2BMPConverter.C(
-                index=index, block_size=32, compress_range=True
-            ).submit(launcher=launcher_bmp)
+            # Sparse2BMPConverter.C(
+            #     index=index, block_size=32, compress_range=True
+            # ).submit(launcher=launcher_bmp)
 
             return index
 
@@ -267,6 +267,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         scorer_model = HFCrossScorer.C(
             hf_id=cfg.base,
             max_length=config.max_position_embeddings,
+            max_query_length=32,
+            max_doc_length=256,
         )
         scorer_model.tag("scorer", cfg.id)
 
