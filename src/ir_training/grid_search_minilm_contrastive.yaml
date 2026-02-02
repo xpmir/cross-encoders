@@ -1,20 +1,19 @@
-id: ir_training_debug
-title: "Debugging main Cross Encoder training Experiment"
+id: hyperparams_search_minilm_contrastive_loss
+title: "Hyperparameter Search on MiniLM with contrastive loss"
 description: 
     Starts from the checkpoint > microsoft/MiniLM-L12-H384-uncased
-    trains on MS_Marco with margin MSE loss, distilling from Hofstätter et al. 2020
+    trains on MS_Marco with binary cross-entrop loss
 
-module: src.ir_training.experiment
+module: ir_training.experiment
 
 gpu: true
 seed: 12 # To mimick the HF xp 
-nb_repetitions: 1
+nb_repetitions: 3
 
 retriever: "" #BM25 by default
 
 #model definition
 base: microsoft/MiniLM-L12-H384-uncased
-#Can be microsoft/MiniLM-L12-H384-uncased, jhu-clsp/ettin-encoder-32m , bert-base-uncased 
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -30,8 +29,8 @@ validation:
 learner:
     optimization:
         steps_per_epoch: 100
-        batch_size: 64
-        max_epochs: 10 # Just for debugging
+        batch_size: 32
+        max_epochs: 1250 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
         lr: 7e-6
@@ -39,11 +38,12 @@ learner:
     # sample_max: 2_000_000
     max_grad_norm: 1.0
     checkpoint_interval: 100
-    validation_interval: 5
+    validation_interval: 25
     validation_top_k: 100
+    validation: msmarco
+    loss: bce
     requirements: duration=2 days & cpu(cores=5) & cuda(mem=30G)
 
-    # precision: "bf16" # to test fabric management of precision
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
@@ -51,5 +51,5 @@ retrieval:
 
 #just for debugging
 evaluation:
-    test_max_topics: 100
     all_datasets: false
+    in_domain_only: true

@@ -17,8 +17,8 @@ class Losses(str, Enum):
     marginMSE = "marginMSE"
     """Margin Mean Squared Error loss from hofstatter et al. 2020"""
 
-    PointWiseMSE = "PointWiseMSE"
-    """ Point Wise Mean Squared Error loss """
+    BCE = "bce"
+    """ Binary Cross Entropy loss """
 
 class PoolingMethod(str, Enum):
     """Possible pooling methods"""

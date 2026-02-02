@@ -9,6 +9,7 @@ from transformers import AutoConfig
 from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
 
+from xpm_torch.losses.pairwise import PointwiseCrossEntropyLoss
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 from xpm_torch import Random
 from xpm_torch.batchers import PowerAdaptativeBatcher
@@ -16,10 +17,12 @@ from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_exp
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 
+from xpm_torch.trainers.pairwise import PairwiseTrainer
 from xpmir.papers.helpers.samplers import (
     msmarco_v1_validation_dataset,
     prepare_collection,
     msmarco_hofstaetter_ensemble_hard_negatives,
+    msmarco_v1_docpairs_efficient_sampler,
 )
 import xpmir.interfaces.anserini as anserini
 from xpmir.rankers.standard import BM25, Model
@@ -81,18 +84,18 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         )
 
     # TODO: name properly the BCE loss function in the configuration as well
-    # elif loss_member is Losses.PointWiseMSE:
-    #     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
-    #     return PairwiseTrainer.C(
-    #         lossfn=PointwiseCrossEntropyLoss.C(),
-    #         sampler=msmarco_v1_docpairs_efficient_sampler(
-    #             sample_rate=cfg.learner.sample_rate,
-    #             sample_max=cfg.learner.sample_max,
-    #             launcher=launcher_preprocessing,
-    #         ),
-    #         batcher=PowerAdaptativeBatcher.C(),
-    #         batch_size=cfg.learner.optimization.batch_size,
-    #     )
+    elif loss_member is Losses.BCE:
+        launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+        return PairwiseTrainer.C(
+            lossfn=PointwiseCrossEntropyLoss.C(),
+            sampler=msmarco_v1_docpairs_efficient_sampler(
+                sample_rate=cfg.learner.sample_rate,
+                sample_max=cfg.learner.sample_max,
+                launcher=launcher_preprocessing,
+            ),
+            batcher=PowerAdaptativeBatcher.C(),
+            batch_size=cfg.learner.optimization.batch_size,
+        )
 
     else:
         raise NotImplementedError(
