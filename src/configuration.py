@@ -20,6 +20,9 @@ class Losses(str, Enum):
     BCE = "bce"
     """ Binary Cross Entropy loss """
 
+    distillRankNET = "distillRankNET"
+    """ Distillation version of RankNET loss from Schlatt et al. 2025"""
+
 class PoolingMethod(str, Enum):
     """Possible pooling methods"""
 

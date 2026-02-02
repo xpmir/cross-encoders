@@ -18,7 +18,9 @@ from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 
 from xpm_torch.trainers.pairwise import PairwiseTrainer
+from xpmir.letor.distillation.listwise import DistillationListwiseTrainer
 from xpmir.papers.helpers.samplers import (
+    msmarco_rankdistillm_colbert_top100,
     msmarco_v1_validation_dataset,
     prepare_collection,
     msmarco_hofstaetter_ensemble_hard_negatives,
@@ -83,7 +85,6 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             lossfn=MSEDifferenceLoss.C(),
         )
 
-    # TODO: name properly the BCE loss function in the configuration as well
     elif loss_member is Losses.BCE:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
         return PairwiseTrainer.C(
@@ -97,6 +98,13 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             batch_size=cfg.learner.optimization.batch_size,
         )
 
+    elif loss_member is Losses.distillRankNET:
+        return DistillationListwiseTrainer.C(
+            batcher=PowerAdaptativeBatcher.C(),
+            batch_size=cfg.learner.optimization.batch_size,
+            sampler=msmarco_rankdistillm_colbert_top100(),
+            lossfn=MSEDifferenceLoss.C(),
+        )
     else:
         raise NotImplementedError(
             f"Loss function {cfg.learner.loss} is not implemented yet."
