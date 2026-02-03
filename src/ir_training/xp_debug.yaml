@@ -17,7 +17,7 @@ preprocessing:
     requirements: duration=8h & cpu(cores=8)
 
 indexation:
-    requirements: duration=8h & cpu(cores=5) & cuda(mem=30G)
+    requirements: duration=8h & cpu(cores=5) & gpu(mem=30G)
 
 validation:
     size: 500 # Use 500 topics for validation
@@ -38,10 +38,10 @@ learner:
     validation_interval: 7
     validation_top_k: 100
     validation: nanobeir
-    requirements: duration=2 days & cpu(cores=16) & cuda(mem=40G)
+    requirements: duration=2 days & cpu(cores=16) & gpu(mem=40G)
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
+    requirements: duration=20h & cpu(cores=16) & gpu(mem=30G)
     batch_size: 64
     k: 1000
 
