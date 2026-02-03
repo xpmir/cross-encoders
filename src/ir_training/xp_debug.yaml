@@ -10,7 +10,15 @@ gpu: true
 seed: 12 # To mimick the HF xp 
 nb_repetitions: 1
 
-base: microsoft/MiniLM-L12-H384-uncased # jhu-clsp/ettin-encoder-32m  microsoft/MiniLM-L12-H384-uncased
+# base: 
+#     value: "microsoft/MiniLM-L12-H384-uncased"
+base: 
+    values_list: 
+        - "jhu-clsp/ettin-encoder-32m"
+        - "microsoft/MiniLM-L12-H384-uncased"
+
+# microsoft/MiniLM-L12-H384-uncased # jhu-clsp/ettin-encoder-32m  microsoft/MiniLM-L12-H384-uncased
+
 retriever: "naver/splade-v3-distilbert" #BM25
 
 preprocessing:

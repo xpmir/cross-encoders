@@ -13,7 +13,8 @@ nb_repetitions: 3
 retriever: "" #BM25 by default
 
 #model definition
-base: microsoft/MiniLM-L12-H384-uncased
+base: 
+    value: microsoft/MiniLM-L12-H384-uncased
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
