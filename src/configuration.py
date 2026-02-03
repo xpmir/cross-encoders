@@ -103,7 +103,7 @@ class Indexation(LauncherSpecification):
     max_indexed: int = 0
 
     requirements: str = "duration=2 days & cpu(cores=8)"
-    sparse2bmp_requirements: str = "duration=1d & gpu(mem=24G)"
+    sparse2bmp_requirements: str = "duration=1d & cuda(mem=24G)"
 
 @configuration()
 class xpm_torch_Learner:
@@ -114,7 +114,7 @@ class xpm_torch_Learner:
     checkpoint_interval: int = field(default=32)
 
     optimization: TransformerOptimization = Factory(TransformerOptimization)
-    requirements: str = "duration=4 days & gpu(mem=24G) * 2"
+    requirements: str = "duration=4 days & cuda(mem=24G) * 2"
     sample_rate: float = 1.0
     """Sample rate for triplets"""
 
@@ -145,7 +145,7 @@ class xpm_torch_Learner:
 class Retrieval:
     k: int = 1000
     batch_size: int = 128
-    requirements: str = "duration=2 days & gpu(mem=24G)"
+    requirements: str = "duration=2 days & cuda(mem=24G)"
 
 
 @configuration()

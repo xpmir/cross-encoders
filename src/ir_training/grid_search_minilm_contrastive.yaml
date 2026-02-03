@@ -20,7 +20,7 @@ preprocessing:
     requirements: duration=8h & cpu(cores=8)
 
 indexation:
-    requirements: duration=8h & cpu(cores=5) & gpu(mem=10G)
+    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
 
 validation:
     # Use 500 topics for validation
@@ -43,11 +43,11 @@ learner:
     validation_top_k: 100
     validation: msmarco
     loss: bce
-    requirements: duration=2 days & cpu(cores=16) & gpu(mem=30G)
+    requirements: duration=2 days & cpu(cores=16) & cuda(mem=30G)
 
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16) & gpu(mem=30G)
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
     k: 1000
 
 #just for debugging
