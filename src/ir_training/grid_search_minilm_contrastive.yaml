@@ -42,7 +42,7 @@ learner:
     validation_top_k: 100
     validation: msmarco
     loss: bce
-    requirements: duration=2 days & cpu(cores=5) & cuda(mem=30G)
+    requirements: duration=2 days & cpu(cores=16) & cuda(mem=30G)
 
 
 retrieval:
