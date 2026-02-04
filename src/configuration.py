@@ -25,7 +25,10 @@ class Losses(str, Enum):
     """ Binary Cross Entropy loss """
 
     distillRankNET = "distillRankNET"
-    """ Distillation version of RankNET loss from Schlatt et al. 2025"""
+    """Distillation version of RankNET loss from Schlatt et al. 2025"""
+
+    ADR_MSE = "ADR_MSE"
+    """Listwise distillation loss proposed by Schlatt et al. 2025"""
 
 
 class PoolingMethod(str, Enum):
