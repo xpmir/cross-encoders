@@ -168,7 +168,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     tests = build_tests(cfg.evaluation)
 
     def run_one_config(helper: LearningExperimentHelper, cfg: CE_FineTuning, grid_search_id: str):
-        """MiniLM-v2 model training"""
+        """Main process for Cross-encoder training"""
 
         # Setup indices and validation/test base retrievers
         model_based_retrievers = get_model_based_retrievers(cfg)
