@@ -17,12 +17,18 @@ logging.basicConfig(level=logging.INFO)
 
 class Losses(str, Enum):
     """Possible losses"""
+    
+    BCE = "bce"
+    """ Binary Cross Entropy loss """
+
+    hingeLoss = "hingeLoss"
+    """Hinge loss"""
+
+    infoNCE = "infoNCE"
+    """InfoNCE loss"""
 
     marginMSE = "marginMSE"
     """Margin Mean Squared Error loss from hofstatter et al. 2020"""
-
-    BCE = "bce"
-    """ Binary Cross Entropy loss """
 
     distillRankNET = "distillRankNET"
     """Distillation version of RankNET loss from Schlatt et al. 2025"""
@@ -48,7 +54,6 @@ class Validation(str, Enum):
 
     NanoBEIR = "nanobeir"
     """A small subset of BEIR datasets designed specifically for validation"""
-
 
 
 T = TypeVar("T", int, str, float)

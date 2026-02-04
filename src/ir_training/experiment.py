@@ -2,6 +2,7 @@
 
 import logging
 from functools import partial
+from typing import Optional
 import numpy as np
 import pandas as pd
 from transformers import AutoConfig
@@ -9,7 +10,7 @@ from transformers import AutoConfig
 from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
 
-from xpm_torch.losses.pairwise import PointwiseCrossEntropyLoss
+from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 from xpm_torch import Random
 from xpm_torch.batchers import PowerAdaptativeBatcher
@@ -19,8 +20,10 @@ from xpm_torch.learner import Learner
 
 from xpm_torch.trainers.pairwise import PairwiseTrainer
 from xpmir.letor.distillation.listwise import ADR_MSE, DistillRankNetLoss, DistillationListwiseTrainer
+from xpmir.letor.samplers import ModelBasedHardNegativeSampler, PairwiseInBatchNegativesSampler
 from xpmir.papers.helpers.samplers import (
     msmarco_rankdistillm_colbert_top100,
+    msmarco_colbertv2_annotated,
     msmarco_v1_validation_dataset,
     prepare_collection,
     msmarco_hofstaetter_ensemble_hard_negatives,
@@ -38,6 +41,8 @@ from xpmir.letor.distillation.pairwise import (
 from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
 from xpmir.text.huggingface.base import HFMaskedLanguageModel
 from xpmir.text.huggingface.tokenizers import HFTokenizer, HFTokenizerAdapter
+from xpm_torch.trainers.batchwise import BatchwiseTrainer
+from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
 
 #TODO add support for those
 from xpmir.index.sparse import (
@@ -68,7 +73,7 @@ def get_model_based_retrievers(cfg: CE_FineTuning):
     return model_based_retrievers
 
 
-def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
+def build_trainer(cfg: CE_FineTuning, retriever: Optional = None) -> LossTrainer:
     try:
         loss_member = Losses(cfg.learner.loss)
     except ValueError:
@@ -76,16 +81,8 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             f"Unknown loss function: {cfg.learner.loss}. Accepted values are: {[e.value for e in Losses]}"
         )
 
-    if loss_member is Losses.marginMSE:
-        # define the trainer for monomlm
-        return DistillationPairwiseTrainer.C(
-            batcher=PowerAdaptativeBatcher.C(),
-            batch_size=cfg.learner.optimization.batch_size,
-            sampler=msmarco_hofstaetter_ensemble_hard_negatives(),
-            lossfn=MSEDifferenceLoss.C(),
-        )
-
-    elif loss_member is Losses.BCE:
+    ### Pointwise losses
+    if loss_member is Losses.BCE:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
         return PairwiseTrainer.C(
             lossfn=PointwiseCrossEntropyLoss.C(),
@@ -97,7 +94,46 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
         )
+    
+    ### Pairwise losses ###
+    elif loss_member is Losses.hingeLoss:
+        launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+        return PairwiseTrainer.C(
+            lossfn=HingeLoss.C(),
+            sampler=msmarco_v1_docpairs_efficient_sampler(
+                sample_rate=cfg.learner.sample_rate,
+                sample_max=cfg.learner.sample_max,
+                launcher=launcher_preprocessing,
+            ),
+            batcher=PowerAdaptativeBatcher.C(),
+            batch_size=cfg.learner.optimization.batch_size,
+        )
+    
+    ### Listwise losses ###
+    elif loss_member is Losses.infoNCE:
+        launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+        return BatchwiseTrainer.C(
+            sampler=msmarco_colbertv2_annotated(),
+            lossfn=SoftmaxCrossEntropy.C(),
+            batcher=PowerAdaptativeBatcher.C(),
+            batch_size=cfg.learner.optimization.batch_size,
+            hooks=[],
+        )
 
+    # TODO: for distillation, also implements a mechanism to pick the target dataset 
+    # (hofstatter vs RankGPT, version of RankGPT) with some constraints, like not 
+    # possible to run MarginMSE on RankGPT
+
+    ### Pairwise distillation losses ###
+    elif loss_member is Losses.marginMSE:
+        # define the trainer for monomlm
+        return DistillationPairwiseTrainer.C(
+            batcher=PowerAdaptativeBatcher.C(),
+            batch_size=cfg.learner.optimization.batch_size,
+            sampler=msmarco_hofstaetter_ensemble_hard_negatives(),
+            lossfn=MSEDifferenceLoss.C(),
+        )
+    ### Listwise distillation losses ### 
     elif loss_member is Losses.distillRankNET:
         return DistillationListwiseTrainer.C(
             batcher=PowerAdaptativeBatcher.C(),
