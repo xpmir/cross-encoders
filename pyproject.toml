@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "sota-cross-encoders"
 version = "0.1.0"
@@ -15,6 +19,9 @@ dependencies = [
     "xpm-torch",
 ]
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+
 [tool.uv.workspace]
 members = [
     "xpm-torch",
@@ -27,3 +34,4 @@ xpm-torch = { workspace = true }
 experimaestro = { workspace = true }
 ir-datasets = { git = "https://github.com/bpiwowar/ir_datasets.git" }
 experimaestro-ir = { workspace = true }
+
