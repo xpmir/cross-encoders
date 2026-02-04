@@ -73,7 +73,7 @@ def get_model_based_retrievers(cfg: CE_FineTuning):
     return model_based_retrievers
 
 
-def build_trainer(cfg: CE_FineTuning, retriever: Optional = None) -> LossTrainer:
+def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
     try:
         loss_member = Losses(cfg.learner.loss)
     except ValueError:
@@ -111,14 +111,15 @@ def build_trainer(cfg: CE_FineTuning, retriever: Optional = None) -> LossTrainer
     
     ### Listwise losses ###
     elif loss_member is Losses.infoNCE:
-        launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
-        return BatchwiseTrainer.C(
-            sampler=msmarco_colbertv2_annotated(),
-            lossfn=SoftmaxCrossEntropy.C(),
-            batcher=PowerAdaptativeBatcher.C(),
-            batch_size=cfg.learner.optimization.batch_size,
-            hooks=[],
-        )
+        raise NotImplementedError("InfoNCE loss is not implemented yet.")
+        # launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+        # return BatchwiseTrainer.C(
+        #     sampler=msmarco_colbertv2_annotated(),
+        #     lossfn=SoftmaxCrossEntropy.C(),
+        #     batcher=PowerAdaptativeBatcher.C(),
+        #     batch_size=cfg.learner.optimization.batch_size,
+        #     hooks=[],
+        # )
 
     # TODO: for distillation, also implements a mechanism to pick the target dataset 
     # (hofstatter vs RankGPT, version of RankGPT) with some constraints, like not 
