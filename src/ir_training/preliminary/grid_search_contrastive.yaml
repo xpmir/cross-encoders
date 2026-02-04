@@ -1,20 +1,17 @@
 id: hyperparams_search_minilm_contrastive_loss
-title: "Hyperparameter Search on MiniLM with contrastive loss"
+title: "Hyperparameter Search with contrastive loss"
 description: 
-    Starts from the checkpoint > microsoft/MiniLM-L12-H384-uncased
-    trains on MS_Marco with binary cross-entrop loss
+    Try several training hyperparameters for two sizes of backbones
 
 module: ir_training.experiment
 
-gpu: true
 seed: 12 # To mimick the HF xp 
 nb_repetitions: 3
 
-retriever: "" #BM25 by default
+retriever: "naver/splade-v3" 
 
-#model definition
-base: 
-    value: microsoft/MiniLM-L12-H384-uncased
+#model definition -> in grid search
+base: "null"
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -43,7 +40,7 @@ learner:
     validation_top_k: 100
     validation: msmarco
     loss: bce
-    requirements: duration=2 days & cpu(cores=16) & cuda(mem=30G)
+    requirements: duration=2 days & cpu(cores=16) & cuda(mem=40G)
 
 
 retrieval:
@@ -54,3 +51,15 @@ retrieval:
 evaluation:
     all_datasets: false
     in_domain_only: true
+
+
+#### Params that are grid searched 
+grid_search:
+    base: 
+        values_list: 
+            - microsoft/MiniLM-L12-H384-uncased
+            - bert-base-uncased
+    learner.optimization.batch_size:
+        values_list: [32, 64]
+    learner.optimization.lr:
+        values_list: [1e-5, 7e-5, 3e-6, 7e-6]
