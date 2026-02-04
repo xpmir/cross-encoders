@@ -114,7 +114,6 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
 @learning_experiment()
 def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     launcher_index = find_launcher(cfg.indexation.requirements)
-    launcher_bmp = find_launcher(cfg.indexation.sparse2bmp_requirements)
     launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
@@ -124,7 +123,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
     tests = build_tests(cfg.evaluation)
 
-    def run_one_config(helper: LearningExperimentHelper, cfg: CE_FineTuning):
+    def run_one_config(helper: LearningExperimentHelper, cfg: CE_FineTuning, grid_search_id: str):
         """MiniLM-v2 model training"""
 
         # Setup indices and validation/test base retrievers
@@ -282,7 +281,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 max_query_length=32,
                 max_doc_length=256,
             )
-            scorer_model.tag("scorer", cfg.id)
+            scorer_model.tag("scorer", grid_search_id)
 
             # The validation listener evaluates the full retriever
             # (retriever + scorer) and keep the best performing model
@@ -391,7 +390,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                         retrievers=test_retrievers,
                     ),
                     launcher_evaluate,
-                    model_id=f"{cfg.id}-{metric_name}-{seed}",
+                    model_id=f"{grid_search_id}-{metric_name}-{seed}",
                     init_tasks=[load_model],
                 )
 
@@ -399,44 +398,44 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             # the linking works only if the task was generated and scheduled by experimaestro, so that the learner.logpath is set.
             helper.tensorboard_service.add(learner, learner.logpath)
 
-        # Wait for all the experiments in the loop to finish before processing the dataframes
-        helper.xp.wait()
+    all_configs, tagspaths = generate_grid(cfg)
 
-        df = tests.to_dataframe()
-        metric_cols = [("metric", "AP"), ("metric", "RR@10"), ("metric", "nDCG@10")]
-        df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
-        df_grouped = (
-            df.groupby(
-                ["dataset", ("tag", "first_stage"), ("tag", "scorer")],
-                dropna=False,
-            )[metric_cols]
-            .agg(["mean", "var"])
-            .reset_index()
-        )
-        logging.info(df_grouped)
-
-        # save results
-        if not helper.xp.resultspath.exists():
-            helper.xp.resultspath.mkdir(parents=True, exist_ok=True)
-
-        output_file = helper.xp.resultspath / "results.csv"
-        df_grouped.to_csv(output_file, index=False)
-        logging.info(f"Results saved to {output_file}")
-
-        # Generate and save LaTeX table
-        latex_table = dataframe_to_latex(
-            df_grouped,
-            caption="Evaluation Results",
-            label="tab:eval_results",
-            sig_df=None,
-        )
-        latex_output_file = helper.xp.resultspath / "results.tex"
-        with open(latex_output_file, "w") as f:
-            f.write(latex_table)
-        logging.info(f"LaTeX table saved to {latex_output_file}")
+    for config, tagspath in zip(all_configs, tagspaths):
+        run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
 
 
-    all_configs = generate_grid(cfg)
-    for config in all_configs:
-        run_one_config(helper=helper, cfg=config)
+    # Wait for all the experiments in the loop to finish before processing the dataframes
+    helper.xp.wait()
 
+    df = tests.to_dataframe()
+    metric_cols = [("metric", "AP"), ("metric", "RR@10"), ("metric", "nDCG@10")]
+    df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
+    df_grouped = (
+        df.groupby(
+            ["dataset", ("tag", "first_stage"), ("tag", "scorer")],
+            dropna=False,
+        )[metric_cols]
+        .agg(["mean", "var"])
+        .reset_index()
+    )
+    logging.info(df_grouped)
+
+    # save results
+    if not helper.xp.resultspath.exists():
+        helper.xp.resultspath.mkdir(parents=True, exist_ok=True)
+
+    output_file = helper.xp.resultspath / "results.csv"
+    df_grouped.to_csv(output_file, index=False)
+    logging.info(f"Results saved to {output_file}")
+
+    # Generate and save LaTeX table
+    latex_table = dataframe_to_latex(
+        df_grouped,
+        caption="Evaluation Results",
+        label="tab:eval_results",
+        sig_df=None,
+    )
+    latex_output_file = helper.xp.resultspath / "results.tex"
+    with open(latex_output_file, "w") as f:
+        f.write(latex_table)
+    logging.info(f"LaTeX table saved to {latex_output_file}")
