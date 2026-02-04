@@ -13,7 +13,8 @@ nb_repetitions: 3
 retriever: "" #BM25 by default
 
 #model definition
-base: microsoft/MiniLM-L12-H384-uncased
+base: 
+    value: microsoft/MiniLM-L12-H384-uncased
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -42,7 +43,7 @@ learner:
     validation_top_k: 100
     validation: msmarco
     loss: bce
-    requirements: duration=2 days & cpu(cores=5) & cuda(mem=30G)
+    requirements: duration=2 days & cpu(cores=16) & cuda(mem=30G)
 
 
 retrieval:
