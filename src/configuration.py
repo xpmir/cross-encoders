@@ -31,15 +31,24 @@ logger = logging.getLogger(__name__)
 
 class Losses(str, Enum):
     """Possible losses"""
+    
+    BCE = "bce"
+    """ Binary Cross Entropy loss """
+
+    hingeLoss = "hingeLoss"
+    """Hinge loss"""
+
+    infoNCE = "infoNCE"
+    """InfoNCE loss"""
 
     marginMSE = "marginMSE"
     """Margin Mean Squared Error loss from hofstatter et al. 2020"""
 
-    BCE = "bce"
-    """ Binary Cross Entropy loss """
-
     distillRankNET = "distillRankNET"
-    """ Distillation version of RankNET loss from Schlatt et al. 2025"""
+    """Distillation version of RankNET loss from Schlatt et al. 2025"""
+
+    ADR_MSE = "ADR_MSE"
+    """Listwise distillation loss proposed by Schlatt et al. 2025"""
 
 
 class PoolingMethod(str, Enum):
