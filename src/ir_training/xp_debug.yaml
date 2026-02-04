@@ -26,7 +26,7 @@ validation:
 learner:
     optimization:
         steps_per_epoch: 10
-        batch_size: 32
+        batch_size: 1
         max_epochs: 10 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
@@ -37,7 +37,8 @@ learner:
     checkpoint_interval: 50
     validation_interval: 7
     validation_top_k: 100
-    validation: nanobeir
+    loss: distillRankNET
+    validation: msmarco
     requirements: duration=2 days & cpu(cores=5) & cuda(mem=40G)
 
 retrieval:

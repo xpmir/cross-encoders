@@ -18,7 +18,7 @@ from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 
 from xpm_torch.trainers.pairwise import PairwiseTrainer
-from xpmir.letor.distillation.listwise import DistillationListwiseTrainer
+from xpmir.letor.distillation.listwise import DistillRankNetLoss, DistillationListwiseTrainer
 from xpmir.papers.helpers.samplers import (
     msmarco_rankdistillm_colbert_top100,
     msmarco_v1_validation_dataset,
@@ -103,7 +103,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
             sampler=msmarco_rankdistillm_colbert_top100(),
-            lossfn=MSEDifferenceLoss.C(),
+            lossfn=DistillRankNetLoss.C(),
         )
     else:
         raise NotImplementedError(
