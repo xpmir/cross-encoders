@@ -297,7 +297,7 @@ def get_nested_attr_type(obj: Any, path: str) -> Type:
         return Any
 
 
-def generate_grid(cfg: Any) -> List[Any]:
+def generate_grid(cfg: Any) -> Tuple[List, List[str]]:
     """
     Generates a list of configuration permutations for a grid search, based
     on a `grid_search` dictionary in the main configuration object.
@@ -310,10 +310,14 @@ def generate_grid(cfg: Any) -> List[Any]:
         "learner.optimization.lr": [1e-5, 2e-5],
         "pooling_method": {"value": "cls"}
     }
+    returns:
+     configs: List[Configs] the list of all configs 
+     tagspaths: a unique id per config using fixed params   
     """
     # If grid_search is not present or empty, just return the original config.
     if not hasattr(cfg, "grid_search") or not cfg.grid_search:
-        return [cfg]
+        logger.info("no params to grid search, returning raw config")
+        return [cfg], [cfg.id]
 
     grid_params = cfg.grid_search
 
