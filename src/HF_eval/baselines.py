@@ -212,6 +212,7 @@ def run(
         caption="Evaluation Results",
         label="tab:eval_results",
         sig_df=None,
+        metric_col="nDCG@10" if not cfg.retrievers_only else "R@1000",
     )
     latex_output_file = helper.xp.resultspath / "results.tex"
     with open(latex_output_file, "w") as f:

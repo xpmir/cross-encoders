@@ -22,6 +22,12 @@ DATASET_TO_ABB = {
     "quora": "Q",
     "scidocs": "SD",
     "trec_covid": "T-C",
+    "robust04": "R04",
+    "lotte_lifestyle": "Life.",
+    "lotte_recreation": "Rec.",
+    "lotte_science": "Sci.",
+    "lotte_technology": "Tech.",
+    "lotte_writing": "Writ.",
 }
 
 
@@ -51,6 +57,7 @@ def dataframe_to_latex(
     caption: str = "Results",
     label: str = "tab:results",
     sig_df: pd.DataFrame = None,
+    metric_col: str = "nDCG@10",
 ) -> str:
     """
     Convert a grouped dataframe with multi-level columns to a LaTeX table.
@@ -111,14 +118,14 @@ def dataframe_to_latex(
             if (
                 len(col) >= 3
                 and col[0] == "metric"
-                and col[1] == "nDCG@10"
+                and col[1] == metric_col
                 and col[2] == "mean"
             ):
                 ndcg_mean_col = col
             if (
                 len(col) >= 3
                 and col[0] == "metric"
-                and col[1] == "nDCG@10"
+                and col[1] == metric_col
                 and col[2] == "var"
             ):
                 ndcg_var_col = col
@@ -127,9 +134,9 @@ def dataframe_to_latex(
     if ndcg_mean_col is None or ndcg_var_col is None:
         for col in df.columns:
             s = " ".join(map(str, col)) if isinstance(col, tuple) else str(col)
-            if "nDCG@10" in s and "mean" in s and ndcg_mean_col is None:
+            if metric_col in s and "mean" in s and ndcg_mean_col is None:
                 ndcg_mean_col = col
-            if "nDCG@10" in s and "var" in s and ndcg_var_col is None:
+            if metric_col in s and "var" in s and ndcg_var_col is None:
                 ndcg_var_col = col
 
     # Collect values: rows = models, cols = datasets
@@ -222,7 +229,7 @@ def dataframe_to_latex(
         # We'll record p-values for post-processing (arrows) rather than modify cell here
         if sig_df is not None and cell != "-":
             try:
-                metric_name = "nDCG@10"
+                metric_name = metric_col
                 sd = sig_df[sig_df["dataset"].astype(str) == dataset]
                 sd = sd[sd["measure"].astype(str) == metric_name]
                 scorer_name = table_meta.get(model_label, {}).get("scorer")
@@ -262,11 +269,14 @@ def dataframe_to_latex(
         table_values.setdefault(model_label, {})[dataset] = numeric_mean
 
     # Build LaTeX table
-    # Order datasets: MSMARCO first, then trec2019 and trec2020, then remaining alphabetically
+    # Order datasets: MSMARCO first, then BEIR and finally LoTTE.
     preferred = ["msmarco_dev", "trec2019", "trec2020"]
     ordered = [d for d in preferred if d in datasets]
-    others = sorted([d for d in datasets if d not in preferred])
-    datasets = ordered + others
+    # BEIR-like datasets: all datasets except preferred and those containing 'lotte'
+    beir = sorted([d for d in datasets if d not in preferred and "lotte" not in d])
+    # Lotte datasets go at the end (just before the Avg columns)
+    lotte = sorted([d for d in datasets if "lotte" in d])
+    datasets = ordered + beir + lotte
     model_labels = sorted(table.keys())
 
     # Post-process significance markers: replace bolding with directional arrows
@@ -312,13 +322,18 @@ def dataframe_to_latex(
     latex_lines.append(f"\\label{{{label}}}")
 
     # Add two extra columns for Avg. and Avg. (OOD)
-    col_spec = "r" + "c" * len(datasets) + "cc"
+    col_spec = "r" + "c" * len(datasets) + "cccc"
     latex_lines.append(f"\\begin{{tabular}}{{{col_spec}}}")
     latex_lines.append("\\toprule")
 
     # Use abbreviations for dataset display names when available
     header = ["Model"] + [escape_latex(DATASET_TO_ABB.get(d, d)) for d in datasets]
-    header.extend(["Avg. (ID)", "Avg. (OOD)"])
+    header.extend([
+        "Avg. (ID)",
+        "Avg. (BEIR OOD)",
+        "Avg. (LoTTE OOD)",
+        "Avg. (OOD)",
+    ])
     latex_lines.append(" & ".join(header) + " \\\\")
     latex_lines.append("\\midrule")
 
@@ -341,16 +356,40 @@ def dataframe_to_latex(
         else:
             row_parts.append("-")
 
-        # OOD average: exclude preferred datasets
-        ood_ds = [d for d in datasets if d not in preferred]
-        ood_vals = [
+        # BEIR-only OOD (already computed in `beir` list above)
+        beir_vals = [
             table_values.get(model, {}).get(d)
-            for d in ood_ds
+            for d in beir
             if table_values.get(model, {}).get(d) is not None
         ]
-        if ood_vals:
-            ood_avg = sum(ood_vals) / len(ood_vals)
-            row_parts.append(f"{100*ood_avg:.1f}")
+        if beir_vals:
+            beir_avg = sum(beir_vals) / len(beir_vals)
+            row_parts.append(f"{100*beir_avg:.1f}")
+        else:
+            row_parts.append("-")
+
+        # LoTTE-only OOD
+        lotte_vals = [
+            table_values.get(model, {}).get(d)
+            for d in lotte
+            if table_values.get(model, {}).get(d) is not None
+        ]
+        if lotte_vals:
+            lotte_avg = sum(lotte_vals) / len(lotte_vals)
+            row_parts.append(f"{100*lotte_avg:.1f}")
+        else:
+            row_parts.append("-")
+
+        # All OOD average: BEIR + LoTTE (exclude preferred)
+        all_ood_ds = [d for d in datasets if d not in preferred]
+        all_ood_vals = [
+            table_values.get(model, {}).get(d)
+            for d in all_ood_ds
+            if table_values.get(model, {}).get(d) is not None
+        ]
+        if all_ood_vals:
+            all_ood_avg = sum(all_ood_vals) / len(all_ood_vals)
+            row_parts.append(f"{100*all_ood_avg:.1f}")
         else:
             row_parts.append("-")
 
@@ -369,7 +408,7 @@ def _read_results_csv(path: Path) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    repo_root = Path("/home/vast/target_dir/franken_minilm/experiments/ettin_32M_masking_step2/dry-run/results") # Path(__file__).resolve().parents[1]
+    repo_root = Path("/home/vast/sota-cross-encoders/") # Path(__file__).resolve().parents[1]
     csv_path = repo_root / "results.csv"
     if not csv_path.exists():
         print(f"Could not find results.csv at {csv_path}", file=sys.stderr)
@@ -386,6 +425,6 @@ if __name__ == "__main__":
             sig_df = None
 
     latex = dataframe_to_latex(
-        df, caption="NDCG@10 results", label="tab:ndcg10", sig_df=sig_df
+        df, caption="NDCG@10 results", label="tab:ndcg10", sig_df=sig_df, metric_col="R@1000"
     )
     print(latex)
