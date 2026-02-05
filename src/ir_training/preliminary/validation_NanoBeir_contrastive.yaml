@@ -1,7 +1,8 @@
-id: hyperparams_search_contrastive
-title: "Hyperparameter Search with contrastive loss"
+id: validation_contrastive
+title: "Validation comparison experiment"
 description: 
-    Try several training hyperparameters for two sizes of backbones
+    Using the best parameters from the grid search, 
+    we run additional trainings validating on nanobeir to see the impact on OOD.
 
 module: ir_training.experiment
 
@@ -49,14 +50,11 @@ evaluation:
     all_datasets: false
     in_domain_only: true
 
-
 #### Params that are grid searched 
 grid_search:
     base: 
         values_list: 
             - microsoft/MiniLM-L12-H384-uncased
             - bert-base-uncased
-    learner.optimization.batch_size:
-        values_list: [32, 64]
-    learner.optimization.lr:
-        values_list: [1e-5, 7e-5, 3e-6, 7e-6]
+    learner.validation:
+        values_list: [msmarco, nanobeir]
