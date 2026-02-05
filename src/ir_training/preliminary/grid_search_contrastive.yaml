@@ -8,7 +8,7 @@ module: ir_training.experiment
 seed: 12 # To mimick the HF xp 
 nb_repetitions: 3
 
-retriever: "naver/splade-v3" 
+retriever: "naver/splade-v3-distilbert" 
 
 #model definition -> in grid search
 base: "null"
