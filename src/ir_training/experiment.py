@@ -22,7 +22,7 @@ from xpm_torch.trainers.pairwise import PairwiseTrainer
 from xpmir.letor.distillation.listwise import ADR_MSE, DistillRankNetLoss, DistillationListwiseTrainer
 from xpmir.letor.samplers import ModelBasedHardNegativeSampler, PairwiseInBatchNegativesSampler
 from xpmir.papers.helpers.samplers import (
-    msmarco_rankdistillm_colbert_top100,
+    msmarco_rankdistillm_colbert_top50,
     msmarco_colbertv2_annotated,
     msmarco_v1_validation_dataset,
     prepare_collection,
@@ -111,15 +111,14 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
     
     ### Listwise losses ###
     elif loss_member is Losses.infoNCE:
-        raise NotImplementedError("InfoNCE loss is not implemented yet.")
-        # launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
-        # return BatchwiseTrainer.C(
-        #     sampler=msmarco_colbertv2_annotated(),
-        #     lossfn=SoftmaxCrossEntropy.C(),
-        #     batcher=PowerAdaptativeBatcher.C(),
-        #     batch_size=cfg.learner.optimization.batch_size,
-        #     hooks=[],
-        # )
+        launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+        return BatchwiseTrainer.C(
+            sampler=msmarco_colbertv2_annotated(),
+            lossfn=SoftmaxCrossEntropy.C(),
+            batcher=PowerAdaptativeBatcher.C(),
+            batch_size=cfg.learner.optimization.batch_size,
+            hooks=[],
+        )
 
     # TODO: for distillation, also implements a mechanism to pick the target dataset 
     # (hofstatter vs RankGPT, version of RankGPT) with some constraints, like not 
@@ -139,7 +138,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         return DistillationListwiseTrainer.C(
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
-            sampler=msmarco_rankdistillm_colbert_top100(),
+            sampler=msmarco_rankdistillm_colbert_top50(),
             lossfn=DistillRankNetLoss.C(),
         )
     
@@ -147,7 +146,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         return DistillationListwiseTrainer.C(
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
-            sampler=msmarco_rankdistillm_colbert_top100(),
+            sampler=msmarco_rankdistillm_colbert_top50(),
             lossfn=ADR_MSE.C(),
         )
     else:
