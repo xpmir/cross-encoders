@@ -58,7 +58,7 @@ from xpmir.neural.splade import SpladeTextEncoderV2, MaxAggregation
 from configuration import Losses, CE_FineTuning, Validation, generate_grid
 from tests import build_tests
 from format import dataframe_to_latex
-from validations import nanobeir_validation_datasets
+from validations import nano_msmarco_validation_datasets, nanobeir_validation_datasets
 
 logging.basicConfig(level=logging.INFO)
 
@@ -291,8 +291,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             )
 
         if cfg.learner.validation == Validation.MSMARCO.value:
-            # Full MSMARCO validation dataset
-            ds_val = msmarco_v1_validation_dataset(
+            ds_val, validation_documents = nano_msmarco_validation_datasets(
                 cfg.validation, launcher=launcher_preprocessing
             )
 
@@ -301,16 +300,28 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 val_retrievers = val_retrievers_factory
             else:   
                 val_retrievers = partial(
-                    val_retrievers_factory, store=train_documents, k=cfg.learner.validation_top_k
+                    val_retrievers_factory, store=validation_documents, k=cfg.learner.validation_top_k
                 )
                 
         # NanoBEIR validation datasets
         elif cfg.learner.validation == Validation.NanoBEIR.value:
             validations, validation_documents = nanobeir_validation_datasets(
-                cfg.validation, launcher=launcher_preprocessing
+                cfg.validation, launcher=launcher_preprocessing, all=False
             )
 
             # Build a simple list of (name, validation_dataset, documents) for later use
+            nb_val_items = [
+                (name, validations[name], validation_documents[name])
+                for name in validations.keys()
+            ]
+
+        elif cfg.learner.validation == Validation.ALL.value:
+            # We want to track all datasets separately, so we keep the dict of validations and documents as is, and will loop over it later to build one validation listener per dataset.
+            validations, validation_documents = nanobeir_validation_datasets(
+                cfg.validation, launcher=launcher_preprocessing, all=True
+            )
+
+             # Build a simple list of (name, validation_dataset, documents) for later use
             nb_val_items = [
                 (name, validations[name], validation_documents[name])
                 for name in validations.keys()
@@ -343,12 +354,12 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             # (retriever + scorer) and keep the best performing model
             # on the validation set
             if cfg.learner.validation == Validation.MSMARCO.value:
-                validation = [
+                msmarco_validation = [
                     ValidationListener.C(
                         id="bestval",
                         dataset=ds_val,
                         retriever=model_based_retrievers(
-                            documents=train_documents,
+                            documents=validation_documents,
                             retrievers=val_retrievers,
                             scorer=scorer_model,
                         ).tag("retriever", retriever_tag),
@@ -356,8 +367,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                         metrics={"RR@10": True, "AP": False, "nDCG": False},
                         ).tag("validation", "msmarco")
                 ]
-            elif cfg.learner.validation == Validation.NanoBEIR.value:
-                validation = []
+            elif cfg.learner.validation == Validation.NanoBEIR.value or cfg.learner.validation == Validation.ALL.value:
+                validations = []
                 for name, ds_val_zs, val_docs in nb_val_items:
                     if cfg.retriever:
                         # We don't use BM25, but a given sparse retriever
@@ -380,16 +391,19 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                         validation_interval=cfg.learner.validation_interval,
                         metrics={"RR@10": True, "AP": False, "nDCG": False},
                     )
-                    validation.append(listener)
+                    validations.append(listener)
+
+                    if name == "msmarco":
+                        msmarco_validation = listener
 
                 # Aggregator includes the main (if present) plus all per-dataset listeners
                 aggregator_validation = AggregatorValidationListener.C(
-                    listeners=validation,
+                    listeners=validations,
                     id="aggregated_validation",
                     validation_interval=cfg.learner.validation_interval,
                     metrics={"RR@10": True, "AP": False, "nDCG": False},
                 ).tag("validation", "nanobeir")
-                validation.append(aggregator_validation)
+                validations.append(aggregator_validation)
             else:
                 raise NotImplementedError(
                     f"Validation dataset {cfg.learner.validation} is not implemented yet."
@@ -420,7 +434,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 max_epochs=cfg.learner.optimization.max_epochs,
                 checkpoint_interval=cfg.learner.checkpoint_interval,
                 # The listeners (here, for validation)
-                listeners=validation,
+                listeners=msmarco_validation if cfg.learner.validation == Validation.MSMARCO.value else validations,
                 # The hook used for evaluation
                 hooks=hooks,
                 # fabric settings
@@ -433,20 +447,22 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             outputs = learner.submit(launcher=launcher_learner)
 
             # If we track MSMARCO, use default validation, else (for NanoBEIR) use the aggregator 
-            tracked_validation = validation[0] if cfg.learner.validation == Validation.MSMARCO.value else validation[-1]
+            tracked_validations = {"nano-beir": validations[-1]} if cfg.learner.validation != Validation.MSMARCO.value else {}
+            if cfg.learner.validation == Validation.ALL.value or cfg.learner.validation == Validation.MSMARCO.value:
+                tracked_validations["msmarco"] = msmarco_validation
 
             # Evaluate the neural model on test collections
-            for metric_name in tracked_validation.monitored():
-                load_model = outputs.listeners[tracked_validation.id][metric_name]
-                # load_model = outputs.checkpoints[200]
-                tests.evaluate_retriever(
-                    partial(
+            for name, tracked_validation in tracked_validations.items():
+                for metric_name in tracked_validation.monitored():
+                    load_model = outputs.listeners[tracked_validation.id][metric_name]
+                    tests.evaluate_retriever(
+                        partial(
                         model_based_retrievers,
                         scorer=scorer_model,
                         retrievers=test_retrievers,
                     ),
                     launcher_evaluate,
-                    model_id=f"{grid_search_id}-{metric_name}-{seed}",
+                    model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
                     init_tasks=[load_model],
                 )
 

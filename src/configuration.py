@@ -68,10 +68,14 @@ class Validation(str, Enum):
     """Possible validation subsets"""
 
     MSMARCO = "msmarco"
-    """MSMARCO dev set"""
+    """Nano MSMARCO validation subset"""
 
     NanoBEIR = "nanobeir"
     """A small subset of BEIR datasets designed specifically for validation"""
+
+    ALL = "all"
+    """ Both Nano MSMARCO and NanoBEIR validations"""
+
 
 
 T = TypeVar("T", int, str, float)
