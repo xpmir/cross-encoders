@@ -19,10 +19,9 @@ from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 
 from xpm_torch.trainers.pairwise import PairwiseTrainer
-from xpmir.letor.distillation.listwise import ADR_MSE, DistillRankNetLoss, DistillationListwiseTrainer
-from xpmir.letor.samplers import ModelBasedHardNegativeSampler, PairwiseInBatchNegativesSampler
+from xpmir.letor.distillation.listwise import ADR_MSE, DistillRankNetLoss, DistillationListwiseTrainer, ListwiseSoftmaxCrossEntropy
 from xpmir.papers.helpers.samplers import (
-    # msmarco_rankdistillm_colbert_top50, # TODO add back when fixed
+    msmarco_rankdistillm_colbert_top50, 
     msmarco_colbertv2_annotated,
     msmarco_v1_validation_dataset,
     prepare_collection,
@@ -41,8 +40,6 @@ from xpmir.letor.distillation.pairwise import (
 from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
 from xpmir.text.huggingface.base import HFMaskedLanguageModel
 from xpmir.text.huggingface.tokenizers import HFTokenizer, HFTokenizerAdapter
-from xpm_torch.trainers.batchwise import BatchwiseTrainer
-from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
 
 #TODO add support for those
 from xpmir.index.sparse import (
@@ -112,12 +109,13 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
     ### Listwise losses ###
     elif loss_member is Losses.infoNCE:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
-        return BatchwiseTrainer.C(
+        # Use the listwise distillation trainer for listwise-style losses.
+        # Swap to a DistillationListwiseTrainer and a listwise distillation loss.
+        return DistillationListwiseTrainer.C(
             sampler=msmarco_colbertv2_annotated(),
-            lossfn=SoftmaxCrossEntropy.C(),
+            lossfn=ListwiseSoftmaxCrossEntropy.C(),
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
-            hooks=[],
         )
 
     # TODO: for distillation, also implements a mechanism to pick the target dataset 
