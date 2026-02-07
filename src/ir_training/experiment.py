@@ -468,9 +468,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         group_by_cols = [("tag", "first_stage"), ("tag", "scorer")]
         mean_cols_to_agg = [(col, 'mean') for col in metric_cols]
 
-        mean_metrics = df_grouped.groupby(group_by_cols)[mean_cols_to_agg].mean()
-        var_metrics = df_grouped.groupby(group_by_cols)[mean_cols_to_agg].var()
-        
+        subset_df = df_grouped[group_by_cols + mean_cols_to_agg]
+        mean_metrics = subset_df.groupby(group_by_cols).mean()
+        var_metrics = subset_df.groupby(group_by_cols).var()
+
         # Rename var_metrics columns from '..._mean' to '..._var'
         var_metrics.columns = [(col, 'var') for col in metric_cols]
         
