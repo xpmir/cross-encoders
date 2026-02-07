@@ -123,18 +123,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             batch_size=cfg.learner.optimization.batch_size,
             hooks=[]
         )
-
-    ### Pairwise distillation losses ###
-    elif loss_member is Losses.marginMSE:
-        # define the trainer for monomlm
-        return DistillationPairwiseTrainer.C(
-            batcher=PowerAdaptativeBatcher.C(),
-            batch_size=cfg.learner.optimization.batch_size,
-            sampler=msmarco_hofstaetter_ensemble_hard_negatives(),
-            lossfn=MSEDifferenceLoss.C(),
-        )
     
-    ### Listwise losses ###
     elif loss_member is Losses.infoNCE_RankDistiLLM:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
         # Use the listwise distillation trainer for listwise-style losses.
@@ -144,6 +133,16 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             lossfn=ListwiseSoftmaxCrossEntropy.C(),
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
+        )
+
+    ### Pairwise distillation losses ###
+    elif loss_member is Losses.marginMSE:
+        # define the trainer for monomlm
+        return DistillationPairwiseTrainer.C(
+            batcher=PowerAdaptativeBatcher.C(),
+            batch_size=cfg.learner.optimization.batch_size,
+            sampler=msmarco_hofstaetter_ensemble_hard_negatives(),
+            lossfn=MSEDifferenceLoss.C(),
         )
     
     ### Listwise distillation losses ### 

@@ -39,13 +39,13 @@ class Losses(str, Enum):
     """Hinge loss"""
 
     infoNCE = "infoNCE"
-    """InfoNCE loss"""
-
-    marginMSE = "marginMSE"
-    """Margin Mean Squared Error loss from hofstatter et al. 2020"""
+    """InfoNCE loss, with in-batch negatives"""
 
     infoNCE_RankDistiLLM = "infoNCE_RankDistiLLM"
     """InfoNCE using the negatives sampled by Schlatt et al. 2025 with ColBERTv2"""
+
+    marginMSE = "marginMSE"
+    """Margin Mean Squared Error loss from hofstatter et al. 2020"""
 
     distillRankNET = "distillRankNET"
     """Distillation version of RankNET loss from Schlatt et al. 2025"""
