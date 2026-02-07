@@ -22,7 +22,7 @@ from xpm_torch.trainers.pairwise import PairwiseTrainer
 from xpmir.letor.distillation.listwise import ADR_MSE, DistillRankNetLoss, DistillationListwiseTrainer
 from xpmir.letor.samplers import ModelBasedHardNegativeSampler, PairwiseInBatchNegativesSampler
 from xpmir.papers.helpers.samplers import (
-    msmarco_rankdistillm_colbert_top50,
+    # msmarco_rankdistillm_colbert_top50, # TODO add back when fixed
     msmarco_colbertv2_annotated,
     msmarco_v1_validation_dataset,
     prepare_collection,
