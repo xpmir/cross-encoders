@@ -44,6 +44,9 @@ class Losses(str, Enum):
     marginMSE = "marginMSE"
     """Margin Mean Squared Error loss from hofstatter et al. 2020"""
 
+    infoNCE_RankDistiLLM = "infoNCE_RankDistiLLM"
+    """InfoNCE using the negatives sampled by Schlatt et al. 2025 with ColBERTv2"""
+
     distillRankNET = "distillRankNET"
     """Distillation version of RankNET loss from Schlatt et al. 2025"""
 

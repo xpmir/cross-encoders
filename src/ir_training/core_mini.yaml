@@ -63,5 +63,6 @@ grid_search:
             - infoNCE
             - hingeLoss
             - marginMSE
+            - infoNCE_RankDistiLLM
             - distillRankNET
             - ADR_MSE

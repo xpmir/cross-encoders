@@ -10,6 +10,7 @@ from transformers import AutoConfig
 from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
 
+from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
 from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 from xpm_torch import Random
@@ -18,8 +19,10 @@ from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_exp
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 
+from xpm_torch.trainers.batchwise import BatchwiseTrainer
 from xpm_torch.trainers.pairwise import PairwiseTrainer
 from xpmir.letor.distillation.listwise import ADR_MSE, DistillRankNetLoss, DistillationListwiseTrainer, ListwiseSoftmaxCrossEntropy
+from xpmir.letor.samplers import PairwiseInBatchNegativesSampler
 from xpmir.papers.helpers.samplers import (
     msmarco_rankdistillm_colbert_top50, 
     msmarco_colbertv2_annotated,
@@ -111,16 +114,15 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
         # Use the listwise distillation trainer for listwise-style losses.
         # Swap to a DistillationListwiseTrainer and a listwise distillation loss.
-        return DistillationListwiseTrainer.C(
-            sampler=msmarco_colbertv2_annotated(),
-            lossfn=ListwiseSoftmaxCrossEntropy.C(),
+        return BatchwiseTrainer.C(
+            sampler=PairwiseInBatchNegativesSampler.C(
+                sampler=msmarco_v1_docpairs_efficient_sampler(),
+            ),
+            lossfn=SoftmaxCrossEntropy.C(),
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
+            hooks=[]
         )
-
-    # TODO: for distillation, also implements a mechanism to pick the target dataset 
-    # (hofstatter vs RankGPT, version of RankGPT) with some constraints, like not 
-    # possible to run MarginMSE on RankGPT
 
     ### Pairwise distillation losses ###
     elif loss_member is Losses.marginMSE:
@@ -131,6 +133,19 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             sampler=msmarco_hofstaetter_ensemble_hard_negatives(),
             lossfn=MSEDifferenceLoss.C(),
         )
+    
+    ### Listwise losses ###
+    elif loss_member is Losses.infoNCE_RankDistiLLM:
+        launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+        # Use the listwise distillation trainer for listwise-style losses.
+        # Swap to a DistillationListwiseTrainer and a listwise distillation loss.
+        return DistillationListwiseTrainer.C(
+            sampler=msmarco_colbertv2_annotated(passages_per_query=8),
+            lossfn=ListwiseSoftmaxCrossEntropy.C(),
+            batcher=PowerAdaptativeBatcher.C(),
+            batch_size=cfg.learner.optimization.batch_size,
+        )
+    
     ### Listwise distillation losses ### 
     elif loss_member is Losses.distillRankNET:
         return DistillationListwiseTrainer.C(
