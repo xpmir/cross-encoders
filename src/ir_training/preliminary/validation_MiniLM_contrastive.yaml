@@ -1,5 +1,5 @@
-id: validation__minilm_contrastive
-title: "Validation comparison experiment"
+id: validation_minilm_contrastive
+title: "Validation comparison experiment for MiniLM"
 description: 
     Using the best parameters from the grid search for MiniLM
     we run additional trainings validating on nanobeir to see the impact on OOD.

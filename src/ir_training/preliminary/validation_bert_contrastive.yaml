@@ -1,4 +1,4 @@
-id: validation__minilm_contrastive
+id: validation_bert_contrastive
 title: "Validation comparison experiment"
 description: 
     Using the best parameters from the grid search for MiniLM
