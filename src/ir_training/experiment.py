@@ -452,33 +452,39 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     helper.xp.wait()
 
     df = tests.to_dataframe()
+    
+    if df.empty:
+        logging.info("No results found, Ending experiment")
+        return
+        
     metric_cols = [("metric", "AP"), ("metric", "RR@10"), ("metric", "nDCG@10")]
+    group_by_tags = [("tag", "first_stage"), ("tag", "scorer")]
+
+    # 1. Convert to numeric
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
+
+    # 2. Initial Grouping
     df_grouped = (
-        df.groupby(
-            ["dataset", ("tag", "first_stage"), ("tag", "scorer")],
-            dropna=False,
-        )[metric_cols]
+        df.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
         .agg(["mean", "var"])
         .reset_index()
     )
 
-    # Add a 'mean' dataset that aggregates results for each model
-    if len(df_grouped["dataset"].unique()) > 1:
-        group_by_cols = [("tag", "first_stage"), ("tag", "scorer")]
-        mean_cols_to_agg = [(col, 'mean') for col in metric_cols]
-
-        subset_df = df_grouped[group_by_cols + mean_cols_to_agg]
-        mean_metrics = subset_df.groupby(group_by_cols).mean()
-        var_metrics = subset_df.groupby(group_by_cols).var()
-
-        # Rename var_metrics columns from '..._mean' to '..._var'
-        var_metrics.columns = [(col, 'var') for col in metric_cols]
+    # 3. Add the 'mean' summary row
+    if df_grouped["dataset"].nunique() > 1:
+        # We aggregate the already aggregated means/vars
+        # Note: Mean of means is mathematically sound; 
+        # Mean of vars is a common proxy for average instability.
+        mean_df = (
+            df_grouped.groupby(group_by_tags, dropna=False)
+            .mean(numeric_only=True)
+            .reset_index()
+        )
         
-        mean_df = pd.concat([mean_metrics, var_metrics], axis=1).reset_index()
-        mean_df['dataset'] = 'mean'
+        # Manually set the dataset label
+        mean_df["dataset"] = "mean"
         
-        # Reorder columns to match df_grouped and concat
+        # Ensure column order matches exactly before concat
         mean_df = mean_df[df_grouped.columns]
         df_grouped = pd.concat([df_grouped, mean_df], ignore_index=True)
 
