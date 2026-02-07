@@ -192,6 +192,7 @@ class xpm_torch_Learner:
     validation: str = Validation.MSMARCO.value
     """ The validation subset to use """
 
+    #TODO use FabricConfiguration
     ## Lighnting Fabric parameters see https://lightning.ai/docs/fabric/stable/api/generated/lightning.fabric.fabric.Fabric.html#lightning.fabric.fabric.Fabric
     strategy: str = "auto"
     """Distributed training strategy"""

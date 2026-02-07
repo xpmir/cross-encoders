@@ -36,7 +36,7 @@ def nanobeir_validation_datasets(
             sizes=[cfg.size],
         ).submit(launcher=launcher)
         documents[dataset_name] = dataset.documents
-        _ = next(dataset.instance().documents.iter_documents()) # Force load documents
-        _ = next(dataset.instance().topics.iter()) # Force load queries
+        _ = next(dataset.documents.iter_documents()) # Force load documents
+        _ = next(dataset.topics.iter()) # Force load queries
 
     return random_folds, documents
