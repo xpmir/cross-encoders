@@ -38,7 +38,7 @@ learner:
     validation_interval: 25
     validation_top_k: 100
     validation: nanobeir ### PUT HERE BEST VALIDATION FROM PREVIOUS STEPS ###
-    requirements: duration=2 days & cpu(cores=16) & cuda(mem=40G)
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=40G)
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)

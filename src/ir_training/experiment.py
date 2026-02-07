@@ -22,7 +22,7 @@ from xpm_torch.trainers.pairwise import PairwiseTrainer
 from xpmir.letor.distillation.listwise import ADR_MSE, DistillRankNetLoss, DistillationListwiseTrainer
 from xpmir.letor.samplers import ModelBasedHardNegativeSampler, PairwiseInBatchNegativesSampler
 from xpmir.papers.helpers.samplers import (
-    msmarco_rankdistillm_colbert_top50,
+    # msmarco_rankdistillm_colbert_top50, # TODO add back when fixed
     msmarco_colbertv2_annotated,
     msmarco_v1_validation_dataset,
     prepare_collection,
@@ -452,16 +452,42 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     helper.xp.wait()
 
     df = tests.to_dataframe()
+    
+    if df.empty:
+        logging.info("No results found, Ending experiment")
+        return
+        
     metric_cols = [("metric", "AP"), ("metric", "RR@10"), ("metric", "nDCG@10")]
+    group_by_tags = [("tag", "first_stage"), ("tag", "scorer")]
+
+    # 1. Convert to numeric
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
+
+    # 2. Initial Grouping
     df_grouped = (
-        df.groupby(
-            ["dataset", ("tag", "first_stage"), ("tag", "scorer")],
-            dropna=False,
-        )[metric_cols]
+        df.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
         .agg(["mean", "var"])
         .reset_index()
     )
+
+    # 3. Add the 'mean' summary row
+    if df_grouped["dataset"].nunique() > 1:
+        # We aggregate the already aggregated means/vars
+        # Note: Mean of means is mathematically sound; 
+        # Mean of vars is a common proxy for average instability.
+        mean_df = (
+            df_grouped.groupby(group_by_tags, dropna=False)
+            .mean(numeric_only=True)
+            .reset_index()
+        )
+        
+        # Manually set the dataset label
+        mean_df["dataset"] = "mean"
+        
+        # Ensure column order matches exactly before concat
+        mean_df = mean_df[df_grouped.columns]
+        df_grouped = pd.concat([df_grouped, mean_df], ignore_index=True)
+
     logging.info(df_grouped)
 
     # save results
