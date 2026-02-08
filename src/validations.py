@@ -37,7 +37,7 @@ def nano_msmarco_validation_datasets(
 
 @lru_cache
 def nanobeir_validation_datasets(
-    cfg: ValidationSample, all: bool, launcher=None
+    cfg: ValidationSample, launcher=None
 ):
     """Return validations over all the NANO_BEIR datasets."""
 
@@ -46,8 +46,6 @@ def nanobeir_validation_datasets(
 
     for dataset_name in NANO_BEIR:
         # Prepare dataset components
-        if dataset_name == "msmarco" and not all:
-            continue 
         dataset = prepare_collection(f'irds.nano-beir.{dataset_name}')
         print(f"Loaded: {dataset_name}")
 

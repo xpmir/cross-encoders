@@ -290,6 +290,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 launcher=launcher_evaluate,
             )
 
+
+        # Validation
         if cfg.learner.validation == Validation.MSMARCO.value:
             ds_val, validation_documents = nano_msmarco_validation_datasets(
                 cfg.validation, launcher=launcher_preprocessing
@@ -304,24 +306,12 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 )
                 
         # NanoBEIR validation datasets
-        elif cfg.learner.validation == Validation.NanoBEIR.value:
+        elif cfg.learner.validation in [Validation.NanoBEIR.value, Validation.ALL.value]:
             validations, validation_documents = nanobeir_validation_datasets(
-                cfg.validation, launcher=launcher_preprocessing, all=False
+                cfg.validation, launcher=launcher_preprocessing
             )
 
             # Build a simple list of (name, validation_dataset, documents) for later use
-            nb_val_items = [
-                (name, validations[name], validation_documents[name])
-                for name in validations.keys()
-            ]
-
-        elif cfg.learner.validation == Validation.ALL.value:
-            # We want to track all datasets separately, so we keep the dict of validations and documents as is, and will loop over it later to build one validation listener per dataset.
-            validations, validation_documents = nanobeir_validation_datasets(
-                cfg.validation, launcher=launcher_preprocessing, all=True
-            )
-
-             # Build a simple list of (name, validation_dataset, documents) for later use
             nb_val_items = [
                 (name, validations[name], validation_documents[name])
                 for name in validations.keys()
@@ -333,6 +323,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             )
 
         ### TRAINING CROSS ENCODER
+
         for i in range(cfg.nb_repetitions):
             seed = np.random.RandomState(cfg.seed + i).randint((2**32) - 1)
             random = Random.C(seed=seed).tag("seed", seed)
@@ -410,10 +401,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                     f"Validation dataset {cfg.learner.validation} is not implemented yet."
                 )
 
-            hooks = [
-                # setmeta(DistributedHook.C(models=[scorer_model]), True),
-                setmeta(GradientLogHook.C(), True),
-            ]
+            hooks = [setmeta(GradientLogHook.C(), True)]
 
             if cfg.learner.max_grad_norm > 0:
                 gradient_clipping_hook = GradientClippingHook.C(
@@ -446,16 +434,19 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
             # Submit job and link
             outputs = learner.submit(launcher=launcher_learner)
+            # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
+            helper.tensorboard_service.add(learner, learner.logpath)
 
             # If we track MSMARCO, use default validation, else (for NanoBEIR) use the aggregator 
             tracked_validations = {}
-            if cfg.learner.validation != Validation.MSMARCO.value:
+            if cfg.learner.validation in [Validation.NanoBEIR.value, Validation.ALL.value]:
                 #add nano_beir = aggregated of all validation listeners
                 tracked_validations["nano-beir"] = validations[-1]
-            if cfg.learner.validation in [Validation.ALL.value, Validation.MSMARCO.value]:
+            if cfg.learner.validation in [Validation.MSMARCO.value, Validation.ALL.value]:
                 #add msm validation
                 tracked_validations["msmarco"] = msmarco_validation
-            # Evaluate the neural model on test collections
+
+            # Evaluate each model on test collections
             for name, tracked_validation in tracked_validations.items():
                 logging.info(f"evaluating from validation: {name}")
                 for metric_name in tracked_validation.monitored():
@@ -471,10 +462,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                     init_tasks=[load_model],
                 )
 
-            # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
-            # the linking works only if the task was generated and scheduled by experimaestro, so that the learner.logpath is set.
-            helper.tensorboard_service.add(learner, learner.logpath)
-
+            
     all_configs, tagspaths = generate_grid(cfg)
 
     for config, tagspath in zip(all_configs, tagspaths):
