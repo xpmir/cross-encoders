@@ -402,7 +402,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                     id="aggregated_validation",
                     validation_interval=cfg.learner.validation_interval,
                     metrics={"RR@10": True, "AP": False, "nDCG": False},
-                ).tag("validation", "nanobeir")
+                )
+                
                 validations.append(aggregator_validation)
             else:
                 raise NotImplementedError(
@@ -447,14 +448,18 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             outputs = learner.submit(launcher=launcher_learner)
 
             # If we track MSMARCO, use default validation, else (for NanoBEIR) use the aggregator 
-            tracked_validations = {"nano-beir": validations[-1]} if cfg.learner.validation != Validation.MSMARCO.value else {}
-            if cfg.learner.validation == Validation.ALL.value or cfg.learner.validation == Validation.MSMARCO.value:
+            tracked_validations = {}
+            if cfg.learner.validation != Validation.MSMARCO.value:
+                #add nano_beir = aggregated of all validation listeners
+                tracked_validations["nano-beir"] = validations[-1]
+            if cfg.learner.validation in [Validation.ALL.value, Validation.MSMARCO.value]:
+                #add msm validation
                 tracked_validations["msmarco"] = msmarco_validation
-
             # Evaluate the neural model on test collections
             for name, tracked_validation in tracked_validations.items():
+                logging.info(f"evaluating from validation: {name}")
                 for metric_name in tracked_validation.monitored():
-                    load_model = outputs.listeners[tracked_validation.id][metric_name]
+                    load_model = outputs.listeners[tracked_validation.id][metric_name].tag("validation", name)
                     tests.evaluate_retriever(
                         partial(
                         model_based_retrievers,
@@ -486,7 +491,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         return
         
     metric_cols = [("metric", "AP"), ("metric", "RR@10"), ("metric", "nDCG@10")]
-    group_by_tags = [("tag", "first_stage"), ("tag", "scorer")]
+    group_by_tags = [("tag", "first_stage"), ("tag", "scorer"), ("tag", "validation")]
 
     # 1. Convert to numeric
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
