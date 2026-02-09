@@ -11,6 +11,7 @@ from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
+from xpm_torch.utils.hugginface import check_model
 from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 from xpm_torch import Random
@@ -305,7 +306,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 launcher=launcher_evaluate,
             )
 
-        # Validation
+        ### Validation ###
         if cfg.learner.validation == Validation.MSMARCO.value:
             ds_val, validation_documents = nano_msmarco_validation_datasets(
                 cfg.validation, launcher=launcher_preprocessing
@@ -349,6 +350,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
             ce_trainer: LossTrainer = build_trainer(cfg)
 
+            check_model(cfg.base)
             # Build the model
 
             config = AutoConfig.from_pretrained(cfg.base)

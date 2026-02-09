@@ -56,13 +56,17 @@ grid_search:
             - jhu-clsp/ettin-encoder-17m
             # - jhu-clsp/ettin-encoder-32m
             # - jhu-clsp/ettin-encoder-68m
+            - FacebookAI/roberta-base
+            - google/electra-base-discriminator
+            # - microsoft/deberta-v3-base
+            # - jhu-clsp/ettin-encoder-150m
 
     learner.loss:
         values_list:
-            # - bce
-            - infoNCE
-            - hingeLoss
-            - marginMSE
-            - infoNCE_RankDistiLLM
-            - distillRankNET
-            - ADR_MSE
+            - bce
+            # - infoNCE
+            # - hingeLoss
+            # - marginMSE
+            # - infoNCE_RankDistiLLM
+            # - distillRankNET
+            # - ADR_MSE
