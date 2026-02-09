@@ -48,5 +48,5 @@ retrieval:
 
 
 evaluation:
-    all_datasets: false
+    all_datasets: true
     in_domain_only: false
