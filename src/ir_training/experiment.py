@@ -147,17 +147,19 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
     
     ### Listwise distillation losses ### 
     elif loss_member is Losses.distillRankNET:
+        logging.warning("Using loss function DistillRankNET, switching to batch size = 1 (i.e. 100 passages per batch).")
         return DistillationListwiseTrainer.C(
             batcher=PowerAdaptativeBatcher.C(),
-            batch_size=cfg.learner.optimization.batch_size,
+            batch_size=1,
             sampler=msmarco_rankdistillm_colbert_top50(),
             lossfn=DistillRankNetLoss.C(),
         )
     
     elif loss_member is Losses.ADR_MSE:
+        logging.warning("Using loss function ADR_MSE, switching to batch size = 1 (i.e. 100 passages per batch).")
         return DistillationListwiseTrainer.C(
             batcher=PowerAdaptativeBatcher.C(),
-            batch_size=cfg.learner.optimization.batch_size,
+            batch_size=1,
             sampler=msmarco_rankdistillm_colbert_top50(),
             lossfn=ADR_MSE.C(),
         )
