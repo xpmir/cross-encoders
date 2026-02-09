@@ -19,12 +19,8 @@ from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_exp
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 
-from xpm_torch.trainers.batchwise import BatchwiseTrainer
-from xpm_torch.trainers.pairwise import PairwiseTrainer
-from xpmir.letor.distillation.listwise import ADR_MSE, DistillRankNetLoss, DistillationListwiseTrainer, ListwiseSoftmaxCrossEntropy
-from xpmir.letor.samplers import PairwiseInBatchNegativesSampler
 from xpmir.papers.helpers.samplers import (
-    msmarco_rankdistillm_colbert_top50, 
+    msmarco_rankdistillm_colbert_top50,
     msmarco_colbertv2_annotated,
     msmarco_v1_validation_dataset,
     prepare_collection,
@@ -36,6 +32,15 @@ from xpmir.rankers.standard import BM25, Model
 from xpmir.neural.huggingface import HFCrossScorer
 from xpmir.rankers import Documents, Retriever, document_cache, scorer_retriever
 
+from xpm_torch.trainers.batchwise import BatchwiseTrainer
+from xpm_torch.trainers.pairwise import PairwiseTrainer
+from xpmir.letor.samplers import PairwiseInBatchNegativesSampler
+from xpmir.letor.distillation.listwise import (
+    ADR_MSE,
+    DistillRankNetLoss,
+    DistillationListwiseTrainer,
+    ListwiseSoftmaxCrossEntropy,
+)
 from xpmir.letor.distillation.pairwise import (
     DistillationPairwiseTrainer,
     MSEDifferenceLoss,
@@ -44,7 +49,7 @@ from xpmir.letor.validation import AggregatorValidationListener, ValidationListe
 from xpmir.text.huggingface.base import HFMaskedLanguageModel
 from xpmir.text.huggingface.tokenizers import HFTokenizer, HFTokenizerAdapter
 
-#TODO add support for those
+# TODO add support for those
 from xpmir.index.sparse import (
     SparseRetriever,
     SparseRetrieverIndexBuilder,
@@ -94,7 +99,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
         )
-    
+
     ### Pairwise losses ###
     elif loss_member is Losses.hingeLoss:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
@@ -108,7 +113,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
         )
-    
+
     ### Listwise losses ###
     elif loss_member is Losses.infoNCE:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
@@ -121,9 +126,9 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             lossfn=SoftmaxCrossEntropy.C(),
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=cfg.learner.optimization.batch_size,
-            hooks=[]
+            hooks=[],
         )
-    
+
     elif loss_member is Losses.infoNCE_RankDistiLLM:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
         # Use the listwise distillation trainer for listwise-style losses.
@@ -144,19 +149,23 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             sampler=msmarco_hofstaetter_ensemble_hard_negatives(),
             lossfn=MSEDifferenceLoss.C(),
         )
-    
-    ### Listwise distillation losses ### 
+
+    ### Listwise distillation losses ###
     elif loss_member is Losses.distillRankNET:
-        logging.warning("Using loss function DistillRankNET, switching to batch size = 1 (i.e. 100 passages per batch).")
+        logging.warning(
+            "Using loss function DistillRankNET, switching to batch size = 1 (i.e. 100 passages per batch)."
+        )
         return DistillationListwiseTrainer.C(
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=1,
             sampler=msmarco_rankdistillm_colbert_top50(),
             lossfn=DistillRankNetLoss.C(),
         )
-    
+
     elif loss_member is Losses.ADR_MSE:
-        logging.warning("Using loss function ADR_MSE, switching to batch size = 1 (i.e. 100 passages per batch).")
+        logging.warning(
+            "Using loss function ADR_MSE, switching to batch size = 1 (i.e. 100 passages per batch)."
+        )
         return DistillationListwiseTrainer.C(
             batcher=PowerAdaptativeBatcher.C(),
             batch_size=1,
@@ -181,7 +190,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
     tests = build_tests(cfg.evaluation)
 
-    def run_one_config(helper: LearningExperimentHelper, cfg: CE_FineTuning, grid_search_id: str):
+    def run_one_config(
+        helper: LearningExperimentHelper, cfg: CE_FineTuning, grid_search_id: str
+    ):
         """Main process for Cross-encoder training"""
 
         # Setup indices and validation/test base retrievers
@@ -270,7 +281,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                     anserini.AnseriniRetriever.C(
                         k=cfg.retrieval.k,
                         model=base_model,
-                        index=anserini.index_builder(launcher=launcher_index)(documents),
+                        index=anserini.index_builder(launcher=launcher_index)(
+                            documents
+                        ),
                         store=documents,
                     )
                     .tag("first_stage", name)
@@ -292,7 +305,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 launcher=launcher_evaluate,
             )
 
-
         # Validation
         if cfg.learner.validation == Validation.MSMARCO.value:
             ds_val, validation_documents = nano_msmarco_validation_datasets(
@@ -302,13 +314,18 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             if cfg.retriever:
                 # We don't use BM25, but a given sparse retriever
                 val_retrievers = val_retrievers_factory
-            else:   
+            else:
                 val_retrievers = partial(
-                    val_retrievers_factory, store=validation_documents, k=cfg.learner.validation_top_k
+                    val_retrievers_factory,
+                    store=validation_documents,
+                    k=cfg.learner.validation_top_k,
                 )
-                
+
         # NanoBEIR validation datasets
-        elif cfg.learner.validation in [Validation.NanoBEIR.value, Validation.ALL.value]:
+        elif cfg.learner.validation in [
+            Validation.NanoBEIR.value,
+            Validation.ALL.value,
+        ]:
             validations, validation_documents = nanobeir_validation_datasets(
                 cfg.validation, launcher=launcher_preprocessing
             )
@@ -333,7 +350,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             ce_trainer: LossTrainer = build_trainer(cfg)
 
             # Build the model
-            
+
             config = AutoConfig.from_pretrained(cfg.base)
             scorer_model = HFCrossScorer.C(
                 hf_id=cfg.base,
@@ -358,17 +375,22 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                         ).tag("retriever", retriever_tag),
                         validation_interval=cfg.learner.validation_interval,
                         metrics={"RR@10": True, "AP": False, "nDCG": False},
-                        ).tag("validation", "msmarco")
+                    ).tag("validation", "msmarco")
                 ]
-            elif cfg.learner.validation == Validation.NanoBEIR.value or cfg.learner.validation == Validation.ALL.value:
+            elif (
+                cfg.learner.validation == Validation.NanoBEIR.value
+                or cfg.learner.validation == Validation.ALL.value
+            ):
                 validations = []
                 for name, ds_val_zs, val_docs in nb_val_items:
                     if cfg.retriever:
                         # We don't use BM25, but a given sparse retriever
                         val_retriever_ood = val_retrievers_factory
-                    else:   
+                    else:
                         val_retriever_ood = partial(
-                            val_retrievers_factory, store=val_docs, k=cfg.learner.validation_top_k
+                            val_retrievers_factory,
+                            store=val_docs,
+                            k=cfg.learner.validation_top_k,
                         )
 
                     retriever = model_based_retrievers(
@@ -396,7 +418,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                     validation_interval=cfg.learner.validation_interval,
                     metrics={"RR@10": True, "AP": False, "nDCG": False},
                 )
-                
+
                 validations.append(aggregator_validation)
             else:
                 raise NotImplementedError(
@@ -425,7 +447,11 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 max_epochs=cfg.learner.optimization.max_epochs,
                 checkpoint_interval=cfg.learner.checkpoint_interval,
                 # The listeners (here, for validation)
-                listeners=msmarco_validation if cfg.learner.validation == Validation.MSMARCO.value else validations,
+                listeners=(
+                    msmarco_validation
+                    if cfg.learner.validation == Validation.MSMARCO.value
+                    else validations
+                ),
                 # The hook used for evaluation
                 hooks=hooks,
                 # fabric settings
@@ -439,47 +465,53 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
             helper.tensorboard_service.add(learner, learner.logpath)
 
-            # If we track MSMARCO, use default validation, else (for NanoBEIR) use the aggregator 
+            # If we track MSMARCO, use default validation, else (for NanoBEIR) use the aggregator
             tracked_validations = {}
-            if cfg.learner.validation in [Validation.NanoBEIR.value, Validation.ALL.value]:
-                #add nano_beir = aggregated of all validation listeners
+            if cfg.learner.validation in [
+                Validation.NanoBEIR.value,
+                Validation.ALL.value,
+            ]:
+                # add nano_beir = aggregated of all validation listeners
                 tracked_validations["nano-beir"] = validations[-1]
-            if cfg.learner.validation in [Validation.MSMARCO.value, Validation.ALL.value]:
-                #add msm validation
+            if cfg.learner.validation in [
+                Validation.MSMARCO.value,
+                Validation.ALL.value,
+            ]:
+                # add msm validation
                 tracked_validations["msmarco"] = msmarco_validation
 
             # Evaluate each model on test collections
             for name, tracked_validation in tracked_validations.items():
                 logging.info(f"evaluating from validation: {name}")
                 for metric_name in tracked_validation.monitored():
-                    load_model = outputs.listeners[tracked_validation.id][metric_name].tag("validation", name)
+                    load_model = outputs.listeners[tracked_validation.id][
+                        metric_name
+                    ].tag("validation", name)
                     tests.evaluate_retriever(
                         partial(
-                        model_based_retrievers,
-                        scorer=scorer_model,
-                        retrievers=test_retrievers,
-                    ),
-                    launcher_evaluate,
-                    model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                    init_tasks=[load_model],
-                )
+                            model_based_retrievers,
+                            scorer=scorer_model,
+                            retrievers=test_retrievers,
+                        ),
+                        launcher_evaluate,
+                        model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
+                        init_tasks=[load_model],
+                    )
 
-            
     all_configs, tagspaths = generate_grid(cfg)
 
     for config, tagspath in zip(all_configs, tagspaths):
         run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
 
-
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
 
     df = tests.to_dataframe()
-    
+
     if df.empty:
         logging.info("No results found, Ending experiment")
         return
-        
+
     metric_cols = [("metric", "AP"), ("metric", "RR@10"), ("metric", "nDCG@10")]
     group_by_tags = [("tag", "first_stage"), ("tag", "scorer"), ("tag", "validation")]
 
@@ -496,17 +528,17 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     # 3. Add the 'mean' summary row
     if df_grouped["dataset"].nunique() > 1:
         # We aggregate the already aggregated means/vars
-        # Note: Mean of means is mathematically sound; 
+        # Note: Mean of means is mathematically sound;
         # Mean of vars is a common proxy for average instability.
         mean_df = (
             df_grouped.groupby(group_by_tags, dropna=False)
             .mean(numeric_only=True)
             .reset_index()
         )
-        
+
         # Manually set the dataset label
         mean_df["dataset"] = "mean"
-        
+
         # Ensure column order matches exactly before concat
         mean_df = mean_df[df_grouped.columns]
         df_grouped = pd.concat([df_grouped, mean_df], ignore_index=True)
