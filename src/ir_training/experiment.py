@@ -10,31 +10,31 @@ from transformers import AutoConfig
 from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
 
-from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
+from xpm_torch import Random
 from xpm_torch.utils.hugginface import prepare_hf_model
+from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
 from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
-from xpm_torch import Random
 from xpm_torch.batchers import PowerAdaptativeBatcher
 from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
+from xpm_torch.trainers.batchwise import BatchwiseTrainer
+from xpm_torch.trainers.pairwise import PairwiseTrainer
 
 from xpmir.papers.helpers.samplers import (
-    msmarco_rankdistillm_colbert_top50,
-    msmarco_colbertv2_annotated,
-    msmarco_v1_validation_dataset,
     prepare_collection,
+    msmarco_colbertv2_annotated,
+    msmarco_rankdistillm_colbert_top50,
+    msmarco_v1_validation_dataset,
     msmarco_hofstaetter_ensemble_hard_negatives,
     msmarco_v1_docpairs_efficient_sampler,
 )
 import xpmir.interfaces.anserini as anserini
+from xpmir.index.sparse import SparseRetriever, SparseRetrieverIndexBuilder
 from xpmir.rankers.standard import BM25, Model
-from xpmir.neural.huggingface import HFCrossScorer
 from xpmir.rankers import Documents, Retriever, document_cache, scorer_retriever
-
-from xpm_torch.trainers.batchwise import BatchwiseTrainer
-from xpm_torch.trainers.pairwise import PairwiseTrainer
+from xpmir.neural.huggingface import HFCrossScorer
 from xpmir.letor.samplers import PairwiseInBatchNegativesSampler
 from xpmir.letor.distillation.listwise import (
     ADR_MSE,
@@ -42,24 +42,13 @@ from xpmir.letor.distillation.listwise import (
     DistillationListwiseTrainer,
     ListwiseSoftmaxCrossEntropy,
 )
-from xpmir.letor.distillation.pairwise import (
-    DistillationPairwiseTrainer,
-    MSEDifferenceLoss,
-)
+from xpmir.letor.distillation.pairwise import DistillationPairwiseTrainer, MSEDifferenceLoss
 from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
 from xpmir.text.huggingface.base import HFMaskedLanguageModel
 from xpmir.text.huggingface.tokenizers import HFTokenizer, HFTokenizerAdapter
-
-# TODO add support for those
-from xpmir.index.sparse import (
-    SparseRetriever,
-    SparseRetrieverIndexBuilder,
-    Sparse2BMPConverter,
-)
 from xpmir.text.adapters import TopicTextConverter
 from xpmir.neural.splade import SpladeTextEncoderV2, MaxAggregation
 
-# from xpmir.letor.distillation.pairwise import PairwiseTrainer, PointwiseCrossEntropyLoss
 
 from configuration import Losses, CE_FineTuning, Validation, generate_grid
 from tests import build_tests

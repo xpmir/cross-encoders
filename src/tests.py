@@ -87,7 +87,7 @@ def minified_tests(test_topic_nb: int, check_docs: bool = True, retrievers_only:
     return tests
 
 @lru_cache
-def BEIR_tests(test_topic_nb: int, retrievers_only: bool = False) -> EvaluationsCollection:
+def BEIR_13_tests(test_topic_nb: int, retrievers_only: bool = False) -> EvaluationsCollection:
     """ All of BEIR (minus the 5 datasets not publicly available) 
     - ArguAna
     - Climate-FEVER
@@ -251,25 +251,25 @@ def LoTTE_tests(test_topic_nb: int, retrievers_only: bool = False) -> Evaluation
 def paper_tests(test_topic_nb: int, include_OOD: bool = True, check_docs: bool = True, retrievers_only: bool = False) -> EvaluationsCollection:
     """Returns the pool of queries for the evaluations to include in the paper.
     As of now, this list includes all of BEIR (minus the 5 datasets not publicly available) 
-    + Robust04
     + LoTTE (Search)
     + the 2 TREC-DL 19 and 20 datasets, i.e.:
     - MS Marco v1 (dev set)
     - TREC DL 2019
     - TREC DL 2020
-    - ArguAna
-    - Climate-FEVER
-    - DBPedia
-    - FEVER
-    - FiQA-2018
-    - HotPotQA
-    - NFCorpus
-    - NQ
-    - Quora
-    - SciDocs
-    - SciFact
-    - TREC-COVID
-    - Touché-2020
+    - BEIR 13: 
+        - ArguAna
+        - Climate-FEVER
+        - DBPedia
+        - FEVER
+        - FiQA-2018
+        - HotPotQA
+        - NFCorpus
+        - NQ
+        - Quora
+        - SciDocs
+        - SciFact
+        - TREC-COVID
+        - Touché-2020
     """
 
     # In domain - MS Marco + TREC DL
@@ -292,13 +292,13 @@ def paper_tests(test_topic_nb: int, include_OOD: bool = True, check_docs: bool =
 
     # Out of domain - BEIR (optional)        
     if include_OOD:
-        beir = BEIR_tests(test_topic_nb, retrievers_only=retrievers_only)
-        robust04 = Robust04_test(test_topic_nb, retrievers_only=retrievers_only)
+        beir = BEIR_13_tests(test_topic_nb, retrievers_only=retrievers_only)
+        # robust04 = Robust04_test(test_topic_nb, retrievers_only=retrievers_only)
         lotte = LoTTE_tests(test_topic_nb, retrievers_only=retrievers_only)
     else:
         # Empty collection
         beir = EvaluationsCollection()
-        robust04 = EvaluationsCollection()
+        # robust04 = EvaluationsCollection()
         lotte = EvaluationsCollection()
 
     paper_tests =  EvaluationsCollection(
@@ -306,7 +306,7 @@ def paper_tests(test_topic_nb: int, include_OOD: bool = True, check_docs: bool =
         trec2019=Evaluations(dl19, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
         trec2020=Evaluations(dl20, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
         **beir.collection,
-        **robust04.collection,
+        # **robust04.collection,
         **lotte.collection,
     )
 
