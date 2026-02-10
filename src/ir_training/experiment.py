@@ -33,7 +33,7 @@ from xpmir.papers.helpers.samplers import (
 import xpmir.interfaces.anserini as anserini
 from xpmir.index.sparse import SparseRetriever, SparseRetrieverIndexBuilder
 from xpmir.rankers.standard import BM25, Model
-from xpmir.rankers import Documents, Retriever, document_cache, scorer_retriever
+from xpmir.rankers import Documents, Retriever, scorer_retriever
 from xpmir.neural.huggingface import HFCrossScorer
 from xpmir.letor.samplers import PairwiseInBatchNegativesSampler
 from xpmir.letor.distillation.listwise import (
@@ -180,6 +180,37 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
     tests = build_tests(cfg.evaluation)
 
+    #cache the indexes 
+    indexes = {}
+    def get_splade_index(documents: Documents, splade_encoder, cfg: CE_FineTuning):
+        """Build an index for given documents, using a given Sparse retriever model
+        Caches it to avoid submitting job twice.
+        """
+
+        index_cfg = SparseRetrieverIndexBuilder.C(
+            batch_size=cfg.indexation.batch_size,
+            batcher=PowerAdaptativeBatcher.C(),
+            encoder=splade_encoder,
+            documents=documents,
+            ordered_index=False,
+            max_docs=cfg.indexation.max_indexed,
+        )
+        indexer_id = index_cfg.__identifier__()
+
+        if indexer_id not in indexes:
+            logging.info(
+                "Indexing %s (%s documents) with %s",
+                documents.id,
+                documents.count,
+                launcher_index,
+            )
+            index = index_cfg.submit(launcher=launcher_index)
+            indexes[indexer_id] = index
+        else:
+            index = indexes[indexer_id]
+
+        return index
+
     def run_one_config(
         helper: LearningExperimentHelper, cfg: CE_FineTuning, grid_search_id: str
     ):
@@ -200,30 +231,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 maxlen=256,
             )
 
-            @document_cache
-            def splade_index(documents: Documents):
-                logging.info(
-                    "Indexing %s (%s documents) with %s",
-                    documents.id,
-                    documents.count,
-                    launcher_index,
-                )
-
-                index = SparseRetrieverIndexBuilder.C(
-                    batch_size=cfg.indexation.batch_size,
-                    batcher=PowerAdaptativeBatcher.C(),
-                    encoder=splade_encoder,
-                    documents=documents,
-                    ordered_index=False,
-                    max_docs=cfg.indexation.max_indexed,
-                ).submit(launcher=launcher_index)
-
-                # Just submit the convertion for now
-                # Sparse2BMPConverter.C(
-                #     index=index, block_size=32, compress_range=True
-                # ).submit(launcher=launcher_bmp)
-
-                return index
 
             def splade_retriever(
                 name,
@@ -232,7 +239,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             ) -> Retriever.C:
                 return (
                     SparseRetriever.C(
-                        index=splade_index()(documents),
+                        index=get_splade_index(documents, splade_encoder=splade_encoder, cfg=cfg),
                         topk=cfg.retrieval.k,
                         batchsize=1,
                         encoder=encoder,
@@ -248,7 +255,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 model: Model = None,
             ) -> Retriever.C:
                 return SparseRetriever.C(
-                    index=splade_index()(documents),
+                    index=get_splade_index(documents, splade_encoder=splade_encoder, cfg=cfg),
                     topk=cfg.learner.validation_top_k,
                     batchsize=1,
                     encoder=model,
