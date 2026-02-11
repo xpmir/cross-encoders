@@ -293,12 +293,12 @@ def paper_tests(test_topic_nb: int, include_OOD: bool = True, check_docs: bool =
     # Out of domain - BEIR (optional)        
     if include_OOD:
         beir = BEIR_13_tests(test_topic_nb, retrievers_only=retrievers_only)
-        # robust04 = Robust04_test(test_topic_nb, retrievers_only=retrievers_only)
+        robust04 = Robust04_test(test_topic_nb, retrievers_only=retrievers_only)
         lotte = LoTTE_tests(test_topic_nb, retrievers_only=retrievers_only)
     else:
         # Empty collection
         beir = EvaluationsCollection()
-        # robust04 = EvaluationsCollection()
+        robust04 = EvaluationsCollection()
         lotte = EvaluationsCollection()
 
     paper_tests =  EvaluationsCollection(
@@ -306,7 +306,7 @@ def paper_tests(test_topic_nb: int, include_OOD: bool = True, check_docs: bool =
         trec2019=Evaluations(dl19, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
         trec2020=Evaluations(dl20, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
         **beir.collection,
-        # **robust04.collection,
+        **robust04.collection,
         **lotte.collection,
     )
 
