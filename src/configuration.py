@@ -265,6 +265,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     """After evaluations are done, whether to test statistical significance against a baseline.
     By default, the baseline is BM25 + the CE simply fine-tuned on the same setup."""
 
+    normalize_docs_per_batch: bool = False
+    """whether to normalize documents per batch for listwise losses"""
+
     grid_search: Dict[str, GenericParams] = field(factory=dict)
     """
     Grid search parameters. Maps a dot-separated parameter path to a GenericParams object.

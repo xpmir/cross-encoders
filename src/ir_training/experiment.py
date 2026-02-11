@@ -123,11 +123,20 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
         # Use the listwise distillation trainer for listwise-style losses.
         # Swap to a DistillationListwiseTrainer and a listwise distillation loss.
+        passages_per_query = 8 
+        batch_size = cfg.learner.optimization.batch_size
+
+        if cfg.normalize_docs_per_batch: 
+            batch_size = batch_size // passages_per_query
+            logging.warning(f"normalized batch size to {batch_size} to get {batch_size * passages_per_query} docs per batch")
+        else:
+            logging.warning(f"Not normalizing docs per batch, {passages_per_query} docs x {batch_size} = {batch_size * passages_per_query} docs per batch") 
+
         return DistillationListwiseTrainer.C(
-            sampler=msmarco_colbertv2_annotated(passages_per_query=8),
+            sampler=msmarco_colbertv2_annotated(passages_per_query=passages_per_query),
             lossfn=ListwiseSoftmaxCrossEntropy.C(),
             batcher=PowerAdaptativeBatcher.C(),
-            batch_size=cfg.learner.optimization.batch_size,
+            batch_size=batch_size,
         )
 
     ### Pairwise distillation losses ###
@@ -499,7 +508,26 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     all_configs, tagspaths = generate_grid(cfg)
 
     for config, tagspath in zip(all_configs, tagspaths):
-        run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
+        
+        #TODO clean dirty fix
+        
+        #get loss 
+        try:
+            loss_member = Losses(config.learner.loss)
+        except ValueError:
+            raise ValueError(
+                f"Unknown loss function: {config.learner.loss}. Accepted values are: {[e.value for e in Losses]}"
+            )
+        if loss_member is Losses.infoNCE_RankDistiLLM:
+            logging.warning(f"running config with normalization")
+            #run with normal config
+            run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
+            config.normalize_docs_per_batch = True
+            #run with new config
+            run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
+        else:
+            #just run the config
+            run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
 
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()

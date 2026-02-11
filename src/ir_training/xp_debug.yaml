@@ -41,7 +41,7 @@ learner:
     validation_interval: 1
     validation_top_k: 100
     loss: infoNCE
-    validation: all
+    validation: nanobeir
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
 
 retrieval:
@@ -53,3 +53,22 @@ evaluation:
     test_max_topics: 100
     all_datasets: true
     in_domain_only: true
+
+#### Params that are grid searched 
+grid_search:
+    base: 
+        values_list: 
+            # - microsoft/MiniLM-L12-H384-uncased
+            - jhu-clsp/ettin-encoder-17m
+            # - jhu-clsp/ettin-encoder-32m
+            # - jhu-clsp/ettin-encoder-68m
+        
+    learner.loss:
+        values_list:
+            - infoNCE
+            - infoNCE_RankDistiLLM
+            # - bce
+            # - hingeLoss
+            # - marginMSE
+            # - distillRankNET
+            # - ADR_MSE
