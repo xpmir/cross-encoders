@@ -533,13 +533,13 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             #run with normal config
             run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
             config.normalize_docs_per_batch = True
-            tagspath += "norm_size=True"
+            tagspath += "_norm_size=True"
             #run with new config
             run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
         elif loss_member is Losses.infoNCE:
             logging.warning(f"running config with normalization")
             config.normalize_docs_per_batch = True
-            tagspath += "norm_size=True"
+            tagspath += "_norm_size=True"
             #run with new config
             run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
         else:
