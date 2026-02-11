@@ -125,7 +125,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             ),
             lossfn=SoftmaxCrossEntropy.C(),
             batcher=PowerAdaptativeBatcher.C(),
-            batch_size=cfg.learner.optimization.batch_size,
+            batch_size=batch_size,
             hooks=[],
         )
 
