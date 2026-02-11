@@ -109,6 +109,16 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
         # Use the listwise distillation trainer for listwise-style losses.
         # Swap to a DistillationListwiseTrainer and a listwise distillation loss.
+        batch_size = cfg.learner.optimization.batch_size
+
+        if cfg.normalize_docs_per_batch: 
+            batch_size = int(np.sqrt(batch_size))
+            passages_per_batch = batch_size * batch_size
+            logging.warning(f"normalized batch size to {batch_size} to get {passages_per_batch} docs per batch")
+        else:
+            passages_per_batch = batch_size * batch_size
+            logging.warning(f"Not normalizing docs per batch for InfoNCE, {batch_size}**2 docs = {passages_per_batch} docs per batch") 
+
         return BatchwiseTrainer.C(
             sampler=PairwiseInBatchNegativesSampler.C(
                 sampler=msmarco_v1_docpairs_efficient_sampler(),
@@ -523,6 +533,13 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             #run with normal config
             run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
             config.normalize_docs_per_batch = True
+            tagspath += "norm_size=True"
+            #run with new config
+            run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
+        elif loss_member is Losses.infoNCE:
+            logging.warning(f"running config with normalization")
+            config.normalize_docs_per_batch = True
+            tagspath += "norm_size=True"
             #run with new config
             run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
         else:
