@@ -60,9 +60,9 @@ def run(
     launcher_index = find_launcher(cfg.indexation.requirements)
 
     if cfg.evaluation.all_datasets:
-        tests = paper_tests(cfg.evaluation.test_max_topics, retrievers_only=cfg.retrievers_only)
+        tests = paper_tests(cfg.evaluation.test_max_topics, include_OOD=not cfg.evaluation.in_domain_only, retrievers_only=cfg.retrievers_only)
     else:
-        tests = minified_tests(cfg.evaluation.test_max_topics, retrievers_only=cfg.retrievers_only)
+        tests = minified_tests(cfg.evaluation.test_max_topics, include_OOD=not cfg.evaluation.in_domain_only, retrievers_only=cfg.retrievers_only)
 
     model_based_retrievers = partial(
         scorer_retriever,
