@@ -561,6 +561,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     # 1. Convert to numeric
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
 
+    output_file = helper.xp.resultspath / "raw_results.csv"
+    df.to_csv(output_file, index=False)
+    logging.info(f"Raw results (before aggregation) saved to {output_file}")
+
     # 2. Initial Grouping
     df_grouped = (
         df.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
