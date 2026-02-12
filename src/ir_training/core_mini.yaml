@@ -59,7 +59,6 @@ grid_search:
     learner.loss:
         values_list:
             - bce
-            - infoNCE
             - hingeLoss
             - marginMSE
             - infoNCE_RankDistiLLM
