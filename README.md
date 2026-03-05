@@ -28,9 +28,9 @@
 
 ## 👨‍💻 Package 
 
-This repository provides a standardized and highly efficient framework for the fine-tuning and evaluation of state-of-the-art Cross-Encoder models for Information Retrieval (IR). Built upon the Experimaestro and xpmir ecosystems, it automates the end-to-end experimental lifecycle—from document indexing (using BM25 or SPLADE) and advanced training strategies (such as MarginMSE and listwise distillation) to rigorous multi-benchmark evaluation on datasets like BEIR. 
+This repository provides a standardized and fully modular framework for the fine-tuning and evaluation of state-of-the-art Cross-Encoder models for Information Retrieval (IR). 
+Built upon the Experimaestro and xpmir ecosystems, it automates the end-to-end experimental lifecycle—from document indexing (using BM25 or SPLADE) and advanced training strategies (such as MarginMSE and listwise distillation) to rigorous multi-benchmark evaluation on datasets like BEIR. 
 We release this project as a resource for the IR community, simplifing the reproduction and evaluation of sota re-ranking results, and providing modular components for researching new loss functions and negative sampling techniques.
-
 
 ## Reproducing Paper results
 
@@ -80,9 +80,12 @@ You may fist want to see what tasks will be launched with:
 uv run experimaestro run-experiment src/ir_training/ettin150_training.yaml --run-mode DRY_RUN
 ```
 
+
 ### Citation 
 
+
 If you find this work useful, you can cite our work as:
+
 
 ```bibtex
 @misc{morand2026reproducingcomparingdistillationtechniques,
