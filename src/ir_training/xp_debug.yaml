@@ -1,0 +1,73 @@
+id: debug_CE_training
+title: "MiniLM-v2 masking experiment"
+description: Fine-tune a MiniLM-v2 model with a margin MSE loss on BM25 negatives while applying masking.
+
+    Starts from the checkpoint > microsoft/MiniLM-L12-H384-uncased
+
+module: ir_training.experiment
+#pre_experiment: pre_experiment
+
+gpu: true
+seed: 12 # To mimick the HF xp 
+nb_repetitions: 1
+
+base: "microsoft/MiniLM-L12-H384-uncased"
+
+# microsoft/MiniLM-L12-H384-uncased # jhu-clsp/ettin-encoder-32m  microsoft/MiniLM-L12-H384-uncased
+
+retriever: "naver/splade-v3-distilbert" #BM25
+
+preprocessing:
+    requirements: duration=8h & cpu(cores=4)
+
+indexation:
+    batch_size: 128
+    requirements: duration=20h & cpu(cores=4, mem=10G) & cuda(mem=24G)
+
+validation:
+    size: 500 # Use 500 topics for validation
+
+# This set of hyperparameters follows: https://github.com/huggingface/sentence-transformers/blob/9f76b5790fa8f0175ccdc27e41f9ae348f557144/examples/training/ms_marco/train_cross-encoder-v2.py
+learner:
+    optimization:
+        steps_per_epoch: 100
+        batch_size: 64
+        max_epochs: 200 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        num_warmup_steps: 5000 # Follows the original setup
+        weight_decay: 0.00
+        lr: 7e-6
+        eps: 1.0e-8
+    # sample_max: 2_000_000
+    max_grad_norm: 1.0
+    checkpoint_interval: 50
+    validation_interval: 10
+    validation_top_k: 100
+    validation: nanobeir
+    requirements: duration=20h & cuda(mem=100G)
+
+retrieval:
+    requirements: duration=20h & cuda(mem=20G)
+    batch_size: 64
+    k: 1000
+
+evaluation:
+    test_max_topics: 100
+    in_domain_only: true
+
+#### Params that are grid searched 
+grid_search:
+    base: 
+        values_list: 
+            - jhu-clsp/ettin-encoder-32m
+            # - microsoft/MiniLM-L12-H384-uncased
+            # - jhu-clsp/ettin-encoder-17m
+            # - jhu-clsp/ettin-encoder-68m
+        
+    learner.loss:
+        values_list:
+            - marginMSE
+            - infoNCE_RankDistiLLM
+            # - distillRankNET
+    learner.precision :
+        values_list: 
+            - bf16-mixed

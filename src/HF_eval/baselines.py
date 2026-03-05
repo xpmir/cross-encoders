@@ -1,0 +1,221 @@
+from typing import List
+import logging
+from attrs import Factory
+from functools import partial
+import pandas as pd
+
+from experimaestro.launcherfinder import find_launcher
+
+from xpm_torch.batchers import PowerAdaptativeBatcher
+from xpm_torch.utils.huggingface import prepare_hf_model
+
+from datamaestro_text.data.ir import Documents
+
+from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
+from xpmir.index.sparse import SparseRetriever, SparseRetrieverIndexBuilder
+from xpmir.neural.splade import MaxAggregation, SpladeTextEncoder, splade_encoder_from_pretrained_hf
+from xpmir.papers import configuration
+from xpmir.papers.helpers import NeuralIRExperiment
+from xpmir.neural.huggingface import HFCrossScorer
+from xpmir.rankers.standard import BM25
+import xpmir.interfaces.anserini as anserini
+from xpmir.rankers import scorer_retriever, document_cache, Retriever
+from xpmir.text.adapters import TopicTextConverter
+from xpmir.text.huggingface import HFTokenizerAdapter, HFTokenizer
+from xpmir.text.huggingface.base import HFMaskedLanguageModel
+
+from format import dataframe_to_latex
+from tests import minified_tests, paper_tests
+from configuration import *
+from index_utils import get_splade_index
+
+
+logging.basicConfig(level=logging.INFO)
+
+
+@configuration()
+class BaselinesConfig(NeuralIRExperiment):
+    retrieval: Retrieval = Factory(Retrieval)
+    indexation: Indexation = Factory(Indexation)
+
+    scorers_hf_id: List[str] = []
+
+    retrievers_hf_id: List[str] = [""]
+
+    evaluation: Evaluation = Factory(Evaluation)
+
+    retrievers_only: bool = False
+    """If true, only evaluate first-stage retrievers without cross-encoders"""
+
+
+@ir_experiment()
+def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
+
+    launcher_evaluate = find_launcher(cfg.retrieval.requirements)
+    launcher_index = find_launcher(cfg.indexation.requirements)
+
+    if cfg.evaluation.all_datasets:
+        tests = paper_tests(
+            cfg.evaluation.test_max_topics,
+            include_OOD=not cfg.evaluation.in_domain_only,
+            retrievers_only=cfg.retrievers_only,
+        )
+    else:
+        tests = minified_tests(
+            cfg.evaluation.test_max_topics,
+            include_OOD=not cfg.evaluation.in_domain_only,
+            retrievers_only=cfg.retrievers_only,
+        )
+
+    model_based_retrievers = partial(
+        scorer_retriever,
+        batch_size=cfg.retrieval.batch_size,
+        # batcher=PowerAdaptativeBatcher.C(),
+    )  #: Model-based retrievers
+
+    ### BM25 Retriever
+
+    def bm25_retriever(name, documents: Documents) -> Retriever.C:
+        return (
+            anserini.AnseriniRetriever.C(
+                k=cfg.retrieval.k,
+                model=BM25.C(),
+                index=anserini.index_builder(launcher=launcher_index)(documents),
+                store=documents,
+            )
+            .tag("first_stage", name)
+            .tag("data", documents.id)
+        )
+
+    ### Build the retrievers list
+    all_retrievers = [(partial(bm25_retriever, "bm25"), [])]
+
+
+    def splade_retriever(
+        name,
+        encoder,
+        documents: Documents,
+        init_tasks: list = None,
+    ) -> Retriever.C:
+        return (
+            SparseRetriever.C(
+                index=get_splade_index(
+                    documents,
+                    splade_encoder=splade_encoder,
+                    indexation_cfg=cfg.indexation,
+                    launcher_index=launcher_index,
+                    init_tasks=init_tasks,
+                ),
+                topk=cfg.retrieval.k,
+                batchsize=1,
+                encoder=encoder,
+                in_memory=False,
+            )
+            .tag("first_stage", name)
+            .tag("data", documents.id)
+        )
+    
+    if len(cfg.retrievers_hf_id) > 0:
+        for retriever_hf_id in cfg.retrievers_hf_id:
+            if not retriever_hf_id:
+                continue
+
+            logging.info(f"Instantiating retriever {retriever_hf_id} ")
+            (
+                splade_encoder,
+                retriever_init_tasks,
+            ) = splade_encoder_from_pretrained_hf(retriever_hf_id)
+
+            all_retrievers.append(
+                (
+                    partial(
+                        splade_retriever,
+                        retriever_hf_id,
+                        splade_encoder,
+                        init_tasks=retriever_init_tasks,
+                    ),
+                    retriever_init_tasks,
+                )
+            )
+
+    for retriever_factory, retriever_init_tasks in all_retrievers:
+
+        # Eval First stage only
+        tests.evaluate_retriever(
+            retriever_factory,
+            launcher=launcher_evaluate,
+            init_tasks=retriever_init_tasks,
+        )
+        logging.info(f"First stage only evaluation done for {retriever_factory}")
+        logging.info(f"Evaluating model-based retrievers {cfg.scorers_hf_id}")
+
+        # Eval With cross-encoder
+        if cfg.retrievers_only:
+            if len(cfg.scorers_hf_id) > 0:
+                logging.warning(
+                    "Scorers specified in config but retrievers_only is True. Skipping cross-encoder evaluation."
+                )
+            continue
+
+        for scorer_hf_id in cfg.scorers_hf_id:
+            # Check model (dl in cache if not)
+            prepare_hf_model(scorer_hf_id)
+
+            # Build the model
+            scorer = HFCrossScorer.C(
+                hf_id=scorer_hf_id,
+                max_query_length=32,
+                max_doc_length=256,
+            ).tag("scorer", scorer_hf_id)
+
+            # evaluate with the underlying First stage retriever
+            tests.evaluate_retriever(
+                partial(
+                    model_based_retrievers,
+                    scorer=scorer,
+                    retrievers=retriever_factory,
+                ),
+                launcher=launcher_evaluate,
+                init_tasks=retriever_init_tasks,
+            )
+
+    helper.xp.wait()
+
+    df = tests.to_dataframe()
+    measures = ["AP", "RR@10", "nDCG@10"] if not cfg.retrievers_only else ["R@1000"]
+    metric_cols = [("metric", measure) for measure in measures]
+    df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
+    df_grouped = (
+        df.groupby(
+            (
+                ["dataset", ("tag", "first_stage"), ("tag", "scorer")]
+                if ("tag", "scorer") in df.columns
+                else ["dataset", ("tag", "first_stage")]
+            ),
+            dropna=False,
+        )[metric_cols]
+        .agg(["mean", "var"])
+        .reset_index()
+    )
+    logging.info(df_grouped)
+
+    # save results
+    if not helper.xp.resultspath.exists():
+        helper.xp.resultspath.mkdir(parents=True, exist_ok=True)
+
+    output_file = helper.xp.resultspath / "results.csv"
+    df_grouped.to_csv(output_file, index=False)
+    logging.info(f"Results saved to {output_file}")
+
+    # Generate and save LaTeX table
+    latex_table = dataframe_to_latex(
+        df_grouped,
+        caption="Evaluation Results",
+        label="tab:eval_results",
+        sig_df=None,
+        metric_col="nDCG@10" if not cfg.retrievers_only else "R@1000",
+    )
+    latex_output_file = helper.xp.resultspath / "results.tex"
+    with open(latex_output_file, "w") as f:
+        f.write(latex_table)
+    logging.info(f"LaTeX table saved to {latex_output_file}")

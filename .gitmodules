@@ -1,0 +1,7 @@
+[submodule "experimaestro-python"]
+	path = experimaestro-python
+	url = git@github.com:VictorMorand/experimaestro-python.git
+[submodule "experimaestro-ir"]
+	path = experimaestro-ir
+	url = git@github.com:experimaestro/experimaestro-ir.git
+	branch = xpmir-V2

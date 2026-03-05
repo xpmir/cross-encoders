@@ -1,0 +1,34 @@
+parent: core_base # load configuration from core base.
+id: core_base_ettin
+title: "Validation comparison experiment"
+description: 
+    we remove the infoNCE_rankdistill and uve h100 for remaining fever evals..
+
+seed: 12 # To mimick the HF xp 
+nb_repetitions: 3
+
+
+### Overrides parameters from core_base
+
+retrieval:
+    # Use H100 for faster evals..
+    requirements: duration=30h & cpu(cores=16) & cuda(mem=30G)
+    k: 1000
+
+evaluation:
+    all_datasets: true
+    in_domain_only: false
+
+#### Params that are grid searched 
+grid_search:
+    normalize_docs_per_batch: 
+        values_list: 
+            - false
+            - true
+    base: 
+        values_list: 
+            - jhu-clsp/ettin-encoder-150m
+
+    learner.loss:
+        values_list:
+            - infoNCE_RankDistiLLM
