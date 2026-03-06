@@ -5,7 +5,7 @@ description: Fine-tune a MiniLM-v2 model with a margin MSE loss on BM25 negative
     Starts from the checkpoint > microsoft/MiniLM-L12-H384-uncased
 
 module: ir_training.experiment
-#pre_experiment: pre_experiment
+pre_experiment: pre_experiment
 
 gpu: true
 seed: 12 # To mimick the HF xp 

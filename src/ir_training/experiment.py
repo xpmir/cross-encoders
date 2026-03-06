@@ -560,7 +560,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     def get_name_from_tags(model_tags:dict) -> str:
         """created the HF id from tags"""
         from format import loss_names, backbone_names_lower
-        logging.error(f"got tags {model_tags}")
+        logging.debug(f"got tags {model_tags}")
         loss = model_tags.get('learner.loss')
         base = model_tags.get('base')
         #try to get prettier name
