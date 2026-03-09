@@ -16,7 +16,6 @@ from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch import Random
 from xpm_torch.configuration import FabricConfiguration
-from xpm_torch.utils.huggingface import prepare_hf_model, get_hf_config
 from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
 from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
@@ -39,7 +38,7 @@ import xpmir.interfaces.anserini as anserini
 from xpmir.index.sparse import SparseRetriever, SparseRetrieverIndexBuilder
 from xpmir.rankers.standard import BM25, Model
 from xpmir.rankers import Documents, Retriever, scorer_retriever
-from xpmir.neural.huggingface import HFCrossScorer
+from xpmir.neural.huggingface import HFCrossScorer, hf_cross_scorer
 from xpmir.letor.samplers import PairwiseInBatchNegativesSampler
 from xpmir.letor.distillation.listwise import (
     ADR_MSE,
@@ -49,9 +48,6 @@ from xpmir.letor.distillation.listwise import (
 )
 from xpmir.letor.distillation.pairwise import DistillationPairwiseTrainer, MSEDifferenceLoss
 from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
-from xpmir.text.huggingface.base import HFMaskedLanguageModel
-from xpmir.text.huggingface.tokenizers import HFTokenizer, HFTokenizerAdapter
-from xpmir.text.adapters import TopicTextConverter
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
 
@@ -357,16 +353,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
         ### TRAINING CROSS ENCODER
 
-        prepare_hf_model(cfg.base)
-        hf_config = get_hf_config(cfg.base)
         ce_trainer: LossTrainer = build_trainer(cfg)
         # Build the model
-        scorer_model = HFCrossScorer.C(
-            hf_id=cfg.base,
-            max_length=hf_config.get("max_position_embeddings", 512),
-            max_query_length=32,
-            max_doc_length=256,
-        ).tag("scorer", grid_search_id)
+        scorer_model, ce_init_tasks = hf_cross_scorer(hf_id=cfg.base)
+        scorer_model.tag("scorer", grid_search_id)
         
 
         # Run one Training and eval per seed
@@ -476,7 +466,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             learners.append(learner)
 
             # Submit job and link
-            outputs = learner.submit(launcher=launcher_learner, init_tasks=retriever_init_tasks)
+            outputs = learner.submit(launcher=launcher_learner, init_tasks=retriever_init_tasks + ce_init_tasks)
             # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
             helper.tensorboard_service.add(learner, learner.logpath)
 
@@ -511,7 +501,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                         ),
                         launcher_evaluate,
                         model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                        init_tasks=[load_model] + retriever_init_tasks,
+                        init_tasks=[load_model] + retriever_init_tasks + ce_init_tasks,
                     )
 
     all_configs, all_tags = generate_grid(cfg)

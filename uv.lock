@@ -630,6 +630,43 @@ wheels = [
 ]
 
 [[package]]
+name = "cross-encoders"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "experimaestro" },
+    { name = "experimaestro-ir", extra = ["anserini", "neural"] },
+    { name = "ir-datasets" },
+    { name = "pandas" },
+    { name = "tabulate" },
+    { name = "transformers" },
+    { name = "xpm-torch" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "matplotlib" },
+    { name = "notebook" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "experimaestro", editable = "experimaestro-python" },
+    { name = "experimaestro-ir", extras = ["anserini", "neural"], editable = "experimaestro-ir" },
+    { name = "ir-datasets", git = "https://github.com/bpiwowar/ir_datasets.git" },
+    { name = "pandas", specifier = ">=3.0.0" },
+    { name = "tabulate", specifier = ">=0.9.0" },
+    { name = "transformers", specifier = ">=5.0.0" },
+    { name = "xpm-torch" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "notebook", specifier = ">=7.5.4" },
+]
+
+[[package]]
 name = "cryptography"
 version = "46.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -761,7 +798,7 @@ wheels = [
 
 [[package]]
 name = "datamaestro"
-version = "1.8.0"
+version = "1.8.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bitmath" },
@@ -778,9 +815,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ae/d1/1a53ea31ebcbfd8a8aa7d14e779ebb9de3ce63b70a0450e75cea5aebb17d/datamaestro-1.8.0.tar.gz", hash = "sha256:c1b4e71fdaead644e3fb03b97543e50105d30e4074975ccd214741b439f0196c", size = 203798, upload-time = "2026-02-03T11:35:26.338Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/b7/3835a7454d65037be243967656828e433b10958f870dbd97213c7fa62dc4/datamaestro-1.8.3.tar.gz", hash = "sha256:0979c9fe3f82f938d28ede67cad4a31244d8471fe08440d4d2d78c6e94ef5d39", size = 204429, upload-time = "2026-03-09T09:34:19.101Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/6c/1dfa691e5f4b904813e7685a8f73b1d83153825399e28c43f2cb82f08f9d/datamaestro-1.8.0-py3-none-any.whl", hash = "sha256:5408bd4f7d392609a6b772ba926e9255335f3d1e91a46413c2003f365d62ba33", size = 85316, upload-time = "2026-02-03T11:35:24.462Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/94/42770cfd9e7148c9f5c37f2ed828cbef7aea5caf95feaba03056a73b31ff/datamaestro-1.8.3-py3-none-any.whl", hash = "sha256:f9d301df158f79c1466b3372c72646b0a854c820384eb682ff081fda3fcecef1", size = 85920, upload-time = "2026-03-09T09:34:17.532Z" },
 ]
 
 [[package]]
@@ -797,7 +834,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "attrs" },
-    { name = "datamaestro", specifier = ">=1.8.0" },
+    { name = "datamaestro", specifier = ">=1.8.3" },
     { name = "experimaestro", specifier = ">=2.0.0" },
     { name = "ir-datasets", specifier = ">=0.5.8" },
     { name = "typing-extensions" },
@@ -820,6 +857,7 @@ docs = [
     { name = "sphinx-rtd-theme", specifier = ">=3.1.0" },
     { name = "sphinx-toolbox", specifier = ">=4.1.2" },
 ]
+ir = [{ name = "impact-index", specifier = ">=0.32.0" }]
 
 [[package]]
 name = "datasets"
@@ -4699,43 +4737,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e8/c4/ba2f8066cceb6f23394729afe52f3bf7adec04bf9ed2c820b39e19299111/sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88", size = 30594, upload-time = "2021-05-16T22:03:42.897Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0", size = 29575, upload-time = "2021-05-16T22:03:41.177Z" },
-]
-
-[[package]]
-name = "sota-cross-encoders"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "experimaestro" },
-    { name = "experimaestro-ir", extra = ["anserini", "neural"] },
-    { name = "ir-datasets" },
-    { name = "pandas" },
-    { name = "tabulate" },
-    { name = "transformers" },
-    { name = "xpm-torch" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "matplotlib" },
-    { name = "notebook" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "experimaestro", editable = "experimaestro-python" },
-    { name = "experimaestro-ir", extras = ["anserini", "neural"], editable = "experimaestro-ir" },
-    { name = "ir-datasets", git = "https://github.com/bpiwowar/ir_datasets.git" },
-    { name = "pandas", specifier = ">=3.0.0" },
-    { name = "tabulate", specifier = ">=0.9.0" },
-    { name = "transformers", specifier = ">=5.0.0" },
-    { name = "xpm-torch" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "matplotlib", specifier = ">=3.10.8" },
-    { name = "notebook", specifier = ">=7.5.4" },
 ]
 
 [[package]]

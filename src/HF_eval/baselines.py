@@ -7,7 +7,6 @@ import pandas as pd
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch.batchers import PowerAdaptativeBatcher
-from xpm_torch.utils.huggingface import prepare_hf_model
 
 from datamaestro_text.data.ir import Documents
 
@@ -16,7 +15,7 @@ from xpmir.index.sparse import SparseRetriever, SparseRetrieverIndexBuilder
 from xpmir.neural.splade import MaxAggregation, SpladeTextEncoder, splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 from xpmir.papers.helpers import NeuralIRExperiment
-from xpmir.neural.huggingface import HFCrossScorer
+from xpmir.neural.huggingface import HFCrossScorer, hf_cross_scorer
 from xpmir.rankers.standard import BM25
 import xpmir.interfaces.anserini as anserini
 from xpmir.rankers import scorer_retriever, document_cache, Retriever
@@ -158,15 +157,9 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             continue
 
         for scorer_hf_id in cfg.scorers_hf_id:
-            # Check model (dl in cache if not)
-            prepare_hf_model(scorer_hf_id)
-
             # Build the model
-            scorer = HFCrossScorer.C(
-                hf_id=scorer_hf_id,
-                max_query_length=32,
-                max_doc_length=256,
-            ).tag("scorer", scorer_hf_id)
+            scorer, ce_init_tasks = hf_cross_scorer(hf_id=scorer_hf_id)
+            scorer.tag("scorer", scorer_hf_id)
 
             # evaluate with the underlying First stage retriever
             tests.evaluate_retriever(
@@ -176,7 +169,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                     retrievers=retriever_factory,
                 ),
                 launcher=launcher_evaluate,
-                init_tasks=retriever_init_tasks,
+                init_tasks=retriever_init_tasks + ce_init_tasks,
             )
 
     helper.xp.wait()
