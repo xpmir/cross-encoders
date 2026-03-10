@@ -36,6 +36,7 @@ logging.basicConfig(level=logging.INFO)
 class BaselinesConfig(NeuralIRExperiment):
     retrieval: Retrieval = Factory(Retrieval)
     indexation: Indexation = Factory(Indexation)
+    preprocessing: Preprocessing = Factory(Preprocessing)
 
     scorers_hf_id: List[str] = []
 
@@ -52,18 +53,21 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_index = find_launcher(cfg.indexation.requirements)
+    launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
 
     if cfg.evaluation.all_datasets:
         tests = paper_tests(
             cfg.evaluation.test_max_topics,
             include_OOD=not cfg.evaluation.in_domain_only,
             retrievers_only=cfg.retrievers_only,
+            launcher=launcher_preprocessing,
         )
     else:
         tests = minified_tests(
             cfg.evaluation.test_max_topics,
             include_OOD=not cfg.evaluation.in_domain_only,
             retrievers_only=cfg.retrievers_only,
+            launcher=launcher_preprocessing,
         )
 
     model_based_retrievers = partial(
@@ -87,9 +91,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         )
 
     ### Build the retrievers list
-    all_retrievers = [(partial(bm25_retriever, "bm25"), [])]
-
-
+   
     def splade_retriever(
         name,
         encoder,
@@ -114,6 +116,9 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             .tag("data", documents.id)
         )
     
+
+    all_retrievers = []
+
     if len(cfg.retrievers_hf_id) > 0:
         for retriever_hf_id in cfg.retrievers_hf_id:
             if not retriever_hf_id:
@@ -136,6 +141,11 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                     retriever_init_tasks,
                 )
             )
+    else:
+        #add bm25 by default
+        all_retrievers.append(
+            (partial(bm25_retriever, "bm25"), [])
+        )
 
     for retriever_factory, retriever_init_tasks in all_retrievers:
 
@@ -175,6 +185,11 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     helper.xp.wait()
 
     df = tests.to_dataframe()
+
+    if df.empty:
+        logging.info("No results found, Ending experiment")
+        return
+    
     measures = ["AP", "RR@10", "nDCG@10"] if not cfg.retrievers_only else ["R@1000"]
     metric_cols = [("metric", measure) for measure in measures]
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")

@@ -3,7 +3,7 @@ title: cross_scorer_evaluation
 description: Experiment whose purpose is to evaluate HF Cross-scorers
 
 module: HF_eval.baselines
-#pre_experiment: ../pre_experiment.py
+pre_experiment: ../pre_experiment.py
 
 gpu: true
 

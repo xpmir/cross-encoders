@@ -209,7 +209,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     #: Model-based retrievers
     train_documents = prepare_collection("irds.msmarco-passage.documents")
 
-    tests = build_tests(cfg.evaluation)
+    tests = build_tests(cfg.evaluation, launcher=launcher_preprocessing)
 
     
     #cache the indexes

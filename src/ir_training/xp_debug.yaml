@@ -67,7 +67,7 @@ grid_search:
         values_list:
             - marginMSE
             - infoNCE_RankDistiLLM
-            # - distillRankNET
+            - distillRankNET
     learner.precision :
         values_list: 
             - bf16-mixed
