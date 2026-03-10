@@ -355,7 +355,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
         ce_trainer: LossTrainer = build_trainer(cfg)
         # Build the model
-        scorer_model, ce_init_tasks = hf_cross_scorer(hf_id=cfg.base)
+        scorer_model, scorer_hf_init_tasks = hf_cross_scorer(hf_id=cfg.base)
         scorer_model.tag("scorer", grid_search_id)
         
 
@@ -466,7 +466,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             learners.append(learner)
 
             # Submit job and link
-            outputs = learner.submit(launcher=launcher_learner, init_tasks=retriever_init_tasks + ce_init_tasks)
+            outputs = learner.submit(launcher=launcher_learner, init_tasks=retriever_init_tasks + scorer_hf_init_tasks)
             # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
             helper.tensorboard_service.add(learner, learner.logpath)
 
@@ -501,7 +501,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                         ),
                         launcher_evaluate,
                         model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                        init_tasks=[load_model] + retriever_init_tasks + ce_init_tasks,
+                        init_tasks=[load_model] + retriever_init_tasks,
                     )
 
     all_configs, all_tags = generate_grid(cfg)
