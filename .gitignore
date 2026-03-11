@@ -62,3 +62,4 @@ tmp/
 
 .gemini/
 gha-creds-*.json
+GEMINI.md

@@ -33,5 +33,5 @@ ir-datasets = { git = "https://github.com/bpiwowar/ir_datasets.git" }
 dev = [
     "matplotlib>=3.10.8",
     "notebook>=7.5.4",
+    "pre-commit>=4.5.1",
 ]
-

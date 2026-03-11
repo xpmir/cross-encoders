@@ -6,26 +6,22 @@ import pandas as pd
 
 from experimaestro.launcherfinder import find_launcher
 
-from xpm_torch.batchers import PowerAdaptativeBatcher
 
-from datamaestro_text.data.ir import Documents
+from datamaestro_ir.data import Documents
 
 from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
-from xpmir.index.sparse import SparseRetriever, SparseRetrieverIndexBuilder
-from xpmir.neural.splade import MaxAggregation, SpladeTextEncoder, splade_encoder_from_pretrained_hf
+from xpmir.index.sparse import SparseRetriever
+from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 from xpmir.papers.helpers import NeuralIRExperiment
-from xpmir.neural.huggingface import HFCrossScorer, hf_cross_scorer
+from xpmir.neural.huggingface import hf_cross_scorer
 from xpmir.rankers.standard import BM25
 import xpmir.interfaces.anserini as anserini
-from xpmir.rankers import scorer_retriever, document_cache, Retriever
-from xpmir.text.adapters import TopicTextConverter
-from xpmir.text.huggingface import HFTokenizerAdapter, HFTokenizer
-from xpmir.text.huggingface.base import HFMaskedLanguageModel
+from xpmir.rankers import scorer_retriever, Retriever
 
 from format import dataframe_to_latex
 from tests import minified_tests, paper_tests
-from configuration import *
+from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from index_utils import get_splade_index
 
 
@@ -50,7 +46,6 @@ class BaselinesConfig(NeuralIRExperiment):
 
 @ir_experiment()
 def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
-
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
@@ -91,7 +86,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         )
 
     ### Build the retrievers list
-   
+
     def splade_retriever(
         name,
         encoder,
@@ -115,7 +110,6 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             .tag("first_stage", name)
             .tag("data", documents.id)
         )
-    
 
     all_retrievers = []
 
@@ -142,13 +136,10 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                 )
             )
     else:
-        #add bm25 by default
-        all_retrievers.append(
-            (partial(bm25_retriever, "bm25"), [])
-        )
+        # add bm25 by default
+        all_retrievers.append((partial(bm25_retriever, "bm25"), []))
 
     for retriever_factory, retriever_init_tasks in all_retrievers:
-
         # Eval First stage only
         tests.evaluate_retriever(
             retriever_factory,
@@ -189,7 +180,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     if df.empty:
         logging.info("No results found, Ending experiment")
         return
-    
+
     measures = ["AP", "RR@10", "nDCG@10"] if not cfg.retrievers_only else ["R@1000"]
     metric_cols = [("metric", measure) for measure in measures]
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
