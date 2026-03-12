@@ -8,7 +8,7 @@ module: ir_training.experiment
 pre_experiment: pre_experiment
 
 gpu: true
-seed: 12 # To mimick the HF xp 
+seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
 base: "microsoft/MiniLM-L12-H384-uncased"
@@ -43,7 +43,7 @@ learner:
     validation_interval: 10
     validation_top_k: 100
     validation: nanobeir
-    requirements: duration=20h & cuda(mem=100G)
+    requirements: duration=20h & cuda(mem=40G)
 
 retrieval:
     requirements: duration=20h & cuda(mem=20G)
@@ -54,20 +54,20 @@ evaluation:
     test_max_topics: 100
     in_domain_only: true
 
-#### Params that are grid searched 
+#### Params that are grid searched
 grid_search:
-    base: 
-        values_list: 
+    base:
+        values_list:
             - jhu-clsp/ettin-encoder-32m
             # - microsoft/MiniLM-L12-H384-uncased
             # - jhu-clsp/ettin-encoder-17m
             # - jhu-clsp/ettin-encoder-68m
-        
+
     learner.loss:
         values_list:
             - marginMSE
             - infoNCE_RankDistiLLM
             - distillRankNET
     learner.precision :
-        values_list: 
+        values_list:
             - bf16-mixed

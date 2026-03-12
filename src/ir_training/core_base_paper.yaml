@@ -1,21 +1,21 @@
 id: core_base_paper
 title: "Validation comparison experiment"
-description: 
+description:
     we remove the infoNCE and use h100 for remaining fever evals..
 
 module: ir_training.experiment
 pre_experiment: pre_experiment
 
-seed: 12 # To mimick the HF xp 
+seed: 12 # To mimick the HF xp
 nb_repetitions: 3
 
-retriever: "naver/splade-v3-distilbert" 
+retriever: "naver/splade-v3-distilbert"
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
 
 indexation:
-    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
+    requirements: duration=8h & cpu(cores=5) & cuda(mem=20G)
 
 validation:
     # Use 500 topics for validation
@@ -49,10 +49,10 @@ evaluation:
     all_datasets: true
     in_domain_only: false
 
-#### Params that are grid searched 
+#### Params that are grid searched
 grid_search:
-    base: 
-        values_list: 
+    base:
+        values_list:
             - bert-base-uncased
             - FacebookAI/roberta-base
             - google/electra-base-discriminator
