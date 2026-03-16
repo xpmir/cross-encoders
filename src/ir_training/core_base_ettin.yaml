@@ -1,11 +1,11 @@
-id: core_base_deberta
+id: core_base_ettin
 parent: core_base # load configuration from core base.
 title: "Validation comparison experiment"
 description:
     we remove the infoNCE_rankdistill and use h100 for remaining fever evals..
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 2
+nb_repetitions: 1
 
 
 ### Overrides parameters from core_base
@@ -27,7 +27,7 @@ evaluation:
 grid_search:
     base:
         values_list:
-            - microsoft/deberta-v3-base
+            - jhu-clsp/ettin-encoder-150m
     learner.loss:
         values_list:
             - infoNCE_RankDistiLLM

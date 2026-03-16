@@ -16,7 +16,7 @@ preprocessing:
     requirements: duration=8h & cpu(cores=8)
 
 indexation:
-    requirements: duration=8h & cpu(cores=5) & cuda(mem=20G)
+    requirements: duration=8h & cpu(cores=4) & cuda(mem=20G)
 
 validation:
     # Use 500 topics for validation
