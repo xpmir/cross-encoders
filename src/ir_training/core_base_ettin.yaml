@@ -13,6 +13,8 @@ learner:
     optimization:
         batch_size: 8 #with infoNCE = 64docs per batch (1 pos)
 
+max_doc_len: 1024
+
 normalize_docs_per_batch: false
 
 retrieval:

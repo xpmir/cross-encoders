@@ -1,5 +1,4 @@
 from enum import Enum
-import attrs
 from attrs import Factory, field
 from typing import (
     Any,
@@ -8,7 +7,6 @@ from typing import (
     Optional,
     Tuple,
     TypeVar,
-    Generic,
     Union,
     Type,
     get_args,
@@ -20,18 +18,16 @@ from xpmir.papers import configuration
 from xpmir.papers.helpers import LauncherSpecification
 from xpmir.papers.helpers.optim import TransformerOptimization
 from xpmir.papers.helpers.msmarco import RerankerMSMarcoV1Configuration
-from functools import cached_property as attrs_cached_property
-from xpm_torch.configuration import FabricConfiguration
 from itertools import product
 import logging
-from omegaconf import DictConfig, MISSING
+from omegaconf import DictConfig
 
 logger = logging.getLogger(__name__)
 
 
 class Losses(str, Enum):
     """Possible losses"""
-    
+
     BCE = "bce"
     """ Binary Cross Entropy loss """
 
@@ -77,7 +73,6 @@ class Validation(str, Enum):
     """ Both Nano MSMARCO and NanoBEIR validations"""
 
 
-
 T = TypeVar("T", int, str, float)
 
 
@@ -108,7 +103,6 @@ class GenericParams:
 
     @classmethod
     def from_any(cls, obj: Any, target_type: Type = Any) -> "GenericParams":
-
         def converter(value: Any) -> Any:
             """Attempts to convert a value to the target_type."""
             if target_type is Any:
@@ -185,7 +179,7 @@ class xpm_torch_Learner:
     optimization: TransformerOptimization = Factory(TransformerOptimization)
 
     requirements: str = "duration=4 days & cuda(mem=24G) * 2"
-    
+
     sample_rate: float = 1.0
     """Sample rate for triplets"""
 
@@ -204,7 +198,7 @@ class xpm_torch_Learner:
     early_stop_epochs: int = 0
     """ number of **epochs** without improvements before early stopping based on validation"""
 
-    ## Lighnting Fabric training Configuration 
+    ## Lighnting Fabric training Configuration
     # see https://lightning.ai/docs/fabric/stable/api/generated/lightning.fabric.fabric.Fabric.html#lightning.fabric.fabric.Fabric
     strategy: str = "auto"
     """Distributed training strategy"""
@@ -242,7 +236,6 @@ class Evaluation:
 
 @configuration()
 class CE_FineTuning(RerankerMSMarcoV1Configuration):
-
     nb_repetitions: int = field(default=1)
     """Number of repetitions of the training process"""
 
@@ -262,6 +255,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     ## Cross Encoder Model
     base: str = ""
     """Identifier for the base model"""
+
+    max_doc_len: Optional[int] = None
+    """max len for scorer, default to 0 = max len of the model"""
 
     pooling_method: str = PoolingMethod.CLS.value
     """Pooling method to use for the Ettin based scorer: cls or mean"""
@@ -327,7 +323,7 @@ def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
         "pooling_method": {"value": "cls"}
     }
     returns:
-     configs: List[Configs] the list of all configs 
+     configs: List[Configs] the list of all configs
      tags: a list of dicts with the same length as configs, where each dict contains the parameter values that were set for that config. For example:
      [
         {"learner.optimization.lr": 1e-5, "pooling_method": "cls"},
@@ -380,7 +376,7 @@ def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
 
     # Generate Cartesian product of all parameter values
     grid_combinations = product(*value_options)
-    
+
     output_configs = []
     tags = []
     # Create a base configuration to be copied for each permutation
