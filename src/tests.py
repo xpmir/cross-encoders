@@ -8,6 +8,7 @@ from xpmir.papers.helpers.samplers import prepare_collection
 from configuration import Evaluation
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -19,20 +20,32 @@ def check_datasets_docs(evaluations_collection: EvaluationsCollection):
         try:
             _ = next(evals.dataset.documents.iter_documents())
         except FileNotFoundError as e:
-            logger.error(f"{e}- cannot dowload {evals.dataset.documents.id}, please consider adding it manually (may happen for proprietary datasets such as Robust04)")
+            logger.error(
+                f"{e}- cannot dowload {evals.dataset.documents.id}, please consider adding it manually (may happen for proprietary datasets such as Robust04)"
+            )
 
 
 CE_MEASURES = [AP, nDCG @ 10, RR @ 10]
 RETRIEVERS_MEASURES = [R @ 1000]
 
+
 def get_fold(dataset, size, seed=0, launcher=None):
     if size > 0:
-        (fold_config,) = RandomFold.folds(seed=seed, sizes=[size], dataset=dataset, submit=False)
+        (fold_config,) = RandomFold.folds(
+            seed=seed, sizes=[size], dataset=dataset, submit=False
+        )
         return fold_config.submit(launcher=launcher)
     return dataset
 
+
 @lru_cache
-def minified_tests(test_topic_nb: int, check_docs: bool = True, retrievers_only: bool = False, include_OOD: bool = False, launcher=None) -> EvaluationsCollection:
+def minified_tests(
+    test_topic_nb: int,
+    check_docs: bool = True,
+    retrievers_only: bool = False,
+    include_OOD: bool = False,
+    launcher=None,
+) -> EvaluationsCollection:
     """Returns the pool of queries for the evaluations to use for testing.
     As of now, this list includes:
     - MS Marco v1 devsmall (with a reduced number of topics)
@@ -52,25 +65,27 @@ def minified_tests(test_topic_nb: int, check_docs: bool = True, retrievers_only:
     #     trec2021=Evaluations(dl21, CE_MEASURES),
     #     trec2022=Evaluations(dl22, CE_MEASURES),
     # )
-    v1_devsmall_ds = prepare_collection("irds.msmarco-passage.dev.small")
-    dl19 = prepare_dataset("irds.msmarco-passage.trec-dl-2019.judged")
-    dl20 = prepare_dataset("irds.msmarco-passage.trec-dl-2020.judged")
-    
+    v1_devsmall_ds = prepare_collection("com.microsoft.msmarco.passage.dev.small")
+    dl19 = prepare_dataset("com.microsoft.msmarco.passage.trec2019.judged")
+    dl20 = prepare_dataset("com.microsoft.msmarco.passage.trec2020.judged")
+
     v1_devsmall_ds = get_fold(v1_devsmall_ds, test_topic_nb, launcher=launcher)
 
-    scifact = prepare_dataset("irds.beir.scifact.test") # 300 queries
+    scifact = prepare_dataset("irds.beir.scifact.test")  # 300 queries
     scifact = get_fold(scifact, test_topic_nb, launcher=launcher)
-    
-    touche = prepare_dataset("irds.beir.webis-touche2020.v2") # v2 as it fixes some of v1 issues
 
-    fiqa = prepare_dataset("irds.beir.fiqa.test") # 648 queries
+    touche = prepare_dataset(
+        "irds.beir.webis-touche2020.v2"
+    )  # v2 as it fixes some of v1 issues
+
+    fiqa = prepare_dataset("irds.beir.fiqa.test")  # 648 queries
     fiqa = get_fold(fiqa, test_topic_nb, launcher=launcher)
 
-    nfcorpus = prepare_dataset("irds.beir.nfcorpus.test") # 323 queries
+    nfcorpus = prepare_dataset("irds.beir.nfcorpus.test")  # 323 queries
     nfcorpus = get_fold(nfcorpus, test_topic_nb, launcher=launcher)
-    
+
     measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-    tests =  EvaluationsCollection(
+    tests = EvaluationsCollection(
         msmarco_dev=Evaluations(v1_devsmall_ds, measures=measures),
         trec2019=Evaluations(dl19, measures=measures),
         trec2020=Evaluations(dl20, measures=measures),
@@ -86,9 +101,12 @@ def minified_tests(test_topic_nb: int, check_docs: bool = True, retrievers_only:
 
     return tests
 
+
 @lru_cache
-def BEIR_13_tests(test_topic_nb: int, retrievers_only: bool = False, launcher=None) -> EvaluationsCollection:
-    """ All of BEIR (minus the 5 datasets not publicly available) 
+def BEIR_13_tests(
+    test_topic_nb: int, retrievers_only: bool = False, launcher=None
+) -> EvaluationsCollection:
+    """All of BEIR (minus the 5 datasets not publicly available)
     - ArguAna
     - Climate-FEVER
     - DBPedia
@@ -105,15 +123,17 @@ def BEIR_13_tests(test_topic_nb: int, retrievers_only: bool = False, launcher=No
     """
 
     ## BEIR datasets
-    scifact = prepare_dataset("irds.beir.scifact.test") # 300 queries
+    scifact = prepare_dataset("irds.beir.scifact.test")  # 300 queries
     scifact = get_fold(scifact, test_topic_nb, launcher=launcher)
-    
-    touche = prepare_dataset("irds.beir.webis-touche2020.v2") # v2 as it fixes some of v1 issues
 
-    fiqa = prepare_dataset("irds.beir.fiqa.test") # 648 queries
+    touche = prepare_dataset(
+        "irds.beir.webis-touche2020.v2"
+    )  # v2 as it fixes some of v1 issues
+
+    fiqa = prepare_dataset("irds.beir.fiqa.test")  # 648 queries
     fiqa = get_fold(fiqa, test_topic_nb, launcher=launcher)
 
-    nfcorpus = prepare_dataset("irds.beir.nfcorpus.test") # 323 queries
+    nfcorpus = prepare_dataset("irds.beir.nfcorpus.test")  # 323 queries
     nfcorpus = get_fold(nfcorpus, test_topic_nb, launcher=launcher)
 
     arguana = prepare_dataset("irds.beir.arguana")
@@ -121,7 +141,7 @@ def BEIR_13_tests(test_topic_nb: int, retrievers_only: bool = False, launcher=No
 
     climate_fever = prepare_dataset("irds.beir.climate-fever")
     climate_fever = get_fold(climate_fever, test_topic_nb, launcher=launcher)
-    
+
     dbpedia = prepare_dataset("irds.beir.dbpedia-entity.test")
     dbpedia = get_fold(dbpedia, test_topic_nb, launcher=launcher)
 
@@ -160,19 +180,27 @@ def BEIR_13_tests(test_topic_nb: int, retrievers_only: bool = False, launcher=No
         trec_covid=Evaluations(trec_covid, measures=measures),
     )
 
+
 @lru_cache
-def Robust04_test(test_topic_nb: int, retrievers_only: bool = False, launcher=None) -> EvaluationsCollection:
-    """ Robust04 dataset """
+def Robust04_test(
+    test_topic_nb: int, retrievers_only: bool = False, launcher=None
+) -> EvaluationsCollection:
+    """Robust04 dataset"""
     robust04 = prepare_dataset("irds.disks45.nocr.trec-robust-2004")
     robust04 = get_fold(robust04, test_topic_nb, launcher=launcher)
 
     return EvaluationsCollection(
-        robust04=Evaluations(robust04, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
+        robust04=Evaluations(
+            robust04, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+        ),
     )
 
+
 @lru_cache
-def LoTTE_tests(test_topic_nb: int, retrievers_only: bool = False, launcher=None) -> EvaluationsCollection:
-    """ LoTTE Search dataset """
+def LoTTE_tests(
+    test_topic_nb: int, retrievers_only: bool = False, launcher=None
+) -> EvaluationsCollection:
+    """LoTTE Search dataset"""
     lotte_writing = prepare_dataset("irds.lotte.writing.test.search")
     lotte_writing = get_fold(lotte_writing, test_topic_nb, launcher=launcher)
 
@@ -187,25 +215,44 @@ def LoTTE_tests(test_topic_nb: int, retrievers_only: bool = False, launcher=None
 
     lotte_lifestyle = prepare_dataset("irds.lotte.lifestyle.test.search")
     lotte_lifestyle = get_fold(lotte_lifestyle, test_topic_nb, launcher=launcher)
-    
+
     return EvaluationsCollection(
-        lotte_writing=Evaluations(lotte_writing, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
-        lotte_recreation=Evaluations(lotte_recreation, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
-        lotte_science=Evaluations(lotte_science, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
-        lotte_technology=Evaluations(lotte_technology, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
-        lotte_lifestyle=Evaluations(lotte_lifestyle, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
+        lotte_writing=Evaluations(
+            lotte_writing, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+        ),
+        lotte_recreation=Evaluations(
+            lotte_recreation,
+            CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES,
+        ),
+        lotte_science=Evaluations(
+            lotte_science, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+        ),
+        lotte_technology=Evaluations(
+            lotte_technology,
+            CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES,
+        ),
+        lotte_lifestyle=Evaluations(
+            lotte_lifestyle, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+        ),
     )
 
+
 @lru_cache
-def paper_tests(test_topic_nb: int, include_OOD: bool = True, check_docs: bool = True, retrievers_only: bool = False, launcher=None) -> EvaluationsCollection:
+def paper_tests(
+    test_topic_nb: int,
+    include_OOD: bool = True,
+    check_docs: bool = True,
+    retrievers_only: bool = False,
+    launcher=None,
+) -> EvaluationsCollection:
     """Returns the pool of queries for the evaluations to include in the paper.
-    As of now, this list includes all of BEIR (minus the 5 datasets not publicly available) 
+    As of now, this list includes all of BEIR (minus the 5 datasets not publicly available)
     + LoTTE (Search)
     + the 2 TREC-DL 19 and 20 datasets, i.e.:
     - MS Marco v1 (dev set)
     - TREC DL 2019
     - TREC DL 2020
-    - BEIR 13: 
+    - BEIR 13:
         - ArguAna
         - Climate-FEVER
         - DBPedia
@@ -222,29 +269,41 @@ def paper_tests(test_topic_nb: int, include_OOD: bool = True, check_docs: bool =
     """
 
     # In domain - MS Marco + TREC DL
-    v1_dev = prepare_collection("irds.msmarco-passage.dev.small")
-    dl19 = prepare_dataset("irds.msmarco-passage.trec-dl-2019.judged")
-    dl20 = prepare_dataset("irds.msmarco-passage.trec-dl-2020.judged")
+    v1_dev = prepare_collection("com.microsoft.msmarco.passage.dev.small")
+    dl19 = prepare_dataset("com.microsoft.msmarco.passage.trec2019.judged")
+    dl20 = prepare_dataset("com.microsoft.msmarco.passage.trec2020.judged")
 
     v1_dev = get_fold(v1_dev, test_topic_nb, launcher=launcher)
     dl19 = get_fold(dl19, test_topic_nb, launcher=launcher)
     dl20 = get_fold(dl20, test_topic_nb, launcher=launcher)
 
-    # Out of domain - BEIR (optional)        
+    # Out of domain - BEIR (optional)
     if include_OOD:
-        beir = BEIR_13_tests(test_topic_nb, retrievers_only=retrievers_only, launcher=launcher)
-        robust04 = Robust04_test(test_topic_nb, retrievers_only=retrievers_only, launcher=launcher)
-        lotte = LoTTE_tests(test_topic_nb, retrievers_only=retrievers_only, launcher=launcher)
+        beir = BEIR_13_tests(
+            test_topic_nb, retrievers_only=retrievers_only, launcher=launcher
+        )
+        robust04 = Robust04_test(
+            test_topic_nb, retrievers_only=retrievers_only, launcher=launcher
+        )
+        lotte = LoTTE_tests(
+            test_topic_nb, retrievers_only=retrievers_only, launcher=launcher
+        )
     else:
         # Empty collection
         beir = EvaluationsCollection()
         robust04 = EvaluationsCollection()
         lotte = EvaluationsCollection()
 
-    paper_tests_res =  EvaluationsCollection(
-        msmarco_dev=Evaluations(v1_dev, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
-        trec2019=Evaluations(dl19, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
-        trec2020=Evaluations(dl20, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES),
+    paper_tests_res = EvaluationsCollection(
+        msmarco_dev=Evaluations(
+            v1_dev, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+        ),
+        trec2019=Evaluations(
+            dl19, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+        ),
+        trec2020=Evaluations(
+            dl20, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+        ),
         **beir.collection,
         **robust04.collection,
         **lotte.collection,
@@ -260,26 +319,26 @@ def build_tests(
     cfg: Evaluation,
     check_docs: bool = True,
     retrievers_only: bool = False,
-    launcher = None,
+    launcher=None,
 ) -> EvaluationsCollection:
     """Build the tests to use for evaluation during training or at the end of it.
     :param cfg: Configuration for the evaluation
     :param check_docs: Whether to check that documents are accessible (triggers downloads if needed)
     :returns: The evaluations collection to use
     """
-    
+
     if cfg.all_datasets or cfg.in_domain_only:
         return paper_tests(
-            cfg.test_max_topics, 
-            include_OOD = not cfg.in_domain_only,
+            cfg.test_max_topics,
+            include_OOD=not cfg.in_domain_only,
             check_docs=check_docs,
             retrievers_only=retrievers_only,
             launcher=launcher,
         )
     else:
         return minified_tests(
-            cfg.test_max_topics, 
-            check_docs=check_docs, 
+            cfg.test_max_topics,
+            check_docs=check_docs,
             retrievers_only=retrievers_only,
             launcher=launcher,
         )

@@ -1,12 +1,12 @@
-from typing import List
+from typing import List, Optional
 import logging
 from attrs import Factory
 from functools import partial
 import pandas as pd
+from pathlib import Path
 
 from experimaestro.launcherfinder import find_launcher
-
-
+from experimaestro import PathSerializationLWTask
 from datamaestro_ir.data import Documents
 
 from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
@@ -21,58 +21,77 @@ from xpmir.rankers import scorer_retriever, Retriever
 
 from format import dataframe_to_latex
 from tests import minified_tests, paper_tests
+
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from index_utils import get_splade_index
-
 
 logging.basicConfig(level=logging.INFO)
 
 
 @configuration()
-class BaselinesConfig(NeuralIRExperiment):
+class LocalEvalsConfig(NeuralIRExperiment):
     retrieval: Retrieval = Factory(Retrieval)
     indexation: Indexation = Factory(Indexation)
     preprocessing: Preprocessing = Factory(Preprocessing)
 
-    scorers_hf_id: List[str] = []
+    model_root: str = ""
+    """Root path for all models"""
 
-    retrievers_hf_id: List[str] = [""]
+    base: str = ""
+    """Identifier for the base model"""
+
+    max_doc_len: Optional[int] = None
+    """max len for scorer, default to 0 = max len of the model"""
+
+    models: List[str] = []
+    """List of directory names for the models to evaluate"""
+
+    retriever_hf_id: str = ""
+    """HF ID for the first-stage retriever (e.g. SPLADE). If empty, uses BM25."""
 
     evaluation: Evaluation = Factory(Evaluation)
 
-    retrievers_only: bool = False
-    """If true, only evaluate first-stage retrievers without cross-encoders"""
+
+class CELoader(PathSerializationLWTask):
+    def execute(self):
+        """Loads the model from disk using the given serialization path"""
+        import torch
+
+        # first initialize model structure (empty init)
+        self.value.initialize()
+        # then load state dict
+        logging.info("Loading model from disk: %s", self.path)
+        data = torch.load(self.path)
+
+        self.value.encoder.load_state_dict(data)
 
 
 @ir_experiment()
-def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
+def run(helper: IRExperimentHelper, cfg: LocalEvalsConfig) -> PaperResults:
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
 
+    # Build the tests
     if cfg.evaluation.all_datasets:
         tests = paper_tests(
             cfg.evaluation.test_max_topics,
             include_OOD=not cfg.evaluation.in_domain_only,
-            retrievers_only=cfg.retrievers_only,
             launcher=launcher_preprocessing,
         )
     else:
         tests = minified_tests(
             cfg.evaluation.test_max_topics,
             include_OOD=not cfg.evaluation.in_domain_only,
-            retrievers_only=cfg.retrievers_only,
             launcher=launcher_preprocessing,
         )
 
     model_based_retrievers = partial(
         scorer_retriever,
         batch_size=cfg.retrieval.batch_size,
-        # batcher=PowerAdaptativeBatcher.C(),
-    )  #: Model-based retrievers
+    )
 
     ### BM25 Retriever
-
     def bm25_retriever(name, documents: Documents) -> Retriever.C:
         return (
             anserini.AnseriniRetriever.C(
@@ -85,8 +104,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             .tag("data", documents.id)
         )
 
-    ### Build the retrievers list
-
+    ### SPLADE Retriever
     def splade_retriever(
         name,
         encoder,
@@ -97,7 +115,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             SparseRetriever.C(
                 index=get_splade_index(
                     documents,
-                    splade_encoder=splade_encoder,
+                    splade_encoder=encoder,
                     indexation_cfg=cfg.indexation,
                     launcher_index=launcher_index,
                     init_tasks=init_tasks,
@@ -111,56 +129,44 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             .tag("data", documents.id)
         )
 
-    all_retrievers = []
-
-    if len(cfg.retrievers_hf_id) > 0:
-        for retriever_hf_id in cfg.retrievers_hf_id:
-            if not retriever_hf_id:
-                continue
-
-            logging.info(f"Instantiating retriever {retriever_hf_id} ")
-            (
-                splade_encoder,
-                retriever_init_tasks,
-            ) = splade_encoder_from_pretrained_hf(retriever_hf_id)
-
-            all_retrievers.append(
-                (
-                    partial(
-                        splade_retriever,
-                        retriever_hf_id,
-                        splade_encoder,
-                        init_tasks=retriever_init_tasks,
-                    ),
-                    retriever_init_tasks,
-                )
-            )
-    else:
-        # add bm25 by default
-        all_retrievers.append((partial(bm25_retriever, "bm25"), []))
-
-    for retriever_factory, retriever_init_tasks in all_retrievers:
-        # Eval First stage only
-        tests.evaluate_retriever(
-            retriever_factory,
-            launcher=launcher_evaluate,
+    # Determine first-stage retriever
+    if cfg.retriever_hf_id:
+        logging.info(f"Instantiating retriever {cfg.retriever_hf_id}")
+        splade_encoder, retriever_init_tasks = splade_encoder_from_pretrained_hf(
+            cfg.retriever_hf_id
+        )
+        retriever_factory = partial(
+            splade_retriever,
+            cfg.retriever_hf_id,
+            splade_encoder,
             init_tasks=retriever_init_tasks,
         )
-        logging.info(f"First stage only evaluation done for {retriever_factory}")
-        logging.info(f"Evaluating model-based retrievers {cfg.scorers_hf_id}")
+    else:
+        logging.info("Using BM25 as first-stage retriever")
+        retriever_factory = partial(bm25_retriever, "bm25")
+        retriever_init_tasks = []
 
-        # Eval With cross-encoder
-        if cfg.retrievers_only:
-            if len(cfg.scorers_hf_id) > 0:
-                logging.warning(
-                    "Scorers specified in config but retrievers_only is True. Skipping cross-encoder evaluation."
-                )
-            continue
+    # Identify models to evaluate
+    root_path = Path(cfg.model_root)
 
-        for scorer_hf_id in cfg.scorers_hf_id:
+    if not cfg.models:
+        logging.warning("No models specified in the 'models' list.")
+
+    for model_name in cfg.models:
+        model_path = root_path / model_name
+        weights_path = model_path / "model_weights.pt"
+
+        if weights_path.exists():
+            logging.info(f"Evaluating model: {model_name} from {weights_path}")
             # Build the model
-            scorer, ce_init_tasks = hf_cross_scorer(hf_id=scorer_hf_id)
-            scorer.tag("scorer", scorer_hf_id)
+            scorer, ce_init_tasks = hf_cross_scorer(
+                hf_id=cfg.base, max_doc_length=cfg.max_doc_len
+            )
+            scorer.tag("scorer", model_name)
+
+            # Load the weights
+            load_task = CELoader.C(path=weights_path, value=scorer)
+            ce_init_tasks.append(load_task)
 
             # evaluate with the underlying First stage retriever
             tests.evaluate_retriever(
@@ -172,27 +178,39 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                 launcher=launcher_evaluate,
                 init_tasks=retriever_init_tasks + ce_init_tasks,
             )
+        elif (model_path / "config.json").exists():
+            logging.info(f"Evaluating model: {model_path} (HuggingFace format)")
+            # Build the model
+            scorer, ce_init_tasks = hf_cross_scorer(hf_id=str(model_path))
+            scorer.tag("scorer", Path(model_path).name)
+
+            # evaluate with the underlying First stage retriever
+            tests.evaluate_retriever(
+                partial(
+                    model_based_retrievers,
+                    scorer=scorer,
+                    retrievers=retriever_factory,
+                ),
+                launcher=launcher_evaluate,
+                init_tasks=retriever_init_tasks + ce_init_tasks,
+            )
+        else:
+            logging.warning(f"No valid model found in {model_path}, skipping")
 
     helper.xp.wait()
 
     df = tests.to_dataframe()
-
     if df.empty:
-        logging.info("No results found, Ending experiment")
+        logging.info("No results found")
         return
 
-    measures = ["AP", "RR@10", "nDCG@10"] if not cfg.retrievers_only else ["R@1000"]
+    measures = ["AP", "RR@10", "nDCG@10"]
     metric_cols = [("metric", measure) for measure in measures]
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
+
+    group_cols = ["dataset", ("tag", "first_stage"), ("tag", "scorer")]
     df_grouped = (
-        df.groupby(
-            (
-                ["dataset", ("tag", "first_stage"), ("tag", "scorer")]
-                if ("tag", "scorer") in df.columns
-                else ["dataset", ("tag", "first_stage")]
-            ),
-            dropna=False,
-        )[metric_cols]
+        df.groupby(group_cols, dropna=False)[metric_cols]
         .agg(["mean", "var"])
         .reset_index()
     )
@@ -204,17 +222,15 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
     output_file = helper.xp.resultspath / "results.csv"
     df_grouped.to_csv(output_file, index=False)
-    logging.info(f"Results saved to {output_file}")
 
     # Generate and save LaTeX table
     latex_table = dataframe_to_latex(
         df_grouped,
-        caption="Evaluation Results",
-        label="tab:eval_results",
-        sig_df=None,
-        metric_col="nDCG@10" if not cfg.retrievers_only else "R@1000",
+        caption="Evaluation Results for Local Models",
+        label="tab:local_eval_results",
+        metric_col="nDCG@10",
     )
-    latex_output_file = helper.xp.resultspath / "results.tex"
-    with open(latex_output_file, "w") as f:
+    with open(helper.xp.resultspath / "results.tex", "w") as f:
         f.write(latex_table)
-    logging.info(f"LaTeX table saved to {latex_output_file}")
+
+    return PaperResults(results=df_grouped)
