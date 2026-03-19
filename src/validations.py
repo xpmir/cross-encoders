@@ -30,7 +30,7 @@ NANO_BEIR = [
 def nano_msmarco_validation_datasets(cfg: ValidationSample, launcher=None):
     """Return validation over msmarco."""
 
-    dataset = prepare_collection("irds.nano-beir.msmarco")
+    dataset = prepare_collection("co.huggingface.nano-beir.msmarco")
     logger.info("Loaded: msmarco")
 
     random_folds = RandomFold.C(
@@ -54,7 +54,7 @@ def nanobeir_validation_datasets(cfg: ValidationSample, launcher=None):
 
     for dataset_name in NANO_BEIR:
         # Prepare dataset components
-        dataset = prepare_collection(f"irds.nano-beir.{dataset_name}")
+        dataset = prepare_collection(f"co.huggingface.nano-beir.{dataset_name}")
         logger.info(f"Loaded: {dataset_name}")
 
         random_folds[dataset_name] = RandomFold.C(
