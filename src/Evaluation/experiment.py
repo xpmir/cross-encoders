@@ -151,7 +151,9 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             retriever_name, eval_results
         )
 
-        logging.info(f"First stage only evaluation done for {retriever_factory}")
+        logging.info(
+            f"First stage only evaluation done for {retriever_factory} on datasets {run_retriever_factory.runs.keys()}"
+        )
         logging.info(f"Evaluating model-based retrievers {cfg.scorers_hf_id}")
 
         # Eval With cross-encoder
