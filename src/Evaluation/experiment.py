@@ -11,7 +11,7 @@ from datamaestro_ir.data import Documents
 
 from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
 from xpmir.index.sparse import SparseRetriever
-from xpmir.neural.splade import splade_encoder_from_pretrained_hf
+from xpmir.neural.splade import splade_encoder_from_pretrained_hf, SpladeTextEncoder
 from xpmir.papers import configuration
 from xpmir.papers.helpers import NeuralIRExperiment
 from xpmir.neural.huggingface import hf_cross_scorer
@@ -44,12 +44,59 @@ class BaselinesConfig(NeuralIRExperiment):
     """If true, only evaluate first-stage retrievers without cross-encoders"""
 
 
+### Contexual Retriever Factory
+def bm25_retriever(
+    cfg: BaselinesConfig, name: str, documents: Documents, launcher_index
+) -> Retriever.C:
+    return (
+        anserini.AnseriniRetriever.C(
+            k=cfg.retrieval.k,
+            model=BM25.C(),
+            index=anserini.index_builder(launcher=launcher_index)(documents),
+            store=documents,
+        )
+        .tag("first_stage", name)
+        .tag("data", documents.id)
+    )
+
+
+def splade_retriever(
+    cfg: BaselinesConfig,
+    name: str,
+    encoder: SpladeTextEncoder,
+    documents: Documents,
+    launcher_index,
+    init_tasks: list = None,
+    **kwargs,
+) -> Retriever.C:
+    """Factory for Splade Retriever, given the current configuration"""
+
+    return (
+        SparseRetriever.C(
+            index=get_splade_index(
+                documents,
+                splade_encoder=encoder,
+                indexation_cfg=cfg.indexation,
+                launcher_index=launcher_index,
+                init_tasks=init_tasks,
+            ),
+            topk=cfg.retrieval.k,
+            batchsize=1,
+            encoder=encoder,
+            in_memory=False,
+        )
+        .tag("first_stage", name)
+        .tag("data", documents.id)
+    )
+
+
 @ir_experiment()
 def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
 
+    # Built tests collections depending on config
     if cfg.evaluation.all_datasets:
         tests = paper_tests(
             cfg.evaluation.test_max_topics,
@@ -65,69 +112,28 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             launcher=launcher_preprocessing,
         )
 
-    model_based_retrievers = partial(
-        scorer_retriever,
-        batch_size=cfg.retrieval.batch_size,
-        # batcher=PowerAdaptativeBatcher.C(),
-    )  #: Model-based retrievers
-
-    ### BM25 Retriever
-
-    def bm25_retriever(name, documents: Documents) -> Retriever.C:
-        return (
-            anserini.AnseriniRetriever.C(
-                k=cfg.retrieval.k,
-                model=BM25.C(),
-                index=anserini.index_builder(launcher=launcher_index)(documents),
-                store=documents,
-            )
-            .tag("first_stage", name)
-            .tag("data", documents.id)
-        )
-
-    ### Build the retrievers list
-
-    def splade_retriever(
-        name, encoder, documents: Documents, init_tasks: list = None, **kwargs
-    ) -> Retriever.C:
-        return (
-            SparseRetriever.C(
-                index=get_splade_index(
-                    documents,
-                    splade_encoder=splade_encoder,
-                    indexation_cfg=cfg.indexation,
-                    launcher_index=launcher_index,
-                    init_tasks=init_tasks,
-                ),
-                topk=cfg.retrieval.k,
-                batchsize=1,
-                encoder=encoder,
-                in_memory=False,
-            )
-            .tag("first_stage", name)
-            .tag("data", documents.id)
-        )
-
+    # Built Retrievers - list of splade models or just bm25
     all_retrievers = []
-
     if len(cfg.retrievers_hf_id) > 0:
         for retriever_hf_id in cfg.retrievers_hf_id:
             if not retriever_hf_id:
                 continue
 
             logging.info(f"Instantiating retriever {retriever_hf_id} ")
-            (
-                splade_encoder,
-                retriever_init_tasks,
-            ) = splade_encoder_from_pretrained_hf(retriever_hf_id)
+
+            splade_encoder, retriever_init_tasks = splade_encoder_from_pretrained_hf(
+                retriever_hf_id
+            )
 
             all_retrievers.append(
                 (
                     retriever_hf_id,
                     partial(
                         splade_retriever,
+                        cfg,
                         retriever_hf_id,
                         splade_encoder,
+                        launcher_index=launcher_index,
                         init_tasks=retriever_init_tasks,
                     ),
                     retriever_init_tasks,
@@ -135,8 +141,15 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             )
     else:
         # add bm25 by default
-        all_retrievers.append(("bm25", partial(bm25_retriever, "bm25"), []))
+        all_retrievers.append(
+            (
+                "bm25",
+                partial(bm25_retriever, cfg, "bm25", launcher_index=launcher_index),
+                [],
+            )
+        )
 
+    # Evaluate First stage retrievers only and store the results to reuse them with a second stage cross-encoder
     for retriever_name, retriever_factory, retriever_init_tasks in all_retrievers:
         # Eval First stage only
         eval_results = tests.evaluate_retriever(
@@ -152,7 +165,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         )
 
         logging.info(
-            f"First stage only evaluation done for {retriever_factory} on datasets {run_retriever_factory.runs.keys()}"
+            f"First stage only evaluation done for {retriever_name} on datasets {list(run_retriever_factory.runs.keys())}"
         )
         logging.info(f"Evaluating model-based retrievers {cfg.scorers_hf_id}")
 
@@ -165,24 +178,28 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             continue
 
         for scorer_hf_id in cfg.scorers_hf_id:
-            # Build the model
+            # Build the cross encoder
             prepare_hf_model(scorer_hf_id)
             scorer, ce_init_tasks = hf_cross_scorer(hf_id=scorer_hf_id)
             scorer.tag("scorer", scorer_hf_id)
 
+            # Build the two stage retriever with the run_retriever
             two_stage_retriever_factory = partial(
-                model_based_retrievers,
+                scorer_retriever,
+                batch_size=cfg.retrieval.batch_size,
+                #   batcher=PowerAdaptativeBatcher.C(),
                 scorer=scorer,
                 retrievers=run_retriever_factory,
             )
 
-            # evaluate with the underlying First stage retriever
+            # Evaluate
             tests.evaluate_retriever(
                 two_stage_retriever_factory,
                 launcher=launcher_evaluate,
                 init_tasks=ce_init_tasks,
             )
 
+    # Wait for all tasks to complete
     helper.xp.wait()
 
     df = tests.to_dataframe()

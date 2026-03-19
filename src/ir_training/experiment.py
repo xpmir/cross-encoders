@@ -237,10 +237,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             )
 
             def splade_retriever(
-                name,
-                encoder,
-                topk,
-                documents: Documents,
+                name, encoder, topk, documents: Documents, key: str
             ) -> Retriever.C:
                 return (
                     SparseRetriever.C(
@@ -262,6 +259,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
             def splade_val_retrievers(
                 documents: Documents,
+                key: str,
                 *,
                 model: Model = None,
             ) -> Retriever.C:
@@ -363,6 +361,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         ### TRAINING CROSS ENCODER
 
         ce_trainer: LossTrainer = build_trainer(cfg)
+
         # Build the model
         scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
             hf_id=cfg.base, max_doc_length=cfg.max_doc_len

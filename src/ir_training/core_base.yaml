@@ -17,6 +17,7 @@ preprocessing:
 
 indexation:
     requirements: duration=8h & cpu(cores=4) & cuda(mem=20G)
+    batch_size: 128
 
 validation:
     # Use 500 topics for validation
