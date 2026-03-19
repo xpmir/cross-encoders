@@ -233,6 +233,9 @@ class Evaluation:
     all_datasets: bool = False
     """Whether to evaluate on all BEIR datasets (minus the 5 not publicly available)"""
 
+    nano_beir: bool = False
+    """Whether to evaluate on NanoBEIR datasets"""
+
 
 @configuration()
 class CE_FineTuning(RerankerMSMarcoV1Configuration):

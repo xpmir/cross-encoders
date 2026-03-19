@@ -20,7 +20,7 @@ import xpmir.interfaces.anserini as anserini
 from xpmir.rankers import scorer_retriever, Retriever
 
 from format import dataframe_to_latex
-from tests import minified_tests, paper_tests
+from tests import build_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from index_utils import get_splade_index
 from retrievers import MultiRunRetrieverFactory
@@ -97,20 +97,11 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
 
     # Built tests collections depending on config
-    if cfg.evaluation.all_datasets:
-        tests = paper_tests(
-            cfg.evaluation.test_max_topics,
-            include_OOD=not cfg.evaluation.in_domain_only,
-            retrievers_only=cfg.retrievers_only,
-            launcher=launcher_preprocessing,
-        )
-    else:
-        tests = minified_tests(
-            cfg.evaluation.test_max_topics,
-            include_OOD=not cfg.evaluation.in_domain_only,
-            retrievers_only=cfg.retrievers_only,
-            launcher=launcher_preprocessing,
-        )
+    tests = build_tests(
+        cfg.evaluation,
+        retrievers_only=cfg.retrievers_only,
+        launcher=launcher_preprocessing,
+    )
 
     # Built Retrievers - list of splade models or just bm25
     all_retrievers = []

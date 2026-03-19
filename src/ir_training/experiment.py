@@ -208,6 +208,55 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         )
 
 
+def bm25_retriever(
+    cfg: CE_FineTuning,
+    name: str,
+    documents: Documents,
+    launcher_index,
+    topk: int = None,
+    **kwargs,
+) -> Retriever.C:
+    """Factory for BM25 Retriever, given the current configuration"""
+    return (
+        anserini.AnseriniRetriever.C(
+            k=topk or cfg.retrieval.k,
+            model=BM25.C(),
+            index=anserini.index_builder(launcher=launcher_index)(documents),
+            store=documents,
+        )
+        .tag("first_stage", name)
+        .tag("data", documents.id)
+    )
+
+
+def splade_retriever(
+    cfg: CE_FineTuning,
+    name: str,
+    encoder: Model,
+    documents: Documents,
+    launcher_index,
+    init_tasks: list = None,
+    topk: int = None,
+    in_memory: bool = False,
+    **kwargs,
+) -> Retriever.C:
+    """Factory for Splade Retriever, given the current configuration"""
+
+    return SparseRetriever.C(
+        index=get_splade_index(
+            documents,
+            splade_encoder=encoder,
+            indexation_cfg=cfg.indexation,
+            launcher_index=launcher_index,
+            init_tasks=init_tasks,
+        ),
+        topk=topk or cfg.retrieval.k,
+        batchsize=1,
+        encoder=encoder,
+        in_memory=in_memory,
+    ).tag("first_stage", name)
+
+
 @learning_experiment()
 def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     launcher_index = find_launcher(cfg.indexation.requirements)
@@ -231,112 +280,65 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
 
         if cfg.retriever:
             # We don't use BM25, but a given sparse retriever
-
+            retriever_tag = cfg.retriever
             splade_encoder, retriever_init_tasks = splade_encoder_from_pretrained_hf(
                 cfg.retriever
             )
 
-            def splade_retriever(
-                name, encoder, topk, documents: Documents, key: str
-            ) -> Retriever.C:
-                return (
-                    SparseRetriever.C(
-                        index=get_splade_index(
-                            documents,
-                            splade_encoder=splade_encoder,
-                            indexation_cfg=cfg.indexation,
-                            launcher_index=launcher_index,
-                            init_tasks=retriever_init_tasks,
-                        ),
-                        topk=topk,
-                        batchsize=1,
-                        encoder=encoder,
-                        in_memory=False,
-                    )
-                    .tag("first_stage", name)
-                    .tag("data", documents.id)
-                )
-
-            def splade_val_retrievers(
-                documents: Documents,
-                key: str,
-                *,
-                model: Model = None,
-            ) -> Retriever.C:
-                return SparseRetriever.C(
-                    index=get_splade_index(
-                        documents,
-                        splade_encoder=splade_encoder,
-                        indexation_cfg=cfg.indexation,
-                        launcher_index=launcher_index,
-                        init_tasks=retriever_init_tasks,
-                    ),
-                    topk=cfg.learner.validation_top_k,
-                    batchsize=1,
-                    encoder=model,
-                    in_memory=True,
-                )
-
-            retriever_tag = cfg.retriever
-
             # Caches the Splade index task for a document collection
             val_retrievers_factory = partial(
-                splade_val_retrievers,
-                model=splade_encoder,
+                splade_retriever,
+                cfg,
+                retriever_tag,
+                splade_encoder,
+                launcher_index=launcher_index,
+                init_tasks=retriever_init_tasks,
+                topk=cfg.learner.validation_top_k,
+                in_memory=True,
             )
 
-            test_retrievers = partial(
-                splade_retriever, retriever_tag, splade_encoder, cfg.retrieval.k
-            )
-        else:
-            base_model = BM25.C()
-            retriever_init_tasks = []  # no init task for BM25
-
-            def bm25_retriever(name, documents: Documents) -> Retriever.C:
-                return (
-                    anserini.AnseriniRetriever.C(
-                        k=cfg.retrieval.k,
-                        model=base_model,
-                        index=anserini.index_builder(launcher=launcher_index)(
-                            documents
-                        ),
-                        store=documents,
-                    )
-                    .tag("first_stage", name)
-                    .tag("data", documents.id)
-                )
-
-            val_retrievers_factory = partial(
-                anserini.retriever,
-                anserini.index_builder(launcher=launcher_index),
-                model=base_model,
-            )
-            retriever_tag = "bm25"
-
-            test_retrievers = partial(bm25_retriever, retriever_tag)
-
-            # evaluate base retrievers alone
-            tests.evaluate_retriever(
-                test_retrievers,
-                launcher=launcher_evaluate,
+            test_retrievers_factory = partial(
+                splade_retriever,
+                cfg,
+                retriever_tag,
+                splade_encoder,
+                launcher_index=launcher_index,
+                topk=cfg.retrieval.k,
                 init_tasks=retriever_init_tasks,
             )
+        else:
+            retriever_tag = "bm25"
+            retriever_init_tasks = []  # no init task for BM25
+
+            val_retrievers_factory = partial(
+                bm25_retriever,
+                cfg,
+                retriever_tag,
+                launcher_index=launcher_index,
+                topk=cfg.learner.validation_top_k,
+            )
+
+            test_retrievers_factory = partial(
+                bm25_retriever,
+                cfg,
+                retriever_tag,
+                launcher_index=launcher_index,
+                topk=cfg.retrieval.k,
+            )
+
+        # evaluate base retrievers alone
+        tests.evaluate_retriever(
+            test_retrievers_factory,
+            launcher=launcher_evaluate,
+            init_tasks=retriever_init_tasks,
+        )
 
         ### Validation ###
         if cfg.learner.validation == Validation.MSMARCO.value:
             ds_val, validation_documents = nano_msmarco_validation_datasets(
                 cfg.validation, launcher=launcher_preprocessing
             )
-
-            if cfg.retriever:
-                # We don't use BM25, but a given sparse retriever
-                val_retrievers = val_retrievers_factory
-            else:
-                val_retrievers = partial(
-                    val_retrievers_factory,
-                    store=validation_documents,
-                    k=cfg.learner.validation_top_k,
-                )
+            val_retrievers = val_retrievers_factory
 
         # NanoBEIR validation datasets
         elif cfg.learner.validation in [
@@ -361,7 +363,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         ### TRAINING CROSS ENCODER
 
         ce_trainer: LossTrainer = build_trainer(cfg)
-
         # Build the model
         scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
             hf_id=cfg.base, max_doc_length=cfg.max_doc_len
@@ -394,15 +395,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             ):
                 validations = []
                 for name, ds_val_zs, val_docs in nb_val_items:
-                    if cfg.retriever:
-                        # We don't use BM25, but a given sparse retriever
-                        val_retriever_ood = val_retrievers_factory
-                    else:
-                        val_retriever_ood = partial(
-                            val_retrievers_factory,
-                            store=val_docs,
-                            k=cfg.learner.validation_top_k,
-                        )
+                    val_retriever_ood = val_retrievers_factory
 
                     retriever = model_based_retrievers(
                         documents=val_docs,
@@ -511,7 +504,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                         partial(
                             model_based_retrievers,
                             scorer=scorer_model,
-                            retrievers=test_retrievers,
+                            retrievers=test_retrievers_factory,
                         ),
                         launcher_evaluate,
                         model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",

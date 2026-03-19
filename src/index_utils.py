@@ -11,7 +11,7 @@ def get_splade_index(
     splade_encoder,
     indexation_cfg,
     launcher_index,
-    init_tasks: list = None,
+    init_tasks: list = [],
 ):
     """Build an index for given documents, using a given Sparse retriever model
     Caches it to avoid submitting job twice.
@@ -24,7 +24,7 @@ def get_splade_index(
         documents=documents,
         ordered_index=False,
         max_docs=indexation_cfg.max_indexed,
-    ).tag("data", documents.id)
+    )
 
     indexer_id = index_cfg.__identifier__()
 

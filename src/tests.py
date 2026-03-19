@@ -315,6 +315,38 @@ def paper_tests(
     return paper_tests_res
 
 
+@lru_cache
+def nano_beir_tests(
+    test_topic_nb: int, retrievers_only: bool = False, launcher=None
+) -> EvaluationsCollection:
+    """NanoBEIR datasets"""
+
+    names = [
+        "nano-arguana",
+        "nano-climate-fever",
+        "nano-dbpedia-entity",
+        "nano-fever",
+        "nano-fiqa",
+        "nano-hotpotqa",
+        "nano-msmarco",
+        "nano-nfcorpus",
+        "nano-nq",
+        "nano-quora",
+        "nano-scidocs",
+        "nano-scifact",
+        "nano-webis-touche2020",
+    ]
+    NANO_BEIR_NAMES = {name: name.replace("nano-", "") for name in names}
+    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+    evals = {}
+    for name in names:
+        ds = prepare_dataset(f"co.huggingface.nano-beir.{NANO_BEIR_NAMES[name]}")
+        ds = get_fold(ds, test_topic_nb, launcher=launcher)
+        evals[name.replace("-", "_")] = Evaluations(ds, measures=measures)
+
+    return EvaluationsCollection(**evals)
+
+
 def build_tests(
     cfg: Evaluation,
     check_docs: bool = True,
@@ -326,6 +358,11 @@ def build_tests(
     :param check_docs: Whether to check that documents are accessible (triggers downloads if needed)
     :returns: The evaluations collection to use
     """
+
+    if cfg.nano_beir:
+        return nano_beir_tests(
+            cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
+        )
 
     if cfg.all_datasets or cfg.in_domain_only:
         return paper_tests(
