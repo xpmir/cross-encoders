@@ -23,7 +23,7 @@ from format import dataframe_to_latex
 from tests import minified_tests, paper_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from index_utils import get_splade_index
-
+from retrievers import MultiRunRetrieverFactory
 
 logging.basicConfig(level=logging.INFO)
 
@@ -88,10 +88,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     ### Build the retrievers list
 
     def splade_retriever(
-        name,
-        encoder,
-        documents: Documents,
-        init_tasks: list = None,
+        name, encoder, documents: Documents, init_tasks: list = None, **kwargs
     ) -> Retriever.C:
         return (
             SparseRetriever.C(
@@ -126,6 +123,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
             all_retrievers.append(
                 (
+                    retriever_hf_id,
                     partial(
                         splade_retriever,
                         retriever_hf_id,
@@ -137,15 +135,22 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             )
     else:
         # add bm25 by default
-        all_retrievers.append((partial(bm25_retriever, "bm25"), []))
+        all_retrievers.append(("bm25", partial(bm25_retriever, "bm25"), []))
 
-    for retriever_factory, retriever_init_tasks in all_retrievers:
+    for retriever_name, retriever_factory, retriever_init_tasks in all_retrievers:
         # Eval First stage only
-        tests.evaluate_retriever(
+        eval_results = tests.evaluate_retriever(
             retriever_factory,
             launcher=launcher_evaluate,
             init_tasks=retriever_init_tasks,
+            with_run=True,
         )
+
+        # Create a MultiRunRetrieverFactory storing results from first stage
+        run_retriever_factory = MultiRunRetrieverFactory.from_results(
+            retriever_name, eval_results
+        )
+
         logging.info(f"First stage only evaluation done for {retriever_factory}")
         logging.info(f"Evaluating model-based retrievers {cfg.scorers_hf_id}")
 
@@ -163,15 +168,17 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             scorer, ce_init_tasks = hf_cross_scorer(hf_id=scorer_hf_id)
             scorer.tag("scorer", scorer_hf_id)
 
+            two_stage_retriever_factory = partial(
+                model_based_retrievers,
+                scorer=scorer,
+                retrievers=run_retriever_factory,
+            )
+
             # evaluate with the underlying First stage retriever
             tests.evaluate_retriever(
-                partial(
-                    model_based_retrievers,
-                    scorer=scorer,
-                    retrievers=retriever_factory,
-                ),
+                two_stage_retriever_factory,
                 launcher=launcher_evaluate,
-                init_tasks=retriever_init_tasks + ce_init_tasks,
+                init_tasks=ce_init_tasks,
             )
 
     helper.xp.wait()
