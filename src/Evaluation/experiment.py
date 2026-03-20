@@ -48,16 +48,12 @@ class BaselinesConfig(NeuralIRExperiment):
 def bm25_retriever(
     cfg: BaselinesConfig, name: str, documents: Documents, launcher_index
 ) -> Retriever.C:
-    return (
-        anserini.AnseriniRetriever.C(
-            k=cfg.retrieval.k,
-            model=BM25.C(),
-            index=anserini.index_builder(launcher=launcher_index)(documents),
-            store=documents,
-        )
-        .tag("first_stage", name)
-        .tag("data", documents.id)
-    )
+    return anserini.AnseriniRetriever.C(
+        k=cfg.retrieval.k,
+        model=BM25.C(),
+        index=anserini.index_builder(launcher=launcher_index)(documents),
+        store=documents,
+    ).tag("first_stage", name)
 
 
 def splade_retriever(
@@ -71,23 +67,19 @@ def splade_retriever(
 ) -> Retriever.C:
     """Factory for Splade Retriever, given the current configuration"""
 
-    return (
-        SparseRetriever.C(
-            index=get_splade_index(
-                documents,
-                splade_encoder=encoder,
-                indexation_cfg=cfg.indexation,
-                launcher_index=launcher_index,
-                init_tasks=init_tasks,
-            ),
-            topk=cfg.retrieval.k,
-            batchsize=1,
-            encoder=encoder,
-            in_memory=False,
-        )
-        .tag("first_stage", name)
-        .tag("data", documents.id)
-    )
+    return SparseRetriever.C(
+        index=get_splade_index(
+            documents,
+            splade_encoder=encoder,
+            indexation_cfg=cfg.indexation,
+            launcher_index=launcher_index,
+            init_tasks=init_tasks,
+        ),
+        topk=cfg.retrieval.k,
+        batchsize=1,
+        encoder=encoder,
+        in_memory=False,
+    ).tag("first_stage", name)
 
 
 @ir_experiment()

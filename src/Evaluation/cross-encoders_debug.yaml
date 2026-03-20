@@ -32,4 +32,4 @@ evaluation:
   #just for debugging
   test_max_topics: 100
   all_datasets: true
-  in_domain_only: true
+  in_domain: true

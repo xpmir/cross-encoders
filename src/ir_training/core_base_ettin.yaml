@@ -22,8 +22,8 @@ retrieval:
     k: 100
 
 evaluation:
-    all_datasets: false
-    in_domain_only: true
+    in_domain: true
+    nano_beir: true
 
 #### Params that are grid searched
 grid_search:

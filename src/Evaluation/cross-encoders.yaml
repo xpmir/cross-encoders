@@ -32,7 +32,6 @@ retrieval:
 
 evaluation:
   #just for debugging
-  nano_beir: true
   test_max_topics: 100
-  all_datasets: true
-  in_domain_only: true
+  nano_beir: true
+  in_domain: true

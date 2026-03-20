@@ -7,23 +7,19 @@ from pathlib import Path
 
 from experimaestro.launcherfinder import find_launcher
 from experimaestro import PathSerializationLWTask
-from datamaestro_ir.data import Documents
 
 from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
-from xpmir.index.sparse import SparseRetriever
-from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 from xpmir.papers.helpers import NeuralIRExperiment
 from xpmir.neural.huggingface import hf_cross_scorer
-from xpmir.rankers.standard import BM25
-import xpmir.interfaces.anserini as anserini
-from xpmir.rankers import scorer_retriever, Retriever
+from xpmir.rankers import scorer_retriever
 
+from Evaluation.experiment import bm25_retriever, splade_retriever
 from format import dataframe_to_latex
 from tests import minified_tests, paper_tests
 
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
-from index_utils import get_splade_index
+from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
 logging.basicConfig(level=logging.INFO)
 
@@ -76,57 +72,12 @@ def run(helper: IRExperimentHelper, cfg: LocalEvalsConfig) -> PaperResults:
     if cfg.evaluation.all_datasets:
         tests = paper_tests(
             cfg.evaluation.test_max_topics,
-            include_OOD=not cfg.evaluation.in_domain_only,
             launcher=launcher_preprocessing,
         )
     else:
         tests = minified_tests(
             cfg.evaluation.test_max_topics,
-            include_OOD=not cfg.evaluation.in_domain_only,
             launcher=launcher_preprocessing,
-        )
-
-    model_based_retrievers = partial(
-        scorer_retriever,
-        batch_size=cfg.retrieval.batch_size,
-    )
-
-    ### BM25 Retriever
-    def bm25_retriever(name, documents: Documents) -> Retriever.C:
-        return (
-            anserini.AnseriniRetriever.C(
-                k=cfg.retrieval.k,
-                model=BM25.C(),
-                index=anserini.index_builder(launcher=launcher_index)(documents),
-                store=documents,
-            )
-            .tag("first_stage", name)
-            .tag("data", documents.id)
-        )
-
-    ### SPLADE Retriever
-    def splade_retriever(
-        name,
-        encoder,
-        documents: Documents,
-        init_tasks: list = None,
-    ) -> Retriever.C:
-        return (
-            SparseRetriever.C(
-                index=get_splade_index(
-                    documents,
-                    splade_encoder=encoder,
-                    indexation_cfg=cfg.indexation,
-                    launcher_index=launcher_index,
-                    init_tasks=init_tasks,
-                ),
-                topk=cfg.retrieval.k,
-                batchsize=1,
-                encoder=encoder,
-                in_memory=False,
-            )
-            .tag("first_stage", name)
-            .tag("data", documents.id)
         )
 
     # Determine first-stage retriever
@@ -137,13 +88,17 @@ def run(helper: IRExperimentHelper, cfg: LocalEvalsConfig) -> PaperResults:
         )
         retriever_factory = partial(
             splade_retriever,
+            cfg,
             cfg.retriever_hf_id,
             splade_encoder,
+            launcher_index=launcher_index,
             init_tasks=retriever_init_tasks,
         )
     else:
         logging.info("Using BM25 as first-stage retriever")
-        retriever_factory = partial(bm25_retriever, "bm25")
+        retriever_factory = partial(
+            bm25_retriever, cfg, "bm25", launcher_index=launcher_index
+        )
         retriever_init_tasks = []
 
     # Identify models to evaluate
@@ -171,9 +126,10 @@ def run(helper: IRExperimentHelper, cfg: LocalEvalsConfig) -> PaperResults:
             # evaluate with the underlying First stage retriever
             tests.evaluate_retriever(
                 partial(
-                    model_based_retrievers,
+                    scorer_retriever,
                     scorer=scorer,
                     retrievers=retriever_factory,
+                    batch_size=cfg.retrieval.batch_size,
                 ),
                 launcher=launcher_evaluate,
                 init_tasks=retriever_init_tasks + ce_init_tasks,
@@ -187,9 +143,10 @@ def run(helper: IRExperimentHelper, cfg: LocalEvalsConfig) -> PaperResults:
             # evaluate with the underlying First stage retriever
             tests.evaluate_retriever(
                 partial(
-                    model_based_retrievers,
+                    scorer_retriever,
                     scorer=scorer,
                     retrievers=retriever_factory,
+                    batch_size=cfg.retrieval.batch_size,
                 ),
                 launcher=launcher_evaluate,
                 init_tasks=retriever_init_tasks + ce_init_tasks,

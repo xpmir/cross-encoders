@@ -1,18 +1,17 @@
 id: comparison_precision
 title: "Validation comparison experiment for MiniLM"
-description: 
+description:
     Using the best parameters from the grid search for MiniLM
     we run additional trainings validating on nanobeir to see the impact on OOD.
 
 module: ir_training.experiment
 pre_experiment: pre_experiment
-pre_experiment: pre_experiment
 
 
-seed: 12 # To mimick the HF xp 
+seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
-retriever: "naver/splade-v3-distilbert" 
+retriever: "naver/splade-v3-distilbert"
 base: microsoft/MiniLM-L12-H384-uncased # microsoft/MiniLM-L12-H384-uncased microsoft/deberta-v3-base
 
 preprocessing:
@@ -52,18 +51,17 @@ retrieval:
 
 evaluation:
     all_datasets: false
-    in_domain_only: true
     test_max_topics: 100
 
 
-#### Params that are grid searched 
+#### Params that are grid searched
 grid_search:
-    base: 
-        values_list: 
+    base:
+        values_list:
             - microsoft/MiniLM-L12-H384-uncased
             - microsoft/deberta-v3-base
     learner.precision :
-        values_list: 
+        values_list:
             - bf16-true
             - bf16-mixed
             - 32-true

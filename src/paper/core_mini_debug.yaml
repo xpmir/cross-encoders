@@ -1,10 +1,10 @@
 parent: core_mini # load configuration from core base.
 id: core_mini_debug
 title: "Validation comparison experiment"
-description: 
+description:
     Compare initial experiment with new version of code (should be faster)
 
-seed: 12 # To mimick the HF xp 
+seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
 ### Overrides parameters from core_base
@@ -24,15 +24,15 @@ retrieval:
     k: 1000
 
 evaluation:
-    in_domain_only: true
+    in_domain: true
 
 
 #### Empty grid search overriding core_mini
 
-#### Params that are grid searched 
+#### Params that are grid searched
 grid_search:
-    base: 
-        values_list: 
+    base:
+        values_list:
             - jhu-clsp/ettin-encoder-32m
 
     learner.loss:

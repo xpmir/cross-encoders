@@ -1,16 +1,16 @@
 id: validation_bert
 title: "Validation comparison experiment"
-description: 
+description:
     Using the best parameters from the grid search for MiniLM
     we run additional trainings validating on nanobeir to see the impact on OOD.
 
 module: ir_training.experiment
 pre_experiment: pre_experiment
 
-seed: 12 # To mimick the HF xp 
+seed: 12 # To mimick the HF xp
 nb_repetitions: 3
 
-retriever: "naver/splade-v3-distilbert" 
+retriever: "naver/splade-v3-distilbert"
 base: bert-base-uncased
 
 preprocessing:
@@ -50,7 +50,6 @@ retrieval:
 
 evaluation:
     all_datasets: true
-    in_domain_only: false
 
 grid_search:
     learner.loss:

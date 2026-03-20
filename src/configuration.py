@@ -227,14 +227,20 @@ class Evaluation:
     test_max_topics: int = 0
     """Development test size (0 to leave it like this)"""
 
-    in_domain_only: bool = False
-    """Whether to evaluate only on in-domain datasets (MSMarco, TREC DL 19 and 20)"""
-
     all_datasets: bool = False
     """Whether to evaluate on all BEIR datasets (minus the 5 not publicly available)"""
 
     nano_beir: bool = False
     """Whether to evaluate on NanoBEIR datasets"""
+
+    beir13: bool = False
+    """Whether to evaluate on all BEIR13 datasets"""
+
+    in_domain: bool = False
+    """Whether to evaluate on in-domain datasets (MSMarco, TREC DL 19 and 20)"""
+
+    datasets: List[str] = Factory(list)
+    """List of specific datasets to evaluate on"""
 
 
 @configuration()

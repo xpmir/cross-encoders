@@ -17,7 +17,6 @@ retrieval:
 
 evaluation:
     all_datasets: true
-    in_domain_only: false
 
 #### Params that are grid searched
 grid_search:

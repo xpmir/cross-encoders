@@ -5,12 +5,13 @@ import shutil
 import yaml
 from functools import partial
 from pathlib import Path
+from typing import Any
 from attrs import asdict
 import numpy as np
 import pandas as pd
 from jinja2 import Template
 
-from experimaestro import setmeta
+from experimaestro import setmeta, stop_tags
 from experimaestro.annotations import tags as get_tags
 from experimaestro.launcherfinder import find_launcher
 
@@ -25,6 +26,7 @@ from xpm_torch.learner import Learner
 from xpm_torch.trainers.batchwise import BatchwiseTrainer
 from xpm_torch.trainers.pairwise import PairwiseTrainer
 
+from xpmir.papers import configuration
 from xpmir.papers.helpers.samplers import (
     msmarco_colbertv2_annotated,
     msmarco_rankdistillm_colbert_top50,
@@ -49,10 +51,13 @@ from xpmir.letor.distillation.pairwise import (
 )
 from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
+from xpmir.evaluation import Evaluations, EvaluationsCollection
+
+from retrievers import MultiRunRetrieverFactory
 
 
 from configuration import Losses, CE_FineTuning, Validation, generate_grid
-from tests import build_tests
+from tests import build_tests, CE_MEASURES
 from format import dataframe_to_latex, aggregation_hf
 from validations import nano_msmarco_validation_datasets, nanobeir_validation_datasets
 from index_utils import get_splade_index
@@ -68,16 +73,6 @@ def get_task_by_tags(tasks: list, tags: dict):
         if all(str(task_tags.get(tag)) == str(value) for tag, value in tags.items()):
             return task
     return None
-
-
-def get_model_based_retrievers(cfg: CE_FineTuning):
-    model_based_retrievers = partial(
-        scorer_retriever,
-        batch_size=cfg.retrieval.batch_size,
-        # batcher=PowerAdaptativeBatcher.C(),
-    )  #: Model-based retrievers
-
-    return model_based_retrievers
 
 
 def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
@@ -217,16 +212,12 @@ def bm25_retriever(
     **kwargs,
 ) -> Retriever.C:
     """Factory for BM25 Retriever, given the current configuration"""
-    return (
-        anserini.AnseriniRetriever.C(
-            k=topk or cfg.retrieval.k,
-            model=BM25.C(),
-            index=anserini.index_builder(launcher=launcher_index)(documents),
-            store=documents,
-        )
-        .tag("first_stage", name)
-        .tag("data", documents.id)
-    )
+    return anserini.AnseriniRetriever.C(
+        k=topk or cfg.retrieval.k,
+        model=BM25.C(),
+        index=anserini.index_builder(launcher=launcher_index)(documents),
+        store=documents,
+    ).tag("first_stage", name)
 
 
 def splade_retriever(
@@ -257,6 +248,89 @@ def splade_retriever(
     ).tag("first_stage", name)
 
 
+@configuration()
+class ValidationSet:
+    cfg: CE_FineTuning
+    items: list[tuple[str, Any, Any]]  # (name, dataset, documents)
+
+    @classmethod
+    def load(cls, cfg: CE_FineTuning, launcher):
+        items = []
+        if cfg.learner.validation == Validation.MSMARCO.value:
+            ds_val, docs = nano_msmarco_validation_datasets(
+                cfg.validation, launcher=launcher
+            )
+            items.append(("msmarco", ds_val, docs))
+        elif cfg.learner.validation in [
+            Validation.NanoBEIR.value,
+            Validation.ALL.value,
+        ]:
+            validations, documents = nanobeir_validation_datasets(
+                cfg.validation, launcher=launcher
+            )
+            for name in validations:
+                items.append((name, validations[name], documents[name]))
+        return cls(cfg=cfg, items=items)
+
+    def to_evaluations(self) -> EvaluationsCollection:
+        """Returns an EvaluationsCollection for the validation datasets"""
+        evals = {}
+        for name, ds, _ in self.items:
+            # Use standard measures for validation evaluations
+            evals[name] = Evaluations(ds, measures=CE_MEASURES)
+        return EvaluationsCollection(**evals)
+
+    def build_listeners(
+        self,
+        scorer_model,
+        val_retrievers_factory,
+        retriever_tag,
+    ) -> tuple[list[ValidationListener], dict[str, ValidationListener]]:
+        listeners = []
+        msmarco_validation = None
+
+        for name, ds, docs in self.items:
+            # build the listener
+            retriever = scorer_retriever(
+                documents=docs,
+                retrievers=val_retrievers_factory,
+                scorer=scorer_model,
+                batch_size=self.cfg.retrieval.batch_size,
+            ).tag("first_stage", retriever_tag)
+
+            listener = ValidationListener.C(
+                id=f"bestval_zs_{name}"
+                if len(self.items) > 1
+                else "bestval",  # Maintain ID compatibility
+                dataset=ds,
+                retriever=stop_tags(retriever),  # remove dependency
+                validation_interval=self.cfg.learner.validation_interval,
+                metrics={"nDCG": True, "RR@10": False},
+            )
+            listeners.append(listener)
+            if name == "msmarco":
+                msmarco_validation = listener
+
+        tracked_validations = {}
+        if self.cfg.learner.validation in [
+            Validation.NanoBEIR.value,
+            Validation.ALL.value,
+        ]:
+            aggregator = AggregatorValidationListener.C(
+                listeners=listeners,
+                id="aggregated_validation",
+                validation_interval=self.cfg.learner.validation_interval,
+                metrics={"nDCG": True, "RR@10": False},
+            )
+            listeners.append(aggregator)
+            tracked_validations["nano-beir"] = aggregator
+
+        if msmarco_validation:
+            tracked_validations["msmarco"] = msmarco_validation
+
+        return listeners, tracked_validations
+
+
 @learning_experiment()
 def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     launcher_index = find_launcher(cfg.indexation.requirements)
@@ -274,9 +348,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         helper: LearningExperimentHelper, cfg: CE_FineTuning, grid_search_id: str
     ):
         """Main process for Cross-encoder training"""
-
-        # Setup indices and validation/test base retrievers
-        model_based_retrievers = get_model_based_retrievers(cfg)
 
         if cfg.retriever:
             # We don't use BM25, but a given sparse retriever
@@ -326,39 +397,30 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 topk=cfg.retrieval.k,
             )
 
-        # evaluate base retrievers alone
-        tests.evaluate_retriever(
+        # evaluate base retrievers alone and precompute runs for faster evaluation
+        logging.info(f"Precomputing first stage runs for {retriever_tag}")
+        test_runs = tests.evaluate_retriever(
             test_retrievers_factory,
             launcher=launcher_evaluate,
             init_tasks=retriever_init_tasks,
+            with_run=True,
+        )
+        test_run_retriever_factory = MultiRunRetrieverFactory.from_results(
+            retriever_tag, test_runs
         )
 
         ### Validation ###
-        if cfg.learner.validation == Validation.MSMARCO.value:
-            ds_val, validation_documents = nano_msmarco_validation_datasets(
-                cfg.validation, launcher=launcher_preprocessing
-            )
-            val_retrievers = val_retrievers_factory
-
-        # NanoBEIR validation datasets
-        elif cfg.learner.validation in [
-            Validation.NanoBEIR.value,
-            Validation.ALL.value,
-        ]:
-            validations, validation_documents = nanobeir_validation_datasets(
-                cfg.validation, launcher=launcher_preprocessing
-            )
-
-            # Build a simple list of (name, validation_dataset, documents) for later use
-            nb_val_items = [
-                (name, validations[name], validation_documents[name])
-                for name in validations.keys()
-            ]
-
-        else:
-            raise NotImplementedError(
-                f"Validation dataset {cfg.learner.validation} is not implemented yet."
-            )
+        validation_set = ValidationSet.load(cfg, launcher_preprocessing)
+        val_tests = validation_set.to_evaluations()
+        val_runs = val_tests.evaluate_retriever(
+            val_retrievers_factory,
+            launcher=launcher_evaluate,
+            init_tasks=retriever_init_tasks,
+            with_run=True,
+        )
+        val_run_retriever_factory = MultiRunRetrieverFactory.from_results(
+            retriever_tag, val_runs
+        )
 
         ### TRAINING CROSS ENCODER
 
@@ -377,57 +439,11 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             # The validation listener evaluates the full retriever
             # (retriever + scorer) and keep the best performing model
             # on the validation set
-            if cfg.learner.validation == Validation.MSMARCO.value:
-                msmarco_validation = ValidationListener.C(
-                    id="bestval",
-                    dataset=ds_val,
-                    retriever=model_based_retrievers(
-                        documents=validation_documents,
-                        retrievers=val_retrievers,
-                        scorer=scorer_model,
-                    ).tag("first_stage", retriever_tag),
-                    validation_interval=cfg.learner.validation_interval,
-                    metrics={"RR@10": True, "AP": False, "nDCG": False},
-                ).tag("validation", "msmarco")
-            elif (
-                cfg.learner.validation == Validation.NanoBEIR.value
-                or cfg.learner.validation == Validation.ALL.value
-            ):
-                validations = []
-                for name, ds_val_zs, val_docs in nb_val_items:
-                    val_retriever_ood = val_retrievers_factory
-
-                    retriever = model_based_retrievers(
-                        documents=val_docs,
-                        retrievers=val_retriever_ood,
-                        scorer=scorer_model,
-                    ).tag("first_stage", retriever_tag)
-
-                    listener = ValidationListener.C(
-                        id=f"bestval_zs_{name}",
-                        dataset=ds_val_zs,
-                        retriever=retriever,
-                        validation_interval=cfg.learner.validation_interval,
-                        metrics={"RR@10": True, "AP": False, "nDCG": False},
-                    )
-                    validations.append(listener)
-
-                    if name == "msmarco":
-                        msmarco_validation = listener
-
-                # Aggregator includes the main (if present) plus all per-dataset listeners
-                aggregator_validation = AggregatorValidationListener.C(
-                    listeners=validations,
-                    id="aggregated_validation",
-                    validation_interval=cfg.learner.validation_interval,
-                    metrics={"RR@10": True, "AP": False, "nDCG": False},
-                )
-
-                validations.append(aggregator_validation)
-            else:
-                raise NotImplementedError(
-                    f"Validation dataset {cfg.learner.validation} is not implemented yet."
-                )
+            validations, tracked_validations = validation_set.build_listeners(
+                scorer_model,
+                val_run_retriever_factory,
+                retriever_tag,
+            )
 
             hooks = [setmeta(GradientLogHook.C(), True)]
 
@@ -449,11 +465,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                 max_epochs=cfg.learner.optimization.max_epochs,
                 checkpoint_interval=cfg.learner.checkpoint_interval,
                 # The listeners (here, for validation)
-                listeners=(
-                    [msmarco_validation]
-                    if cfg.learner.validation == Validation.MSMARCO.value
-                    else validations
-                ),
+                listeners=stop_tags(validations),  # don't grab tags for validation
                 # The hook used for evaluation
                 hooks=hooks,
                 # fabric settings
@@ -468,25 +480,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
             # Submit job and link
             outputs = learner.submit(
                 launcher=launcher_learner,
-                init_tasks=retriever_init_tasks + scorer_hf_init_tasks,
+                init_tasks=scorer_hf_init_tasks,
             )
             # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
             helper.tensorboard_service.add(learner, learner.logpath)
-
-            # If we track MSMARCO, use default validation, else (for NanoBEIR) use the aggregator
-            tracked_validations = {}
-            if cfg.learner.validation in [
-                Validation.NanoBEIR.value,
-                Validation.ALL.value,
-            ]:
-                # add nano_beir = aggregated of all validation listeners
-                tracked_validations["nano-beir"] = validations[-1]
-            if cfg.learner.validation in [
-                Validation.MSMARCO.value,
-                Validation.ALL.value,
-            ]:
-                # add msm validation
-                tracked_validations["msmarco"] = msmarco_validation
 
             # Evaluate each model on test collections
             for name, tracked_validation in tracked_validations.items():
@@ -502,13 +499,14 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
                     all_weights.append(load_model)
                     tests.evaluate_retriever(
                         partial(
-                            model_based_retrievers,
+                            scorer_retriever,
                             scorer=scorer_model,
-                            retrievers=test_retrievers_factory,
+                            retrievers=test_run_retriever_factory,
+                            batch_size=cfg.retrieval.batch_size,
                         ),
                         launcher_evaluate,
                         model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                        init_tasks=[load_model] + retriever_init_tasks,
+                        init_tasks=[load_model],
                     )
 
     all_configs, all_tags = generate_grid(cfg)

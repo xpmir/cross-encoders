@@ -52,7 +52,7 @@ retrieval:
 
 evaluation:
     test_max_topics: 100
-    in_domain_only: true
+    in_domain: true
 
 #### Params that are grid searched
 grid_search:
@@ -66,8 +66,9 @@ grid_search:
     learner.loss:
         values_list:
             - marginMSE
-            - infoNCE_RankDistiLLM
-            - distillRankNET
+            # - infoNCE_RankDistiLLM
+            # - distillRankNET
+
     learner.precision :
         values_list:
             - bf16-mixed

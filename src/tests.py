@@ -3,7 +3,7 @@ from datamaestro import prepare_dataset
 
 from xpmir.datasets.adapters import RandomFold
 from xpmir.evaluation import Evaluations, EvaluationsCollection
-from xpmir.measures import AP, RR, nDCG, R
+from xpmir.measures import RR, nDCG, R, Success
 from xpmir.papers.helpers.samplers import prepare_collection
 from configuration import Evaluation
 
@@ -25,8 +25,8 @@ def check_datasets_docs(evaluations_collection: EvaluationsCollection):
             )
 
 
-CE_MEASURES = [AP, nDCG @ 10, RR @ 10]
-RETRIEVERS_MEASURES = [R @ 1000]
+CE_MEASURES = [Success @ 5, nDCG @ 10, nDCG @ 20, RR @ 10]
+RETRIEVERS_MEASURES = [R @ 100, R @ 1000]
 
 
 def get_fold(dataset, size, seed=0, launcher=None):
@@ -43,7 +43,6 @@ def minified_tests(
     test_topic_nb: int,
     check_docs: bool = True,
     retrievers_only: bool = False,
-    include_OOD: bool = False,
     launcher=None,
 ) -> EvaluationsCollection:
     """Returns the pool of queries for the evaluations to use for testing.
@@ -238,9 +237,40 @@ def LoTTE_tests(
 
 
 @lru_cache
+def nano_beir_tests(
+    test_topic_nb: int, retrievers_only: bool = False, launcher=None
+) -> EvaluationsCollection:
+    """NanoBEIR datasets"""
+
+    names = [
+        "nano-arguana",
+        "nano-climate-fever",
+        "nano-dbpedia-entity",
+        "nano-fever",
+        "nano-fiqa",
+        "nano-hotpotqa",
+        "nano-msmarco",
+        "nano-nfcorpus",
+        "nano-nq",
+        "nano-quora",
+        "nano-scidocs",
+        "nano-scifact",
+        "nano-webis-touche2020",
+    ]
+    NANO_BEIR_NAMES = {name: name.replace("nano-", "") for name in names}
+    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+    evals = {}
+    for name in names:
+        ds = prepare_dataset(f"co.huggingface.nano-beir.{NANO_BEIR_NAMES[name]}")
+        ds = get_fold(ds, test_topic_nb, launcher=launcher)
+        evals[name.replace("-", "_")] = Evaluations(ds, measures=measures)
+
+    return EvaluationsCollection(**evals)
+
+
+@lru_cache
 def paper_tests(
     test_topic_nb: int,
-    include_OOD: bool = True,
     check_docs: bool = True,
     retrievers_only: bool = False,
     launcher=None,
@@ -277,22 +307,16 @@ def paper_tests(
     dl19 = get_fold(dl19, test_topic_nb, launcher=launcher)
     dl20 = get_fold(dl20, test_topic_nb, launcher=launcher)
 
-    # Out of domain - BEIR (optional)
-    if include_OOD:
-        beir = BEIR_13_tests(
-            test_topic_nb, retrievers_only=retrievers_only, launcher=launcher
-        )
-        robust04 = Robust04_test(
-            test_topic_nb, retrievers_only=retrievers_only, launcher=launcher
-        )
-        lotte = LoTTE_tests(
-            test_topic_nb, retrievers_only=retrievers_only, launcher=launcher
-        )
-    else:
-        # Empty collection
-        beir = EvaluationsCollection()
-        robust04 = EvaluationsCollection()
-        lotte = EvaluationsCollection()
+    # Out of domain - BEIR
+    beir = BEIR_13_tests(
+        test_topic_nb, retrievers_only=retrievers_only, launcher=launcher
+    )
+    robust04 = Robust04_test(
+        test_topic_nb, retrievers_only=retrievers_only, launcher=launcher
+    )
+    lotte = LoTTE_tests(
+        test_topic_nb, retrievers_only=retrievers_only, launcher=launcher
+    )
 
     paper_tests_res = EvaluationsCollection(
         msmarco_dev=Evaluations(
@@ -315,38 +339,6 @@ def paper_tests(
     return paper_tests_res
 
 
-@lru_cache
-def nano_beir_tests(
-    test_topic_nb: int, retrievers_only: bool = False, launcher=None
-) -> EvaluationsCollection:
-    """NanoBEIR datasets"""
-
-    names = [
-        "nano-arguana",
-        "nano-climate-fever",
-        "nano-dbpedia-entity",
-        "nano-fever",
-        "nano-fiqa",
-        "nano-hotpotqa",
-        "nano-msmarco",
-        "nano-nfcorpus",
-        "nano-nq",
-        "nano-quora",
-        "nano-scidocs",
-        "nano-scifact",
-        "nano-webis-touche2020",
-    ]
-    NANO_BEIR_NAMES = {name: name.replace("nano-", "") for name in names}
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-    evals = {}
-    for name in names:
-        ds = prepare_dataset(f"co.huggingface.nano-beir.{NANO_BEIR_NAMES[name]}")
-        ds = get_fold(ds, test_topic_nb, launcher=launcher)
-        evals[name.replace("-", "_")] = Evaluations(ds, measures=measures)
-
-    return EvaluationsCollection(**evals)
-
-
 def build_tests(
     cfg: Evaluation,
     check_docs: bool = True,
@@ -358,24 +350,78 @@ def build_tests(
     :param check_docs: Whether to check that documents are accessible (triggers downloads if needed)
     :returns: The evaluations collection to use
     """
+    all_evals = {}
 
+    # Helper to add evals to the dictionary
+    def add_evals(evals_collection: EvaluationsCollection):
+        for name, evals in evals_collection.collection.items():
+            if name not in all_evals:
+                all_evals[name] = evals
+
+    # 1. NanoBEIR
     if cfg.nano_beir:
-        return nano_beir_tests(
+        add_evals(
+            nano_beir_tests(
+                cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
+            )
+        )
+
+    # 2. In-domain (MSMarco + TREC DL)
+    if cfg.in_domain:
+        v1_dev = prepare_collection("com.microsoft.msmarco.passage.dev.small")
+        dl19 = prepare_dataset("com.microsoft.msmarco.passage.trec2019.judged")
+        dl20 = prepare_dataset("com.microsoft.msmarco.passage.trec2020.judged")
+
+        v1_dev = get_fold(v1_dev, cfg.test_max_topics, launcher=launcher)
+        dl19 = get_fold(dl19, cfg.test_max_topics, launcher=launcher)
+        dl20 = get_fold(dl20, cfg.test_max_topics, launcher=launcher)
+
+        measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+        add_evals(
+            EvaluationsCollection(
+                msmarco_dev=Evaluations(v1_dev, measures),
+                trec2019=Evaluations(dl19, measures),
+                trec2020=Evaluations(dl20, measures),
+            )
+        )
+
+    # 3. BEIR13 (All of it)
+    if cfg.beir13 or cfg.all_datasets:
+        add_evals(
+            BEIR_13_tests(
+                cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
+            )
+        )
+
+    # 4. Specific datasets
+    if cfg.datasets:
+        # We need a way to map dataset names to their respective prepare functions
+        # For now, let's look them up in BEIR_13_tests if possible, or handle individually
+        beir13_all = BEIR_13_tests(
             cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
         )
+        for ds_name in cfg.datasets:
+            if ds_name in beir13_all.collection:
+                if ds_name not in all_evals:
+                    all_evals[ds_name] = beir13_all.collection[ds_name]
+            else:
+                logger.warning(
+                    f"Dataset {ds_name} not found in BEIR13 or supported list"
+                )
 
-    if cfg.all_datasets or cfg.in_domain_only:
-        return paper_tests(
-            cfg.test_max_topics,
-            include_OOD=not cfg.in_domain_only,
-            check_docs=check_docs,
-            retrievers_only=retrievers_only,
-            launcher=launcher,
-        )
-    else:
+    # If nothing was selected, use minified_tests as default (original behavior)
+    if not all_evals and not cfg.all_datasets:
         return minified_tests(
             cfg.test_max_topics,
             check_docs=check_docs,
             retrievers_only=retrievers_only,
             launcher=launcher,
         )
+
+    tests = EvaluationsCollection(**all_evals)
+
+    if check_docs:
+        logger.info("Checking docs in datasets...")
+        check_datasets_docs(tests)
+
+    return tests

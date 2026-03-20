@@ -1,19 +1,19 @@
 
 id: reproduction_RankDistiLLM
 title: "Evaluation on top 100 for comparison"
-description: 
-    Using the best parameters from the grid search, 
+description:
+    Using the best parameters from the grid search,
     we run additional trainings validating on nanobeir to see the impact on OOD.
 
 module: ir_training.experiment
 pre_experiment: pre_experiment
 
-seed: 12 # To mimick the HF xp 
+seed: 12 # To mimick the HF xp
 nb_repetitions: 3
 base: google/electra-base-discriminator
 
 
-retriever: "naver/splade-v3-distilbert" 
+retriever: "naver/splade-v3-distilbert"
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -49,10 +49,10 @@ retrieval:
     k: 100
 
 evaluation:
-    in_domain_only: true
+    in_domain: true
 
 
-#### Params that are grid searched 
+#### Params that are grid searched
 grid_search:
     learner.loss:
         values_list:

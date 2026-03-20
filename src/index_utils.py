@@ -35,7 +35,9 @@ def get_splade_index(
             documents.count,
             launcher_index,
         )
-        index = index_cfg.submit(launcher=launcher_index, init_tasks=init_tasks)
+        index = index_cfg.tag("index_documents", documents.id).submit(
+            launcher=launcher_index, init_tasks=init_tasks
+        )
         _indexes[indexer_id] = index
     else:
         index = _indexes[indexer_id]

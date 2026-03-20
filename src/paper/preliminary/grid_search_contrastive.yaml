@@ -1,15 +1,15 @@
 id: hyperparams_search_contrastive
 title: "Hyperparameter Search with contrastive loss"
-description: 
+description:
     Try several training hyperparameters for two sizes of backbones
 
 module: ir_training.experiment
 pre_experiment: pre_experiment
 
-seed: 12 # To mimick the HF xp 
+seed: 12 # To mimick the HF xp
 nb_repetitions: 3
 
-retriever: "naver/splade-v3-distilbert" 
+retriever: "naver/splade-v3-distilbert"
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -48,13 +48,12 @@ retrieval:
 #just for debugging
 evaluation:
     all_datasets: false
-    in_domain_only: true
 
 
-#### Params that are grid searched 
+#### Params that are grid searched
 grid_search:
-    base: 
-        values_list: 
+    base:
+        values_list:
             - microsoft/MiniLM-L12-H384-uncased
             - bert-base-uncased
     learner.optimization.batch_size:
