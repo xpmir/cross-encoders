@@ -58,7 +58,7 @@ from retrievers import MultiRunRetrieverFactory
 
 from configuration import Losses, CE_FineTuning, Validation, generate_grid
 from tests import build_tests, CE_MEASURES
-from format import dataframe_to_latex, aggregation_hf
+from format import dataframe_to_latex, aggregation_hf, loss_names, backbone_names_lower
 from validations import nano_msmarco_validation_datasets, nanobeir_validation_datasets
 from index_utils import get_splade_index
 
@@ -331,6 +331,254 @@ class ValidationSet:
         return listeners, tracked_validations
 
 
+def get_name_from_tags(model_tags: dict) -> str:
+    """Creates the HF id from tags using formatting conventions."""
+    logging.debug(f"got tags {model_tags}")
+    loss = model_tags.get("learner.loss")
+    base = model_tags.get("base")
+    # try to get prettier name
+    loss = loss_names.get(loss, loss).replace("/", "-")
+    base = backbone_names_lower.get(base, base).replace("/", "-")
+    return f"cross-encoder-{base}-{loss}"
+
+
+def save_raw_results(df: pd.DataFrame, metric_cols: list, resultspath: Path):
+    """Formats and saves the raw experimental results to disk."""
+    # 1. Convert to numeric
+    df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
+
+    # save results
+    if not resultspath.exists():
+        resultspath.mkdir(parents=True, exist_ok=True)
+
+    output_file = resultspath / "raw_results.csv"
+    df.to_csv(output_file, index=False)
+    logging.info(f"Raw results (before aggregation) saved to {output_file}")
+
+
+def identify_best_models(
+    df: pd.DataFrame, metric_cols: list, model_id_tags: list, group_by_tags: list
+) -> pd.DataFrame:
+    """Identifies the best seed/config for each scorer based on mean nDCG@10."""
+    # Compute the mean over all datasets for each model (scorer + seed combo)
+    mean_per_model = df.groupby(model_id_tags)[metric_cols].mean(numeric_only=True)
+
+    if mean_per_model.empty:
+        return pd.DataFrame()
+
+    # Group by the configuration (everything except seed) to find the best seed for each
+    best_models_indices = mean_per_model.groupby(group_by_tags)[
+        [("metric", "nDCG@10")]
+    ].idxmax()
+    return best_models_indices
+
+
+def add_dataset_aggregations(
+    df: pd.DataFrame,
+    group_by_cols: list,
+    aggregations: dict[str, list[str]] = None,
+    add_mean: bool = True,
+) -> pd.DataFrame:
+    """Adds aggregate rows (e.g., mean across datasets) to the results dataframe."""
+    new_rows = []
+
+    def get_agg(mask, name):
+        subset = df[mask] if mask is not None else df
+        if group_by_cols:
+            agg = (
+                subset.groupby(group_by_cols, dropna=False)
+                .mean(numeric_only=True)
+                .reset_index()
+            )
+        else:
+            agg = subset.mean(numeric_only=True).to_frame().T
+        agg["dataset"] = name
+        return agg
+
+    if aggregations:
+        for agg_name, datasets in aggregations.items():
+            mask = df["dataset"].isin(datasets)
+            if mask.any():
+                new_rows.append(get_agg(mask, agg_name))
+
+    if add_mean and df["dataset"].nunique() > 1:
+        new_rows.append(get_agg(None, "mean"))
+
+    if new_rows:
+        # Filter columns to match df and avoid extra columns
+        new_rows = [row[row.columns.intersection(df.columns)] for row in new_rows]
+        return pd.concat([df] + new_rows, ignore_index=True)
+
+    return df
+
+
+def format_model_results(
+    model_df: pd.DataFrame, aggregations: dict[str, list[str]]
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Processes results for a single model, adding aggregations and formatting for MD."""
+    # Flatten multi-index columns
+    if isinstance(model_df.columns, pd.MultiIndex):
+        flat_cols = []
+        for col in model_df.columns:
+            if col[0] == "metric":
+                flat_cols.append(col[1])
+            elif col[0] == "dataset":
+                flat_cols.append("dataset")
+            else:
+                flat_cols.append("_".join(str(x) for x in col if x))
+        model_df.columns = flat_cols
+
+    metrics_to_show = ["RR@10", "nDCG@10"]
+    cols_to_keep = [c for c in ["dataset"] + metrics_to_show if c in model_df.columns]
+
+    if not cols_to_keep:
+        return pd.DataFrame(), pd.DataFrame()
+
+    results = model_df[cols_to_keep].copy()
+
+    # Add aggregations (no global mean for model cards, just specific groups)
+    results = add_dataset_aggregations(
+        results, group_by_cols=[], aggregations=aggregations, add_mean=False
+    )
+
+    # Identify which rows are aggregations for bolding later
+    agg_names = list(aggregations.keys())
+
+    # Format numeric columns: * 100
+    numeric_cols = results.select_dtypes(include=[np.number]).columns
+    results[numeric_cols] = results[numeric_cols] * 100
+
+    # Create versions for CSV (rounded) and Markdown (bolded)
+    csv_results = results.copy()
+    csv_results[numeric_cols] = csv_results[numeric_cols].round(2)
+
+    md_results = results.copy()
+    for col in numeric_cols:
+        md_results[col] = md_results[col].apply(
+            lambda x: f"{x:.2f}" if pd.notna(x) else x
+        )
+
+    for agg_name in agg_names:
+        idx = md_results[md_results["dataset"] == agg_name].index
+        if not idx.empty:
+            md_results.loc[idx, "dataset"] = f"**{agg_name}**"
+            for col in numeric_cols:
+                md_results.loc[idx, col] = md_results.loc[idx, col].apply(
+                    lambda x: f"**{x}**" if pd.notna(x) else x
+                )
+
+    return csv_results, md_results
+
+
+def export_model_artifacts(
+    best_tags: dict,
+    scorer_tagspath: str,
+    csv_results: pd.DataFrame,
+    md_results: pd.DataFrame,
+    learners: list,
+    all_weights: list,
+    best_cfg: Any,
+    resultspath: Path,
+    card_template_txt: str = None,
+    aggregations: dict[str, list[str]] = None,
+):
+    """Exports all artifacts (weights, logs, readme, config) for a best model."""
+    model_tags = {}
+    for s in best_tags["scorer"].split("_"):
+        try:
+            k, v = s.split("=")
+            model_tags[k] = v
+        except ValueError:
+            logging.warning(f"Unexpected tag format '{s}' in scorer tags")
+    logging.warning(f"got tags {model_tags}")
+
+    model_name = get_name_from_tags(model_tags)
+    models_path = resultspath / "models"
+    best_model_path = models_path / model_name
+    best_model_path.mkdir(parents=True, exist_ok=True)
+
+    # 1. Save results
+    csv_results.to_csv(best_model_path / "results.csv", index=False)
+    logging.info(f"Model results saved to {best_model_path / 'results.csv'}")
+
+    # 2. Link logs
+    best_model_learner = get_task_by_tags(learners, best_tags)
+    if best_model_learner:
+        # Job logs
+        symlink_path = best_model_path / "job_logs"
+        if symlink_path.exists():
+            symlink_path.unlink()
+        symlink_path.symlink_to(best_model_learner.jobpath)
+
+        # TensorBoard
+        tb_path = best_model_learner.logpath
+        if tb_path.exists():
+            tb_symlink_path = best_model_path / "tensorboard_logs"
+            if tb_symlink_path.exists():
+                tb_symlink_path.unlink()
+            tb_symlink_path.symlink_to(tb_path)
+
+    # 3. Weights
+    best_load_model = get_task_by_tags(all_weights, best_tags)
+    if best_load_model:
+        shutil.copy(best_load_model.path, best_model_path / "model_weights.pt")
+
+    # 4. Model Card & Config
+    if card_template_txt and best_cfg:
+        template = Template(card_template_txt)
+        card = template.render(
+            base=best_cfg.base,
+            k=best_cfg.retrieval.k,
+            retriever=best_cfg.retriever if best_cfg.retriever else "BM25",
+            model_id=model_name,
+            training_data="MS MARCO Passage",
+            dataset="msmarco",
+            loss=model_tags.get("learner.loss"),
+            results=md_results.to_markdown(index=False),
+        )
+        with open(best_model_path / "README.md", "w") as f:
+            f.write(card)
+
+        with open(best_model_path / "config.yaml", "w") as f:
+            yaml.dump(asdict(best_cfg.learner), f, default_flow_style=False)
+
+
+def compute_aggregated_results(
+    df: pd.DataFrame,
+    metric_cols: list,
+    group_by_tags: list,
+    resultspath: Path,
+    aggregations: dict[str, list[str]] = None,
+):
+    """Computes final grouped results across all experiments and saves to CSV/LaTeX."""
+    df_grouped = (
+        df.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
+        .agg(["mean", "var"])
+        .reset_index()
+    )
+    df_grouped = df_grouped.sort_index(axis=1)
+
+    # Add both specific aggregations (ID, BEIR, etc.) and the global mean
+    df_grouped = add_dataset_aggregations(
+        df_grouped,
+        group_by_cols=group_by_tags,
+        aggregations=aggregations,
+        add_mean=True,
+    )
+
+    output_file = resultspath / "results.csv"
+    df_grouped.to_csv(output_file, index=False)
+
+    latex_table = dataframe_to_latex(
+        df_grouped,
+        caption="Evaluation Results",
+        label="tab:eval_results",
+        sig_df=None,
+    )
+    with open(resultspath / "results.tex", "w") as f:
+        f.write(latex_table)
+
+
 @learning_experiment()
 def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     launcher_index = find_launcher(cfg.indexation.requirements)
@@ -528,307 +776,71 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
         logging.info("No results found, Ending experiment")
         return
 
-    metric_cols = [("metric", "AP"), ("metric", "RR@10"), ("metric", "nDCG@10")]
+    metric_cols = [("metric", "RR@10"), ("metric", "nDCG@10")]
     group_by_tags = [("tag", "first_stage"), ("tag", "scorer")]
     model_id_tags = group_by_tags + [("tag", "seed")]
 
-    # 1. Convert to numeric
-    df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
-
-    # save results
-    if not helper.xp.resultspath.exists():
-        helper.xp.resultspath.mkdir(parents=True, exist_ok=True)
-
-    output_file = helper.xp.resultspath / "raw_results.csv"
-    df.to_csv(output_file, index=False)
-    logging.info(f"Raw results (before aggregation) saved to {output_file}")
-
-    # 1. compute the mean performance per scorer before aggregating (over seeds)
-    # We compute the mean over all seeds and datasets for each model (scorer + seed + validation combo).
-    mean_per_model = df.groupby(model_id_tags)[metric_cols].mean(numeric_only=True)
+    save_raw_results(df, metric_cols, helper.xp.resultspath)
 
     # Read model card template
     template_path = Path(__file__).parent / "CrossEncoderCard.md"
     card_template_txt = template_path.read_text() if template_path.exists() else None
 
-    def get_name_from_tags(model_tags: dict) -> str:
-        """created the HF id from tags"""
-        from format import loss_names, backbone_names_lower
+    # Identify and export best models per configuration
+    best_models_indices = identify_best_models(
+        df, metric_cols, model_id_tags, group_by_tags
+    )
+    best_models_list = []
 
-        logging.debug(f"got tags {model_tags}")
-        loss = model_tags.get("learner.loss")
-        base = model_tags.get("base")
-        # try to get prettier name
-        loss = loss_names.get(loss, loss).replace("/", "-")
-        base = backbone_names_lower.get(base, base).replace("/", "-")
-        return f"cross-encoder-{base}-{loss}"
-
-    # 2. Extract the best model for EACH scorer based on the mean nDCG@10
-    if not mean_per_model.empty:
-        models_path = helper.xp.resultspath / "models"
-        if not models_path.exists():
-            models_path.mkdir(parents=True, exist_ok=True)
-        # Group by the configuration (everything except seed) to find the best seed for each
-        # Or more simply, group by ('tag', 'scorer') to find the best (seed, validation) for each scorer
-        best_models_indices = mean_per_model.groupby(("tag", "scorer"))[
-            [("metric", "nDCG@10")]
-        ].idxmax()
-
-        best_models_list = []
-
-        for scorer_tagspath, best_model_row in best_models_indices.iterrows():
-            # best_model_idx is the value in the first (and only) column
+    if not best_models_indices.empty:
+        for index_tuple, best_model_row in best_models_indices.iterrows():
+            # index_tuple is (first_stage, scorer)
+            # best_model_idx is the full index tuple (first_stage, scorer, seed)
             best_model_idx = best_model_row.iloc[0]
-            # best_model_idx is a tuple (first_stage, scorer, validation, seed)
-            best_tags_cols = dict(zip(mean_per_model.index.names, best_model_idx))
-            best_tags = {
-                k[1]: v for k, v in best_tags_cols.items() if k[0] == "tag"
-            }  # Keep only tag columns
+            best_tags_cols = dict(zip(model_id_tags, best_model_idx))
+            best_tags = {k[1]: v for k, v in best_tags_cols.items() if k[0] == "tag"}
 
+            scorer_tagspath = best_tags["scorer"]
             logging.info(f"Best model for scorer '{scorer_tagspath}' is: {best_tags}")
 
-            # Filter the original dataframe to keep ALL rows (datasets) belonging to this best model
+            # Filter the original dataframe for this specific best model (all datasets)
             mask = pd.Series(True, index=df.index)
             for tag_col, val in best_tags_cols.items():
                 mask &= df[tag_col].astype(str) == str(val)
 
-            best_models_list.append(df[mask])
+            best_model_df = df[mask].copy()
+            best_models_list.append(best_model_df)
 
-            # Print metrics in markdown
-            best_model_results = df[mask].copy()
-
-            # 1. Get results for this model, and flatten columns if needed
-            if isinstance(best_model_results.columns, pd.MultiIndex):
-                # Map tuples to simple names: ('metric', 'AP') -> 'AP', ('dataset', '') -> 'dataset'
-                flat_cols = []
-                for col in best_model_results.columns:
-                    if col[0] == "metric":
-                        flat_cols.append(col[1])
-                    elif col[0] == "dataset":
-                        flat_cols.append("dataset")
-                    else:
-                        flat_cols.append("_".join(str(x) for x in col if x))
-                best_model_results.columns = flat_cols
-
-            metrics_to_show = ["RR@10", "nDCG@10"]
-            cols_to_keep = [
-                c
-                for c in ["dataset"] + metrics_to_show
-                if c in best_model_results.columns
-            ]
-
-            if cols_to_keep:
-                best_model_results = best_model_results[cols_to_keep]
-
-                # Add aggregations
-                agg_names = []
-                for agg_name, datasets in aggregation_hf.items():
-                    mask_agg = best_model_results["dataset"].isin(datasets)
-                    if mask_agg.any():
-                        agg_row = (
-                            best_model_results[mask_agg]
-                            .mean(numeric_only=True)
-                            .to_frame()
-                            .T
-                        )
-                        agg_row["dataset"] = agg_name
-                        best_model_results = pd.concat(
-                            [best_model_results, agg_row], ignore_index=True
-                        )
-                        agg_names.append(agg_name)
-
-                # Format numeric columns: * 100
-                numeric_cols = best_model_results.select_dtypes(
-                    include=[np.number]
-                ).columns
-                best_model_results[numeric_cols] = (
-                    best_model_results[numeric_cols] * 100
-                )
-
-                # Create a version for display (Markdown) with bolding for aggregations
-                best_model_results_md = best_model_results.copy()
-
-                # Round for the CSV
-                best_model_results[numeric_cols] = best_model_results[
-                    numeric_cols
-                ].round(2)
-
-                # Format for Markdown: 2 decimal places and bold aggregations
-                for col in numeric_cols:
-                    best_model_results_md[col] = best_model_results_md[col].apply(
-                        lambda x: f"{x:.2f}" if pd.notna(x) else x
-                    )
-
-                for agg_name in agg_names:
-                    idx = best_model_results_md[
-                        best_model_results_md["dataset"] == agg_name
-                    ].index
-                    best_model_results_md.loc[idx, "dataset"] = f"**{agg_name}**"
-                    for col in numeric_cols:
-                        best_model_results_md.loc[idx, col] = best_model_results_md.loc[
-                            idx, col
-                        ].apply(lambda x: f"**{x}**" if pd.notna(x) else x)
-
-                logging.info(
-                    f"Results for best model '{scorer_tagspath}':\n{best_model_results_md.to_markdown(index=False)}"
-                )
-            else:
-                logging.warning(
-                    f"No metric columns found to display for best model '{scorer_tagspath}'"
-                )
-                best_model_results_md = best_model_results  # Fallback
-
-            model_tags = {}
-            for s in best_tags["scorer"].split("_"):
-                try:
-                    k, v = s.split("=")
-                    model_tags[k] = v
-                except ValueError:
-                    logging.warning(
-                        f"Unexpected tag format '{s}' in scorer tags '{best_tags['scorer']}'"
-                    )
-
-            # 2. We got results, we save them in a separate folder for this model, so that we can easily access them later, and link the tensorboard logs to it as well.
-            model_name = get_name_from_tags(model_tags)
-            best_model_path = models_path / model_name
-
-            if best_model_path.exists() and not best_model_path.is_dir():
-                best_model_path.unlink()
-
-            elif not best_model_path.exists():
-                best_model_path.mkdir(parents=True, exist_ok=True)
-            best_model_results.to_csv(best_model_path / "results.csv", index=False)
-            logging.info(
-                f"Best model '{scorer_tagspath}' results saved to {best_model_path / 'results.csv'}"
+            # Format and Export artifacts
+            csv_results, md_results = format_model_results(
+                best_model_df, aggregations=aggregation_hf
             )
 
-            # get learner for this model to get the path to the tensorboard logs
-            best_model_learner = get_task_by_tags(learners, best_tags)
-            if not best_model_learner:
-                logging.warning(
-                    f"No learner found for best model '{scorer_tagspath}' with tags {best_tags}"
-                )
-                continue
-
-            # Job Path
-            best_model_jobpath = best_model_learner.jobpath
-            symlink_path = best_model_path / "job_logs"
-            if symlink_path.exists():
-                symlink_path.unlink()  # Remove existing symlink if it exists
-            symlink_path.symlink_to(best_model_jobpath)
-
-            # TensorBoard logs path
-            tb_path = best_model_learner.logpath
-            if not tb_path.exists():
-                logging.warning(
-                    f"TensorBoard logs path {tb_path} does not exist for best model '{scorer_tagspath}'"
-                )
-            else:
-                logging.info(
-                    f"TensorBoard logs for best model '{scorer_tagspath}' are located at: {tb_path}"
-                )
-                # Link the tensorboard logs to the best model folder
-                tb_symlink_path = best_model_path / "tensorboard_logs"
-                if tb_symlink_path.exists():
-                    tb_symlink_path.unlink()  # Remove existing symlink if it exists
-                tb_symlink_path.symlink_to(tb_path)
-
-            # print the path to the model weights, save them in the best model folder, and link the tensorboard logs to it as well
-            best_load_model = get_task_by_tags(all_weights, best_tags)
-            if best_load_model:
-                logging.info(
-                    f"Best model '{scorer_tagspath}' weights are located at: {best_load_model.path}"
-                )
-                # copy the model weights to the best model folder
-                shutil.copy(best_load_model.path, best_model_path / "model_weights.pt")
-            else:
-                logging.warning(
-                    f"No model weights found for best model '{scorer_tagspath}' with tags {best_tags}"
-                )
-
-            # Write model card and config
-            if card_template_txt:
-                template = Template(card_template_txt)
-                best_cfg = config_map.get(scorer_tagspath)
-                if best_cfg:
-                    card = template.render(
-                        base=best_cfg.base,
-                        k=best_cfg.retrieval.k,
-                        retriever=best_cfg.retriever if best_cfg.retriever else "BM25",
-                        model_id=model_name,
-                        training_data="MS MARCO Passage",
-                        dataset="msmarco",
-                        loss=model_tags.get("learner.loss"),
-                        results=best_model_results_md.to_markdown(index=False),
-                    )
-
-                    with open(best_model_path / "README.md", "w") as f:
-                        f.write(card)
-                    logging.info(
-                        f"Model card written to {best_model_path / 'README.md'}"
-                    )
-
-                    # Save config as YAML
-                    with open(best_model_path / "config.yaml", "w") as f:
-                        yaml.dump(asdict(best_cfg.learner), f, default_flow_style=False)
-                    logging.info(
-                        f"Configuration saved to {best_model_path / 'config.yaml'}"
-                    )
+            export_model_artifacts(
+                best_tags=best_tags,
+                scorer_tagspath=scorer_tagspath,
+                csv_results=csv_results,
+                md_results=md_results,
+                learners=learners,
+                all_weights=all_weights,
+                best_cfg=config_map.get(scorer_tagspath),
+                resultspath=helper.xp.resultspath,
+                card_template_txt=card_template_txt,
+                aggregations=aggregation_hf,
+            )
 
         if best_models_list:
             best_model_df = pd.concat(best_models_list, ignore_index=True)
-
-            # Save the evaluations for the best models (one per scorer)
-            best_model_output_file = (
-                helper.xp.resultspath / "best_models_per_scorer_raw_results.csv"
-            )
-            best_model_df.to_csv(best_model_output_file, index=False)
-            logging.info(
-                f"Best models (per scorer) raw results saved to {best_model_output_file}"
+            best_model_df.to_csv(
+                helper.xp.resultspath / "best_models_per_scorer_raw_results.csv",
+                index=False,
             )
 
-    # 2. Initial Grouping
-    df_grouped = (
-        df.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
-        .agg(["mean", "var"])
-        .reset_index()
+    # Final aggregation and LaTeX table generation
+    compute_aggregated_results(
+        df,
+        metric_cols,
+        group_by_tags,
+        helper.xp.resultspath,
+        aggregations=aggregation_hf,
     )
-
-    # Sort columns to avoid PerformanceWarning: indexing past lexsort depth
-    df_grouped = df_grouped.sort_index(axis=1)
-
-    # 3. Add the 'mean' summary row
-    if df_grouped["dataset"].nunique() > 1:
-        # We aggregate the already aggregated means/vars
-        # Note: Mean of means is mathematically sound;
-        # Mean of vars is a common proxy for average instability.
-        mean_df = (
-            df_grouped.groupby(group_by_tags, dropna=False)
-            .mean(numeric_only=True)
-            .reset_index()
-        )
-
-        # Manually set the dataset label
-        mean_df["dataset"] = "mean"
-
-        # Ensure column order matches exactly before concat
-        mean_df = mean_df[df_grouped.columns]
-        df_grouped = pd.concat([df_grouped, mean_df], ignore_index=True)
-
-    logging.info(df_grouped)
-
-    output_file = helper.xp.resultspath / "results.csv"
-    df_grouped.to_csv(output_file, index=False)
-    logging.info(f"Results saved to {output_file}")
-
-    # Generate and save LaTeX table
-    latex_table = dataframe_to_latex(
-        df_grouped,
-        caption="Evaluation Results",
-        label="tab:eval_results",
-        sig_df=None,
-    )
-    latex_output_file = helper.xp.resultspath / "results.tex"
-    with open(latex_output_file, "w") as f:
-        f.write(latex_table)
-    logging.info(f"LaTeX table saved to {latex_output_file}")

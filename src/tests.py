@@ -122,44 +122,43 @@ def BEIR_13_tests(
     """
 
     ## BEIR datasets
-    scifact = prepare_dataset("irds.beir.scifact.test")  # 300 queries
+    scifact = prepare_dataset("org.beir.scifact.test")  # 300 queries
     scifact = get_fold(scifact, test_topic_nb, launcher=launcher)
 
-    touche = prepare_dataset(
-        "irds.beir.webis-touche2020.v2"
-    )  # v2 as it fixes some of v1 issues
+    touche = prepare_dataset("org.beir.webis.touche2020.v2")
+    # v2 as it fixes some of v1 issues
 
-    fiqa = prepare_dataset("irds.beir.fiqa.test")  # 648 queries
+    fiqa = prepare_dataset("org.beir.fiqa.test")  # 648 queries
     fiqa = get_fold(fiqa, test_topic_nb, launcher=launcher)
 
-    nfcorpus = prepare_dataset("irds.beir.nfcorpus.test")  # 323 queries
+    nfcorpus = prepare_dataset("org.beir.nfcorpus.test")  # 323 queries
     nfcorpus = get_fold(nfcorpus, test_topic_nb, launcher=launcher)
 
-    arguana = prepare_dataset("irds.beir.arguana")
+    arguana = prepare_dataset("org.beir.arguana")
     arguana = get_fold(arguana, test_topic_nb, launcher=launcher)
 
-    climate_fever = prepare_dataset("irds.beir.climate-fever")
+    climate_fever = prepare_dataset("org.beir.climate.fever")
     climate_fever = get_fold(climate_fever, test_topic_nb, launcher=launcher)
 
-    dbpedia = prepare_dataset("irds.beir.dbpedia-entity.test")
+    dbpedia = prepare_dataset("org.beir.dbpedia.entity.test")
     dbpedia = get_fold(dbpedia, test_topic_nb, launcher=launcher)
 
-    fever = prepare_dataset("irds.beir.fever.test")
+    fever = prepare_dataset("org.beir.fever.test")
     fever = get_fold(fever, test_topic_nb, launcher=launcher)
 
-    hotpotqa = prepare_dataset("irds.beir.hotpotqa.test")
+    hotpotqa = prepare_dataset("org.beir.hotpotqa.test")
     hotpotqa = get_fold(hotpotqa, test_topic_nb, launcher=launcher)
 
-    nq = prepare_dataset("irds.beir.nq")
+    nq = prepare_dataset("org.beir.nq")
     nq = get_fold(nq, test_topic_nb, launcher=launcher)
 
-    quora = prepare_dataset("irds.beir.quora.test")
+    quora = prepare_dataset("org.beir.quora.test")
     quora = get_fold(quora, test_topic_nb, launcher=launcher)
 
-    scidocs = prepare_dataset("irds.beir.scidocs")
+    scidocs = prepare_dataset("org.beir.scidocs")
     scidocs = get_fold(scidocs, test_topic_nb, launcher=launcher)
 
-    trec_covid = prepare_dataset("irds.beir.trec-covid")
+    trec_covid = prepare_dataset("org.beir.trec.covid")
     trec_covid = get_fold(trec_covid, test_topic_nb, launcher=launcher)
 
     measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES

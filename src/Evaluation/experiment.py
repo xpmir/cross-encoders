@@ -191,7 +191,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         logging.info("No results found, Ending experiment")
         return
 
-    measures = ["AP", "RR@10", "nDCG@10"] if not cfg.retrievers_only else ["R@1000"]
+    measures = ["RR@10", "nDCG@10"] if not cfg.retrievers_only else ["R@1000"]
     metric_cols = [("metric", measure) for measure in measures]
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
     df_grouped = (

@@ -12,6 +12,7 @@ seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
 base: "microsoft/MiniLM-L12-H384-uncased"
+max_doc_len: 1024
 
 # microsoft/MiniLM-L12-H384-uncased # jhu-clsp/ettin-encoder-32m  microsoft/MiniLM-L12-H384-uncased
 
@@ -32,7 +33,7 @@ learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 64
-        max_epochs: 200 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        max_epochs: 100 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
         lr: 7e-6
@@ -43,6 +44,7 @@ learner:
     validation_interval: 10
     validation_top_k: 100
     validation: nanobeir
+    precision: bf16-mixed
     requirements: duration=20h & cuda(mem=40G)
 
 retrieval:
@@ -68,7 +70,3 @@ grid_search:
             - marginMSE
             # - infoNCE_RankDistiLLM
             # - distillRankNET
-
-    learner.precision :
-        values_list:
-            - bf16-mixed
