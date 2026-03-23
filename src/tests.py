@@ -235,34 +235,37 @@ def LoTTE_tests(
     )
 
 
+NANO_BEIR_KEYS = [
+    "nano_arguana",
+    "nano_climate_fever",
+    "nano_dbpedia_entity",
+    "nano_fever",
+    "nano_fiqa",
+    "nano_hotpotqa",
+    "nano_msmarco",
+    "nano_nfcorpus",
+    "nano_nq",
+    "nano_quora",
+    "nano_scidocs",
+    "nano_scifact",
+    "nano_webis_touche2020",
+]
+
+
 @lru_cache
 def nano_beir_tests(
     test_topic_nb: int, retrievers_only: bool = False, launcher=None
 ) -> EvaluationsCollection:
     """NanoBEIR datasets"""
 
-    names = [
-        "nano-arguana",
-        "nano-climate-fever",
-        "nano-dbpedia-entity",
-        "nano-fever",
-        "nano-fiqa",
-        "nano-hotpotqa",
-        "nano-msmarco",
-        "nano-nfcorpus",
-        "nano-nq",
-        "nano-quora",
-        "nano-scidocs",
-        "nano-scifact",
-        "nano-webis-touche2020",
-    ]
-    NANO_BEIR_NAMES = {name: name.replace("nano-", "") for name in names}
     measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
     evals = {}
-    for name in names:
-        ds = prepare_dataset(f"co.huggingface.nano-beir.{NANO_BEIR_NAMES[name]}")
+    for name in NANO_BEIR_KEYS:
+        # Map back to the dataset name (e.g., nano_arguana -> arguana)
+        ds_name = name.replace("nano_", "").replace("_", "-")
+        ds = prepare_dataset(f"co.huggingface.nano-beir.{ds_name}")
         ds = get_fold(ds, test_topic_nb, launcher=launcher)
-        evals[name.replace("-", "_")] = Evaluations(ds, measures=measures)
+        evals[name] = Evaluations(ds, measures=measures)
 
     return EvaluationsCollection(**evals)
 

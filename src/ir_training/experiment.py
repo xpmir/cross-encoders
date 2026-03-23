@@ -27,6 +27,7 @@ from xpm_torch.trainers.batchwise import BatchwiseTrainer
 from xpm_torch.trainers.pairwise import PairwiseTrainer
 
 from xpmir.papers import configuration
+from xpmir.papers.results import PaperResults
 from xpmir.papers.helpers.samplers import (
     msmarco_colbertv2_annotated,
     msmarco_rankdistillm_colbert_top50,
@@ -286,6 +287,7 @@ class ValidationSet:
         val_retrievers_factory,
         retriever_tag,
     ) -> tuple[list[ValidationListener], dict[str, ValidationListener]]:
+        """Build the validation Listeners based of the logic from Validation enum"""
         listeners = []
         msmarco_validation = None
 
@@ -312,6 +314,7 @@ class ValidationSet:
                 msmarco_validation = listener
 
         tracked_validations = {}
+
         if self.cfg.learner.validation in [
             Validation.NanoBEIR.value,
             Validation.ALL.value,
@@ -325,7 +328,10 @@ class ValidationSet:
             listeners.append(aggregator)
             tracked_validations["nano-beir"] = aggregator
 
-        if msmarco_validation:
+        if self.cfg.learner.validation in [
+            Validation.MSMARCO.value,
+            Validation.ALL.value,
+        ]:
             tracked_validations["msmarco"] = msmarco_validation
 
         return listeners, tracked_validations
@@ -333,7 +339,6 @@ class ValidationSet:
 
 def get_name_from_tags(model_tags: dict) -> str:
     """Creates the HF id from tags using formatting conventions."""
-    logging.debug(f"got tags {model_tags}")
     loss = model_tags.get("learner.loss")
     base = model_tags.get("base")
     # try to get prettier name
@@ -342,35 +347,38 @@ def get_name_from_tags(model_tags: dict) -> str:
     return f"cross-encoder-{base}-{loss}"
 
 
-def save_raw_results(df: pd.DataFrame, metric_cols: list, resultspath: Path):
+def save_raw_results(df: pd.DataFrame, resultspath: Path):
     """Formats and saves the raw experimental results to disk."""
-    # 1. Convert to numeric
-    df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
-
     # save results
     if not resultspath.exists():
         resultspath.mkdir(parents=True, exist_ok=True)
 
     output_file = resultspath / "raw_results.csv"
     df.to_csv(output_file, index=False)
-    logging.info(f"Raw results (before aggregation) saved to {output_file}")
+    logging.info(f"Raw results saved to {output_file}")
 
 
 def identify_best_models(
-    df: pd.DataFrame, metric_cols: list, model_id_tags: list, group_by_tags: list
+    df: pd.DataFrame, dataset: str, metric: str, group_by_tags: list
 ) -> pd.DataFrame:
-    """Identifies the best seed/config for each scorer based on mean nDCG@10."""
-    # Compute the mean over all datasets for each model (scorer + seed combo)
-    mean_per_model = df.groupby(model_id_tags)[metric_cols].mean(numeric_only=True)
-
-    if mean_per_model.empty:
+    """Identifies the best model for each configuration based on a specific dataset and metric."""
+    subset = df[df["dataset"] == dataset]
+    if subset.empty:
+        logging.warning(f"Dataset {dataset} not found in results for model selection")
         return pd.DataFrame()
 
-    # Group by the configuration (everything except seed) to find the best seed for each
-    best_models_indices = mean_per_model.groupby(group_by_tags)[
-        [("metric", "nDCG@10")]
+    # For each group (e.g. model configuration), find the row with the max metric
+    # We use a list to avoid "ValueError: Cannot subset columns with a tuple" in some pandas versions
+    metric_col = [("metric", metric)]
+    best_models_indices = subset.groupby(group_by_tags, dropna=False)[
+        metric_col
     ].idxmax()
-    return best_models_indices
+
+    # If metric_col was a list, idxmax returns a DataFrame, we take the first column
+    if isinstance(best_models_indices, pd.DataFrame):
+        best_models_indices = best_models_indices.iloc[:, 0]
+
+    return subset.loc[best_models_indices]
 
 
 def add_dataset_aggregations(
@@ -397,9 +405,16 @@ def add_dataset_aggregations(
 
     if aggregations:
         for agg_name, datasets in aggregations.items():
-            mask = df["dataset"].isin(datasets)
-            if mask.any():
+            # Check if all required datasets are present
+            present_datasets = df["dataset"].unique()
+            missing = [ds for ds in datasets if ds not in present_datasets]
+            if not missing:
+                mask = df["dataset"].isin(datasets)
                 new_rows.append(get_agg(mask, agg_name))
+            else:
+                logging.warning(
+                    f"Aggregation {agg_name} skipped because the following datasets are missing: {missing}"
+                )
 
     if add_mean and df["dataset"].nunique() > 1:
         new_rows.append(get_agg(None, "mean"))
@@ -435,11 +450,6 @@ def format_model_results(
         return pd.DataFrame(), pd.DataFrame()
 
     results = model_df[cols_to_keep].copy()
-
-    # Add aggregations (no global mean for model cards, just specific groups)
-    results = add_dataset_aggregations(
-        results, group_by_cols=[], aggregations=aggregations, add_mean=False
-    )
 
     # Identify which rows are aggregations for bolding later
     agg_names = list(aggregations.keys())
@@ -519,9 +529,13 @@ def export_model_artifacts(
             tb_symlink_path.symlink_to(tb_path)
 
     # 3. Weights
-    best_load_model = get_task_by_tags(all_weights, best_tags)
-    if best_load_model:
-        shutil.copy(best_load_model.path, best_model_path / "model_weights.pt")
+    best_model_val = get_task_by_tags(all_weights, best_tags)
+    if best_model_val and best_model_val:
+        weights_path = best_model_val.loader.path
+        if weights_path.name.endswith(".pth"):
+            shutil.copy(weights_path, best_model_path / "model_weights.pt")
+        else:
+            logging.warning(f"Model weights is not a file: {weights_path}")
 
     # 4. Model Card & Config
     if card_template_txt and best_cfg:
@@ -558,14 +572,6 @@ def compute_aggregated_results(
     )
     df_grouped = df_grouped.sort_index(axis=1)
 
-    # Add both specific aggregations (ID, BEIR, etc.) and the global mean
-    df_grouped = add_dataset_aggregations(
-        df_grouped,
-        group_by_cols=group_by_tags,
-        aggregations=aggregations,
-        add_mean=True,
-    )
-
     output_file = resultspath / "results.csv"
     df_grouped.to_csv(output_file, index=False)
 
@@ -580,7 +586,7 @@ def compute_aggregated_results(
 
 
 @learning_experiment()
-def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
+def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
@@ -770,43 +776,69 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning):
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
 
+    # Constants
+    group_by_tags = [("tag", "first_stage"), ("tag", "scorer")]
+    model_id_tags = group_by_tags + [("tag", "seed")]
+
+    # 1. Exctract data
     df = tests.to_dataframe()
 
     if df.empty:
         logging.info("No results found, Ending experiment")
         return
 
-    metric_cols = [("metric", "RR@10"), ("metric", "nDCG@10")]
-    group_by_tags = [("tag", "first_stage"), ("tag", "scorer")]
-    model_id_tags = group_by_tags + [("tag", "seed")]
+    logging.info(f"Evaluated models: \n- {'\n- '.join(tests.per_model.keys())}")
 
-    save_raw_results(df, metric_cols, helper.xp.resultspath)
+    # Convert to numeric
+    metric_cols = [col for col in df.columns if col[0] == "metric"]
+    df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
+
+    # Add both specific aggregations (ID, BEIR, etc.) and the global mean
+    df_with_aggs = add_dataset_aggregations(
+        df,
+        group_by_cols=model_id_tags,
+        aggregations=aggregation_hf,
+        add_mean=True,  # will add 'mean' dataset at the end
+    )
+
+    save_raw_results(df_with_aggs, helper.xp.resultspath)
+
+    # keep only results with a scorer
+    scorer_only_df = df_with_aggs[
+        df_with_aggs[("tag", "scorer")].notna()
+        & (df_with_aggs[("tag", "scorer")] != "")
+    ]
+
+    logging.info(scorer_only_df)
 
     # Read model card template
     template_path = Path(__file__).parent / "CrossEncoderCard.md"
     card_template_txt = template_path.read_text() if template_path.exists() else None
 
     # Identify and export best models per configuration
-    best_models_indices = identify_best_models(
-        df, metric_cols, model_id_tags, group_by_tags
+    best_models_df = identify_best_models(
+        scorer_only_df,
+        dataset="mean",
+        metric="nDCG@10",
+        group_by_tags=group_by_tags,
     )
-    best_models_list = []
+    logging.info(f"df with only best models:\n{best_models_df}")
 
-    if not best_models_indices.empty:
-        for index_tuple, best_model_row in best_models_indices.iterrows():
-            # index_tuple is (first_stage, scorer)
-            # best_model_idx is the full index tuple (first_stage, scorer, seed)
-            best_model_idx = best_model_row.iloc[0]
-            best_tags_cols = dict(zip(model_id_tags, best_model_idx))
-            best_tags = {k[1]: v for k, v in best_tags_cols.items() if k[0] == "tag"}
+    best_models_list = []
+    if not best_models_df.empty:
+        for _, best_row in best_models_df.iterrows():
+            # Extract tags for this best model
+            best_tags = {
+                tag[1]: best_row[tag] for tag in model_id_tags if tag[0] == "tag"
+            }
 
             scorer_tagspath = best_tags["scorer"]
-            logging.info(f"Best model for scorer '{scorer_tagspath}' is: {best_tags}")
+            logging.info(f"Best evaluated model is {best_tags}")
 
             # Filter the original dataframe for this specific best model (all datasets)
             mask = pd.Series(True, index=df.index)
-            for tag_col, val in best_tags_cols.items():
-                mask &= df[tag_col].astype(str) == str(val)
+            for tag in model_id_tags:
+                mask &= df[tag].astype(str) == str(best_row[tag])
 
             best_model_df = df[mask].copy()
             best_models_list.append(best_model_df)

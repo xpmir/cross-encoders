@@ -1,9 +1,10 @@
 """Formatting utilities for experiment results"""
 
-import numpy as np
 import pandas as pd
 from pathlib import Path
 import sys
+
+from tests import NANO_BEIR_KEYS
 
 ### Some dicts for formatting
 
@@ -66,6 +67,7 @@ aggregations = {
         "lotte_writing",
         "robust04",
     ],
+    "Nano BEIR": NANO_BEIR_KEYS,
 }
 
 ## Aggregations used in the HF Card (keep short)
@@ -73,6 +75,7 @@ aggregation_hf = {
     "Mean In Domain": aggregations["In Domain"],
     "BEIR 13": aggregations["BEIR13 (Semi OOD)"],
     "LoTTE (OOD)": aggregations["OOD"],
+    "Nano BEIR": aggregations["Nano BEIR"],
 }
 
 DATASET_TO_ABB = {
@@ -122,6 +125,7 @@ def escape_latex(text: str) -> str:
         text = text.replace(char, replacement)
     return text
 
+
 def dataframe_to_latex(
     df: pd.DataFrame,
     caption: str = "Results",
@@ -158,7 +162,9 @@ def dataframe_to_latex(
         # Ensure there's a `p_value` column (tolerant renaming if needed)
         if "p_value" not in sig_df.columns:
             for col in sig_df.columns:
-                if "p" in str(col).lower() and ("value" in str(col).lower() or "val" in str(col).lower()):
+                if "p" in str(col).lower() and (
+                    "value" in str(col).lower() or "val" in str(col).lower()
+                ):
                     sig_df = sig_df.rename(columns={col: "p_value"})
                     break
 
@@ -273,17 +279,17 @@ def dataframe_to_latex(
 
         # get mean and var
         mean_val = None
-        var_val = None
         try:
             if ndcg_mean_col is not None:
                 mean_val = row[ndcg_mean_col]
         except Exception:
             mean_val = None
-        try:
-            if ndcg_var_col is not None:
-                var_val = row[ndcg_var_col]
-        except Exception:
-            var_val = None
+        # var_val = None
+        # try:
+        #     if ndcg_var_col is not None:
+        #         var_val = row[ndcg_var_col]
+        # except Exception:
+        #     var_val = None
 
         # Format cell: display as percentage (multiply by 100) with one decimal, no variance
         try:
@@ -291,7 +297,7 @@ def dataframe_to_latex(
                 cell = "-"
             else:
                 m = float(mean_val)
-                cell = f"{100*m:.1f}"
+                cell = f"{100 * m:.1f}"
         except Exception:
             cell = "-"
 
@@ -398,12 +404,14 @@ def dataframe_to_latex(
 
     # Use abbreviations for dataset display names when available
     header = ["Model"] + [escape_latex(DATASET_TO_ABB.get(d, d)) for d in datasets]
-    header.extend([
-        "Avg. (ID)",
-        "Avg. (BEIR OOD)",
-        "Avg. (LoTTE OOD)",
-        "Avg. (OOD)",
-    ])
+    header.extend(
+        [
+            "Avg. (ID)",
+            "Avg. (BEIR OOD)",
+            "Avg. (LoTTE OOD)",
+            "Avg. (OOD)",
+        ]
+    )
     latex_lines.append(" & ".join(header) + " \\\\")
     latex_lines.append("\\midrule")
 
@@ -422,7 +430,7 @@ def dataframe_to_latex(
         ]
         if id_vals:
             avg = sum(id_vals) / len(id_vals)
-            row_parts.append(f"{100*avg:.1f}")
+            row_parts.append(f"{100 * avg:.1f}")
         else:
             row_parts.append("-")
 
@@ -434,7 +442,7 @@ def dataframe_to_latex(
         ]
         if beir_vals:
             beir_avg = sum(beir_vals) / len(beir_vals)
-            row_parts.append(f"{100*beir_avg:.1f}")
+            row_parts.append(f"{100 * beir_avg:.1f}")
         else:
             row_parts.append("-")
 
@@ -446,7 +454,7 @@ def dataframe_to_latex(
         ]
         if lotte_vals:
             lotte_avg = sum(lotte_vals) / len(lotte_vals)
-            row_parts.append(f"{100*lotte_avg:.1f}")
+            row_parts.append(f"{100 * lotte_avg:.1f}")
         else:
             row_parts.append("-")
 
@@ -459,7 +467,7 @@ def dataframe_to_latex(
         ]
         if all_ood_vals:
             all_ood_avg = sum(all_ood_vals) / len(all_ood_vals)
-            row_parts.append(f"{100*all_ood_avg:.1f}")
+            row_parts.append(f"{100 * all_ood_avg:.1f}")
         else:
             row_parts.append("-")
 
@@ -478,7 +486,9 @@ def _read_results_csv(path: Path) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    repo_root = Path("/home/vast/sota-cross-encoders/") # Path(__file__).resolve().parents[1]
+    repo_root = Path(
+        "/home/vast/sota-cross-encoders/"
+    )  # Path(__file__).resolve().parents[1]
     csv_path = repo_root / "results.csv"
     if not csv_path.exists():
         print(f"Could not find results.csv at {csv_path}", file=sys.stderr)
@@ -495,6 +505,10 @@ if __name__ == "__main__":
             sig_df = None
 
     latex = dataframe_to_latex(
-        df, caption="NDCG@10 results", label="tab:ndcg10", sig_df=sig_df, metric_col="R@1000"
+        df,
+        caption="NDCG@10 results",
+        label="tab:ndcg10",
+        sig_df=sig_df,
+        metric_col="R@1000",
     )
     print(latex)

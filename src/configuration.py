@@ -192,7 +192,7 @@ class xpm_torch_Learner:
     loss: str = Losses.marginMSE.value
     """Loss function to use"""
 
-    validation: str = Validation.MSMARCO.value
+    validation: str = Validation.NanoBEIR.value
     """ The validation subset to use """
 
     early_stop_epochs: int = 0
