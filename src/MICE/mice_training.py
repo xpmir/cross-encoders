@@ -26,13 +26,13 @@ from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 
 from xpmir.papers.results import PaperResults
-from xpmir.neural.huggingface import hf_cross_scorer
+from MICE.modeling.mice import mice_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
 from retrievers import MultiRunRetrieverFactory, splade_retriever, bm25_retriever
 from validations import ValidationSet
-from configuration import CE_FineTuning, generate_grid
+from configuration import Mice_FineTuning, generate_grid
 from tests import build_tests
 from format import aggregation_hf
 from training_utils import (
@@ -49,7 +49,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 @learning_experiment()
-def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
+def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
@@ -62,7 +62,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     all_weights = []
 
     def run_one_config(
-        helper: LearningExperimentHelper, cfg: CE_FineTuning, grid_search_id: str
+        helper: LearningExperimentHelper, cfg: Mice_FineTuning, grid_search_id: str
     ):
         """Main process for Cross-encoder training"""
 
@@ -142,9 +142,17 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
         ### TRAINING CROSS ENCODER
 
         ce_trainer: LossTrainer = build_trainer(cfg)
-        # Build the model
-        scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
-            hf_id=cfg.base, max_doc_length=cfg.max_doc_len
+        # Build the model using the unified scorer factory
+        scorer_model, scorer_hf_init_tasks = mice_scorer(
+            hf_id=cfg.base,
+            merge_layer=cfg.merge_layer,
+            drop_layer=cfg.drop_layer,
+            mask_cls_to_doc=cfg.mask_cls_to_doc,
+            mask_query_to_cls=cfg.mask_query_to_cls,
+            freeze_base=cfg.freeze_base,
+            random_top_layers=cfg.random_top_layers,
+            compress_dim=cfg.compress_dim,
+            pooling_method=cfg.pooling_method,
         )
         scorer_model.tag("scorer", grid_search_id)
 

@@ -4,7 +4,7 @@ description: Fine-tune a MiniLM-v2 model with a margin MSE loss on BM25 negative
 
     Starts from the checkpoint > microsoft/MiniLM-L12-H384-uncased
 
-module: ir_training.experiment
+module: cross_encoders_training.experiment
 pre_experiment: pre_experiment
 
 gpu: true
@@ -50,7 +50,7 @@ learner:
 retrieval:
     requirements: duration=20h & cuda(mem=20G)
     batch_size: 64
-    k: 1000
+    k: 100
 
 evaluation:
     test_max_topics: 100

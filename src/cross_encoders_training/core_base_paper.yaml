@@ -3,7 +3,7 @@ title: "Validation comparison experiment"
 description:
     we remove the infoNCE and use h100 for remaining fever evals..
 
-module: ir_training.experiment
+module: cross_encoders_training.experiment
 pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp

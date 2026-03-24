@@ -1,73 +1,58 @@
-id: debug_CE_training
-title: "MiniLM-v2 masking experiment"
-description: Fine-tune a MiniLM-v2 model with a margin MSE loss on BM25 negatives while applying masking.
+id: core_base_ettin150
+title: "Ettin-150-InfoNCE Training"
+description:
+    💡 this config load everything from core_base.yaml, and just overrides the base and learner.loss
+    So that only ettin-150m is launched with infoNCE loss
 
-    Starts from the checkpoint > microsoft/MiniLM-L12-H384-uncased
-
-module: ir_training.experiment
+module: MICE.mice_training
 pre_experiment: pre_experiment
 
-gpu: true
 seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
-base: "microsoft/MiniLM-L12-H384-uncased"
-max_doc_len: 1024
-
-# microsoft/MiniLM-L12-H384-uncased # jhu-clsp/ettin-encoder-32m  microsoft/MiniLM-L12-H384-uncased
-
-retriever: "naver/splade-v3-distilbert" #BM25
+retriever: naver/splade-v3-distilbert
 
 preprocessing:
-    requirements: duration=8h & cpu(cores=4)
+    requirements: duration=8h & cpu(cores=8)
 
 indexation:
     batch_size: 128
-    requirements: duration=20h & cpu(cores=4, mem=10G) & cuda(mem=24G)
+    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
 
 validation:
-    size: 500 # Use 500 topics for validation
+    # Use 500 topics for validation
+    size: 500
 
 # This set of hyperparameters follows: https://github.com/huggingface/sentence-transformers/blob/9f76b5790fa8f0175ccdc27e41f9ae348f557144/examples/training/ms_marco/train_cross-encoder-v2.py
 learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 64
-        max_epochs: 100 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        max_epochs: 200 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
         lr: 7e-6
         eps: 1.0e-8
     # sample_max: 2_000_000
     max_grad_norm: 1.0
-    checkpoint_interval: 50
-    validation_interval: 10
+    checkpoint_interval: 100
+    validation_interval: 50
     validation_top_k: 100
     validation: nanobeir
-    precision: bf16-mixed
-    requirements: duration=20h & cuda(mem=40G)
+    requirements: duration=12h & cpu(cores=16) & cuda(mem=80G)
 
 retrieval:
     requirements: duration=20h & cuda(mem=20G)
     batch_size: 64
-    k: 1000
+    k: 100
 
 evaluation:
     test_max_topics: 100
     in_domain: true
 
+
 #### Params that are grid searched
 grid_search:
     base:
         values_list:
-            - jhu-clsp/ettin-encoder-32m
-            - microsoft/deberta-v3-base
-            # - microsoft/MiniLM-L12-H384-uncased
-            # - jhu-clsp/ettin-encoder-17m
-            # - jhu-clsp/ettin-encoder-68m
-
-    learner.loss:
-        values_list:
-            - marginMSE
-            # - infoNCE_RankDistiLLM
-            # - distillRankNET
+            - microsoft/MiniLM-L12-H384-uncased

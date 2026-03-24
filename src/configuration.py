@@ -269,7 +269,7 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     """max len for scorer, default to 0 = max len of the model"""
 
     pooling_method: str = PoolingMethod.CLS.value
-    """Pooling method to use for the Ettin based scorer: cls or mean"""
+    """Pooling method to use for the ModernBert based scorer: cls or mean"""
 
     compare_with_baseline: bool = False
     """After evaluations are done, whether to test statistical significance against a baseline.
@@ -288,6 +288,31 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
       pooling_method:
         value: "cls"
     """
+
+
+@configuration()
+class Mice_FineTuning(CE_FineTuning):
+    ## MICE specific configuration
+    merge_layer: int = 6
+    """Mid-fusion index: encoder layers are split into bottom (independent) and top (cross-attention)"""
+
+    drop_layer: int = 0
+    """Layer at which to drop backbone layers"""
+
+    mask_cls_to_doc: bool = True
+    """Whether to mask the [CLS] token from attending to document tokens."""
+
+    mask_query_to_cls: bool = True
+    """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
+
+    freeze_base: bool = False
+    """Whether to freeze the bottom layers during finetuning"""
+
+    random_top_layers: bool = False
+    """Whether to initialize top layers randomly instead of copying from backbone"""
+
+    compress_dim: float = 1.0
+    """Factor by which to divide the hidden dimensions of the top layers"""
 
 
 def set_nested_attr(obj: Any, path: str, value: Any):
@@ -342,7 +367,7 @@ def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
     # If grid_search is not present or empty, just return the original config.
     if not hasattr(cfg, "grid_search") or not cfg.grid_search:
         logger.info("no params to grid search, returning raw config")
-        return [cfg], [cfg.id]
+        return [cfg], [{}]
 
     grid_params = cfg.grid_search
 

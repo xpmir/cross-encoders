@@ -3,7 +3,7 @@ title: "Hyperparameter Search with contrastive loss"
 description:
     Try several training hyperparameters for two sizes of backbones
 
-module: ir_training.experiment
+module: cross_encoders_training.experiment
 pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp

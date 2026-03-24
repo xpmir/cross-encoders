@@ -1,36 +1,28 @@
-from collections.abc import Callable
-from typing import Optional
+from typing import List, Tuple, Optional
 import torch
 import torch.nn as nn
-
-from experimaestro import Constant, Param
-from datamaestro_text.data.ir import TextItem
-from transformers import GradientCheckpointingLayer
-from xpmir.learning.context import TrainerContext
-from xpmir.letor.records import BaseRecords
-from xpmir.rankers import LearnableScorer
-from configuration import PoolingMethod
-from xpm_torch.xpmModel import xpmTorchHubModule
-from xpm_torch.utils.logging import easylog
-from transformers.cache_utils import Cache
-from transformers.pytorch_utils import apply_chunking_to_forward
 import logging
 
-logger = easylog()
-logger.setLevel(logging.INFO)
+from experimaestro import Param, LightweightTask, Constant
+from xpmir.letor.records import BaseItems
+from xpmir.rankers import AbstractModuleScorer
+from xpm_torch.utils import to_device
 
-# check if transformers is installed
+from xpmir.text.huggingface.tokenizers import HFTokenizer
+from xpmir.text.tokenizers import TokenizerOptions
+
+# Configuration and common types
+
+# Transformers imports with safety checks
 try:
     from transformers import (
         ModernBertConfig,
         AutoModel,
-        AutoTokenizer,
         AutoConfig,
         AutoModelForSequenceClassification,
     )
     from transformers.models.bert.modeling_bert import BertLayer
     from transformers.models.modernbert.modeling_modernbert import (
-        ModernBertPredictionHead,
         ModernBertMLP,
         ModernBertAttention,
     )
@@ -43,16 +35,83 @@ except Exception:
     logging.error("Install huggingface transformers to use these configurations")
     raise
 
+logger = logging.getLogger(__name__)
 
-class MidFusionCrossEncoder(xpmTorchHubModule, LearnableScorer):
+
+class MICETokenizedTexts:
+    """Container for MICE tokenized inputs (separate query and document streams)"""
+
+    def __init__(self, query_ids, query_mask, doc_ids, doc_mask):
+        self.query_ids = query_ids
+        self.query_mask = query_mask
+        self.doc_ids = doc_ids
+        self.doc_mask = doc_mask
+
+
+class MICEQueryDocTokenizer(HFTokenizer):
+    """Specific tokenizer for MICE that handles query and document independently"""
+
+    max_query_length: Param[Optional[int]]
+    """maximum number of tokens for the query side"""
+
+    max_doc_length: Param[Optional[int]]
+    """maximum number of tokens for the document side"""
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.max_doc_length is None:
+            self.max_doc_length = self.max_length
+        if self.max_query_length is None:
+            self.max_query_length = self.max_length
+
+    def tokenize(
+        self,
+        input_records: BaseItems,
+        options: Optional[TokenizerOptions] = None,
+    ) -> MICETokenizedTexts:
+        # Determine per-side token limits
+        q_max = self.max_query_length
+        d_max = self.max_doc_length
+
+        ix_qs, ix_ds = input_records.pairs()
+        queries = [input_records.unique_topics[i]["text_item"].text for i in ix_qs]
+        docs = [input_records.unique_documents[i]["text_item"].text for i in ix_ds]
+
+        def _encode(texts: List[str], max_tokens: int):
+            return self.tokenizer(
+                texts,
+                add_special_tokens=True,
+                truncation=True,
+                max_length=max_tokens,
+                padding=True,
+                return_tensors="pt",
+            )
+
+        q_enc = _encode(queries, q_max)
+        d_enc = _encode(docs, d_max)
+
+        return MICETokenizedTexts(
+            query_ids=q_enc["input_ids"],
+            query_mask=q_enc["attention_mask"],
+            doc_ids=d_enc["input_ids"],
+            doc_mask=d_enc["attention_mask"],
+        )
+
+
+class MiceCrossEncoder(AbstractModuleScorer):
     """
     Mid-Fusion Cross Encoder base Architecture, with Cross-Attention in the top layers.
     The bottom layers encode query and document independently, while the top layers
     allow the query to attend to the document via cross-attention mechanisms.
     """
 
-    hf_id: Param[str] = "bert-base-uncased"
+    ## Parameters for Config
+
+    hf_id: Param[str]
     """Hugging Face checkpoint identifier that provides weights and config. Must be a BERT-like model."""
+
+    tokenizer: Param[MICEQueryDocTokenizer]
+    """The tokenizer for independent Q/D processing"""
 
     merge_layer: Param[int] = 6
     """Mid-fusion index: encoder layers are split into bottom (independent) and top (cross-attention)"""
@@ -66,9 +125,6 @@ class MidFusionCrossEncoder(xpmTorchHubModule, LearnableScorer):
     mask_query_to_cls: Param[bool] = True
     """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
 
-    use_self_attention: Param[bool] = True
-    """Whether to use self-attention in the top layers along with cross-attention."""
-
     freeze_base: Param[bool] = False
     """Whether to freeze the bottom layers during finetuning"""
 
@@ -81,6 +137,8 @@ class MidFusionCrossEncoder(xpmTorchHubModule, LearnableScorer):
     _version: Constant[int] = 2
     """Model version"""
 
+    ## Attributes (not Parameters)
+
     embeddings: nn.Module
     """Shared embeddings for query and document"""
 
@@ -90,45 +148,29 @@ class MidFusionCrossEncoder(xpmTorchHubModule, LearnableScorer):
     top_layers: nn.ModuleList
     """Top layers: cross-attention encoding"""
 
-    def __initialize__(self, options):
-        super().__initialize__(options)
-
-        ### Gather all the components shared across implementations:
-        assert self.merge_layer > 0, (
-            "merge_layer must be > 0, otherwise no bottom layers exist"
-        )
-        assert not (self.drop_layer and self.drop_layer < self.merge_layer), (
-            "drop_layer must be > merge_layer"
-        )
-
-        # 1. Load Base Configuration
+    def __initialize__(self):
+        super().__initialize__()
+        self.tokenizer.initialize()
+        # Fast config loading
         self.config = AutoConfig.from_pretrained(self.hf_id)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.hf_id)
-
-        # 2. The Top "Head" (Query attends to Document)
-        # We need to create NEW layers that support Cross-Attention
-
-        # Enable decoder mode for the top layers configuration
         self.head_config = AutoConfig.from_pretrained(self.hf_id)
 
-        # Ensure attention implementation matches base config if not present
         if (
             not hasattr(self.head_config, "_attn_implementation")
             or self.head_config._attn_implementation is None
         ):
-            if (
-                hasattr(self.config, "_attn_implementation")
-                and self.config._attn_implementation is not None
-            ):
-                self.head_config._attn_implementation = self.config._attn_implementation
-            else:
-                self.head_config._attn_implementation = "eager"
+            self.head_config._attn_implementation = getattr(
+                self.config, "_attn_implementation", "eager"
+            )
 
-    @property
-    def max_length(self) -> int:
-        return getattr(
-            self.config, "max_position_embeddings", self.tokenizer.model_max_length
-        )
+    def batch_tokenize(
+        self, input_records: BaseItems, options=None
+    ) -> MICETokenizedTexts:
+        """Transform the text to tokens by using the tokenizer"""
+        return self.tokenizer.tokenize(input_records, options=options)
+
+    def get_tokenizer_fn(self):
+        return self.batch_tokenize
 
     def get_extended_attention_mask(self, mask, dtype):
         """Helper to create the -inf mask for transformers"""
@@ -139,6 +181,7 @@ class MidFusionCrossEncoder(xpmTorchHubModule, LearnableScorer):
 
     def get_self_attention_mask(self, mask, dtype):
         """Helper to create the -inf mask for transformers"""
+        logger.info(f"get_self_attention_mask input mask shape: {mask.shape}")
         mask_bool = mask.to(torch.bool)
         # Build a square attention map where both query and key positions must be valid tokens
         valid_pairs = mask_bool[:, None, :, None] & mask_bool[:, None, None, :]
@@ -147,6 +190,7 @@ class MidFusionCrossEncoder(xpmTorchHubModule, LearnableScorer):
             valid_pairs[:, :, 1:, 0] = False
         attn_mask = torch.zeros(valid_pairs.shape, dtype=dtype, device=mask.device)
         attn_mask.masked_fill_(~valid_pairs, torch.finfo(dtype).min)
+        logger.info(f"get_self_attention_mask output shape: {attn_mask.shape}")
         return attn_mask
 
     def get_cross_attention_mask(self, query_mask, doc_mask, dtype):
@@ -166,15 +210,11 @@ class MidFusionCrossEncoder(xpmTorchHubModule, LearnableScorer):
         return attn_mask
 
 
-class MiniLMMidFusionCrossEncoder(MidFusionCrossEncoder):
-    """
-    Mid-Fusion Cross Encoder based on BERT Architecture.
-    """
+class BertMiceCrossEncoder(MiceCrossEncoder):
+    """Mid-Fusion Cross Encoder based on BERT Architecture."""
 
-    def __initialize__(self, options):
-        super().__initialize__(options)
-
-        # for BertLayer, we can just activate is_decoder and add_cross_attention in the config, oof !
+    def __initialize__(self):
+        super().__initialize__()
         self.head_config.is_decoder = True
         self.head_config.add_cross_attention = True
 
@@ -188,122 +228,32 @@ class MiniLMMidFusionCrossEncoder(MidFusionCrossEncoder):
             self.head_config.num_attention_heads = int(
                 self.head_config.num_attention_heads / self.compress_dim
             )
-            logging.info(
-                f"Compressing top layer dimensions by factor {self.compress_dim}: hidden_size={self.head_config.hidden_size}, intermediate_size={self.head_config.intermediate_size}, num_attention_heads={self.head_config.num_attention_heads}"
-            )
-            # self.adapter = nn.Sequential(
-            #     nn.Linear(
-            #         self.config.hidden_size, self.head_config.hidden_size, bias=True
-            #     ),
-            #     nn.GELU(),
-            # )
             self.adapter = nn.Linear(
-                self.config.hidden_size, self.head_config.hidden_size, bias=True
+                self.config.hidden_size, self.head_config.hidden_size
             )
         else:
             self.adapter = None
 
-        # 2. The Bottom Encoders (Shared weights for Query and Doc)
-        # We load the pre-trained BERT model for the bottom half
-        full_bert = AutoModel.from_pretrained(self.hf_id)
-        self.embeddings = full_bert.embeddings
+        # Build skeleton (initially random)
+        # Note: We use the config to build the structure. Weights copied later by InitTask.
+        temp_model = AutoModel.from_config(self.config)
+        self.add_module("embeddings", temp_model.embeddings)
+        self.add_module(
+            "bottom_layers",
+            nn.ModuleList([BertLayer(self.config) for _ in range(self.merge_layer)]),
+        )
 
-        # Take layers 0 to merge_layer-1
-        self.bottom_layers = nn.ModuleList(full_bert.encoder.layer[: self.merge_layer])
+        num_top = (self.drop_layer or len(temp_model.encoder.layer)) - self.merge_layer
+        self.add_module(
+            "top_layers",
+            nn.ModuleList([BertLayer(self.head_config) for _ in range(num_top)]),
+        )
 
-        self.top_layers = nn.ModuleList()
-
-        # Load original top layers to copy weights from
-        if self.drop_layer > 0:
-            assert self.drop_layer >= self.merge_layer, (
-                "drop_layer must be >= merge_layer"
-            )
-            assert self.drop_layer < len(full_bert.encoder.layer), (
-                f"drop_layer {self.drop_layer} exceeds number of layers in the backbone: {len(full_bert.encoder.layer)}"
-            )
-            original_top_layers = full_bert.encoder.layer[
-                self.merge_layer : self.drop_layer
-            ]
-            logging.info(
-                f"Dropping backbone layers {self.drop_layer}-{len(full_bert.encoder.layer) - 1}"
-            )
-        else:
-            original_top_layers = full_bert.encoder.layer[self.merge_layer :]
-
-        for i in range(len(original_top_layers)):
-            # Instantiate a fresh layer with Cross-Attention enabled
-            new_layer = BertLayer(self.head_config)
-
-            # COPY trained weights (Self-Attention + FFN) from original BERT to new layer
-            # Note: The Cross-Attention block (new_layer.crossattention) will remain random!
-            if not self.random_top_layers:
-                logger.info(
-                    f"Copying weights from original BERT to Mid-Fusion top layer {i}"
-                )
-                self._copy_weights(original_top_layers[i], new_layer)
-            else:
-                logger.info(f"Initializing Mid-Fusion top layer {i} randomly")
-
-            self.top_layers.append(new_layer)
-
-        # pooler
-        # Preserve the pretrained pooler to keep the original [CLS] projection
-        self.pooler = getattr(full_bert, "pooler", None)
-
-        if self.pooler is None:
-            logger.warning(
-                "No pooler found in the base model; using [CLS] token directly."
-            )
-        elif self.compress_dim > 1:
-            # we must adjust the pooler to the new hidden size
-            self.pooler.dense = nn.Linear(
-                self.head_config.hidden_size, self.head_config.hidden_size, bias=True
-            )
-
-        # Classifier
+        self.pooler = getattr(temp_model, "pooler", None)
+        if self.pooler:
+            self.add_module("pooler", self.pooler)
         self.dropout_layer = nn.Dropout(self.config.hidden_dropout_prob)
         self.classifier = nn.Linear(self.head_config.hidden_size, 1)
-
-        if self.freeze_base:
-            logger.info("Freezing base model (bottom layers) parameters.")
-            self.bottom_layers.requires_grad_(False)
-            self.embeddings.requires_grad_(False)
-
-    def _copy_weights(self, src_layer, target_layer):
-        """
-        Copies Self-Attention and FFN weights from src to target.
-        Leaves Cross-Attention weights (only in target) initialized randomly.
-        """
-        # Copy Self-Attention
-        target_layer.attention.self.load_state_dict(
-            src_layer.attention.self.state_dict()
-        )
-        target_layer.attention.output.load_state_dict(
-            src_layer.attention.output.state_dict()
-        )
-
-        # Copy Intermediate (FFN part 1)
-        target_layer.intermediate.load_state_dict(src_layer.intermediate.state_dict())
-
-        # Copy Output (FFN part 2)
-        target_layer.output.load_state_dict(src_layer.output.state_dict())
-
-        # Seed cross-attention with self-attention weights when available
-        if (
-            hasattr(target_layer, "crossattention")
-            and target_layer.crossattention is not None
-        ):
-            try:
-                target_layer.crossattention.self.load_state_dict(
-                    src_layer.attention.self.state_dict()
-                )
-                target_layer.crossattention.output.load_state_dict(
-                    src_layer.attention.output.state_dict()
-                )
-            except Exception as err:
-                logger.exception("Cross-attention weight copy failed: %s", err)
-            else:
-                logger.info("Cross-attention weights seeded from self-attention")
 
     def forward_bottom(self, input_ids, attention_mask):
         """Compute bottom layers (independent encoding)"""
@@ -314,85 +264,13 @@ class MiniLMMidFusionCrossEncoder(MidFusionCrossEncoder):
         batch, seq_len = input_ids.size()
 
         for layer in self.bottom_layers:
-            x = layer(x, ext_mask)[0]
+            x = layer(x, ext_mask)
         return x
-
-    def forward_bertLayer_wo_selfAttention(
-        self,
-        bertLayer: BertLayer,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        encoder_hidden_states: Optional[torch.FloatTensor] = None,
-        encoder_attention_mask: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[Cache] = None,
-        output_attentions: Optional[bool] = False,
-        cache_position: Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor]:
-        """Same forward as modeling_bert.BertLayer but without self-attention"""
-        # self_attention_outputs = bertLayer.attention(
-        #     hidden_states,
-        #     attention_mask=attention_mask,
-        #     head_mask=head_mask,
-        #     output_attentions=output_attentions,
-        #     past_key_values=past_key_values,
-        #     cache_position=cache_position,
-        # )
-        # attention_output = self_attention_outputs[0]
-        # outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
-
-        assert bertLayer.is_decoder, (
-            "bertLayer must be instantiated as a decoder (is_decoder=True)"
-        )
-        assert encoder_hidden_states is not None, (
-            "encoder_hidden_states must be provided for cross-attention"
-        )
-
-        if not hasattr(bertLayer, "crossattention"):
-            raise ValueError(
-                f"If `encoder_hidden_states` are passed, {bertLayer} has to be instantiated with cross-attention layers"
-                " by setting `config.add_cross_attention=True`"
-            )
-
-        cross_attention_outputs = bertLayer.crossattention(
-            hidden_states,
-            attention_mask=encoder_attention_mask,
-            head_mask=head_mask,
-            encoder_hidden_states=encoder_hidden_states,
-            past_key_values=past_key_values,
-            output_attentions=output_attentions,
-            cache_position=cache_position,
-        )
-        attention_output = cross_attention_outputs[0]
-        outputs = cross_attention_outputs[
-            1:
-        ]  # add cross attentions if we output attention weights
-
-        layer_output = apply_chunking_to_forward(
-            bertLayer.feed_forward_chunk,
-            bertLayer.chunk_size_feed_forward,
-            bertLayer.seq_len_dim,
-            attention_output,
-        )
-        outputs = (layer_output,) + outputs
-
-        return outputs
-
-    def tokenze_texts(self, texts):
-        return self.tokenizer(
-            texts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.max_length,
-        )
 
     def forward(
         self,
-        inputs: BaseRecords,
-        info: TrainerContext = None,
-        tokenized_queries: Optional[dict] = None,
-        tokenized_docs: Optional[dict] = None,
+        inputs: BaseItems,
+        tokenized: Optional[MICETokenizedTexts] = None,
         doc_hidden_states: Optional[torch.Tensor] = None,
     ):
         """
@@ -405,23 +283,17 @@ class MiniLMMidFusionCrossEncoder(MidFusionCrossEncoder):
         """
 
         # Prepare inputs
+        if tokenized is None:
+            tokenized = self.batch_tokenize(inputs)
 
-        # Tokenize
-        if tokenized_docs is None:
-            docs = [d[TextItem].text for d in inputs.documents]
-            tokenized_docs = self.tokenze_texts(docs)
-
-        if tokenized_queries is None:
-            queries = [t[TextItem].text for t in inputs.topics]
-            tokenized_queries = self.tokenze_texts(queries)
-
-        query_ids = tokenized_queries.input_ids.to(self.device)
-        query_mask = tokenized_queries.attention_mask.to(self.device)
-        doc_ids = tokenized_docs.input_ids.to(self.device)
-        doc_mask = tokenized_docs.attention_mask.to(self.device)
+        query_ids = tokenized.query_ids
+        query_mask = tokenized.query_mask
+        doc_ids = tokenized.doc_ids
+        doc_mask = tokenized.doc_mask
 
         # 1. Process Query through Bottom Layers
         q_hidden = self.forward_bottom(query_ids, query_mask)
+
         # Mask for Self-Attention (Query) shape [batch, 1, seq_len_query, seq_len_query]
         q_ext_mask = self.get_self_attention_mask(query_mask, q_hidden.dtype)
 
@@ -443,22 +315,13 @@ class MiniLMMidFusionCrossEncoder(MidFusionCrossEncoder):
         for layer in self.top_layers:
             # BertLayer with is_decoder=True accepts:
             # (hidden_states, attention_mask, encoder_hidden_states, encoder_attention_mask)
-            if self.use_self_attention:
-                layer_out = layer(
-                    hidden_states=q_hidden,  # Query (Self-Attn)
-                    attention_mask=q_ext_mask,
-                    encoder_hidden_states=doc_hidden_states,  # Document (Cross-Attn Key/Value)
-                    encoder_attention_mask=d_ext_mask,
-                )
-            else:
-                layer_out = self.forward_bertLayer_wo_selfAttention(
-                    bertLayer=layer,
-                    hidden_states=q_hidden,  # Query (Cross-Attn)
-                    encoder_hidden_states=doc_hidden_states,  # Document (Cross-Attn Key/Value)
-                    encoder_attention_mask=d_ext_mask,
-                )
-
-            q_hidden = layer_out[0]
+            layer_out = layer(
+                hidden_states=q_hidden,  # Query (Self-Attn)
+                attention_mask=q_ext_mask,
+                encoder_hidden_states=doc_hidden_states,  # Document (Cross-Attn Key/Value)
+                encoder_attention_mask=d_ext_mask,
+            )
+            q_hidden = layer_out
 
         # 4. Score (Use [CLS] of the Query)
         if self.pooler is not None:
@@ -471,194 +334,16 @@ class MiniLMMidFusionCrossEncoder(MidFusionCrossEncoder):
         return score.squeeze(-1)
 
 
-class ModernBertCrossAttentionLayer(GradientCheckpointingLayer):
-    """
-    A ModernBERT encoder layer with added cross-attention for mid-fusion ranking.
-
-    This layer combines:
-    1. Bidirectional self-attention on the query (with optional local/global patterns from ModernBERT)
-    2. Cross-attention from query to document (always global)
-    3. Feed-forward network (MLP)
-    """
-
-    def __init__(self, config: ModernBertConfig, layer_id: Optional[int] = None):
-        super().__init__()
-        self.config = config
-
-        # Layer normalization (first layer uses identity for pre-norm architecture)
-        if layer_id == 0:
-            self.attn_norm = nn.Identity()
-        else:
-            self.attn_norm = nn.LayerNorm(
-                config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
-            )
-
-        # Self-attention on query: inherits local/global behavior from ModernBERT encoder
-        self.attn = ModernBertAttention(config=config, layer_id=layer_id)
-
-        # Cross-attention from query to document: always uses global (full) attention
-        self.crossattention = ModernBertCrossAttention(
-            config=config, layer_idx=layer_id
-        )
-
-        # Feed-forward network
-        self.mlp_norm = nn.LayerNorm(
-            config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
-        )
-        self.mlp = ModernBertMLP(config)
-
-    @torch.compile(dynamic=True)
-    def compiled_mlp(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return self.mlp(self.mlp_norm(hidden_states))
-
-    def forward_modernbertLayer_wo_selfAttention(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        sliding_window_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seqlen: Optional[int] = None,
-        output_attentions: Optional[bool] = False,
-    ) -> tuple[torch.Tensor]:
-        """Same forward as modeling_bert.BertLayer but without self-attention"""
-        # Self-attention on query (bidirectional)
-        # attn_outputs = self.attn(
-        #     self.attn_norm(hidden_states),
-        #     attention_mask=attention_mask,
-        #     sliding_window_mask=sliding_window_mask,
-        #     position_ids=position_ids,
-        #     cu_seqlens=cu_seqlens,
-        #     max_seqlen=max_seqlen,
-        #     output_attentions=output_attentions,
-        # )
-
-        # attention_output = attn_outputs[0]
-        # outputs = attn_outputs[1:]
-
-        # Apply self-attention residual immediately
-        # hidden_states = hidden_states + attention_output
-
-        # Prepare position embeddings for query and encoder (rotary)
-        if position_ids is None:
-            # create position ids for query if missing
-            b_q, s_q, _ = hidden_states.shape
-            position_ids = (
-                torch.arange(s_q, device=hidden_states.device)
-                .unsqueeze(0)
-                .expand(b_q, s_q)
-            )
-
-        # Cross-attention from query to document (always global/full attention)
-        if encoder_hidden_states is not None:
-            encoder_hidden_states = self.attn_norm(encoder_hidden_states)
-
-            cross_attention_outputs = self.crossattention(
-                query=self.attn_norm(hidden_states),
-                key=encoder_hidden_states,
-                value=encoder_hidden_states,
-                attention_mask=encoder_attention_mask,
-                output_attentions=output_attentions,
-            )
-            cross_attention_output = cross_attention_outputs[0]
-            # normalize outputs tuples to concatenation
-            outputs = cross_attention_outputs[1:]
-            hidden_states = hidden_states + cross_attention_output
-
-        mlp_output = (
-            self.compiled_mlp(hidden_states)
-            if self.config.reference_compile
-            else self.mlp(self.mlp_norm(hidden_states))
-        )
-        hidden_states = hidden_states + mlp_output
-
-        return (hidden_states,) + outputs  # add attentions if outputted
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        sliding_window_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        cu_seqlens: Optional[torch.Tensor] = None,
-        max_seqlen: Optional[int] = None,
-        output_attentions: Optional[bool] = False,
-    ) -> torch.Tensor:
-        # Self-attention on query (bidirectional)
-        attn_outputs = self.attn(
-            self.attn_norm(hidden_states),
-            attention_mask=attention_mask,
-            sliding_window_mask=sliding_window_mask,
-            position_ids=position_ids,
-            cu_seqlens=cu_seqlens,
-            max_seqlen=max_seqlen,
-            output_attentions=output_attentions,
-        )
-
-        attention_output = attn_outputs[0]
-        outputs = attn_outputs[1:]
-
-        # Apply self-attention residual immediately
-        hidden_states = hidden_states + attention_output
-
-        # Prepare position embeddings for query and encoder (rotary)
-        if position_ids is None:
-            # create position ids for query if missing
-            b_q, s_q, _ = hidden_states.shape
-            position_ids = (
-                torch.arange(s_q, device=hidden_states.device)
-                .unsqueeze(0)
-                .expand(b_q, s_q)
-            )
-
-        # Cross-attention from query to document (always global/full attention)
-        if encoder_hidden_states is not None:
-            encoder_hidden_states = self.attn_norm(encoder_hidden_states)
-
-            cross_attention_outputs = self.crossattention(
-                query=self.attn_norm(hidden_states),
-                key=encoder_hidden_states,
-                value=encoder_hidden_states,
-                attention_mask=encoder_attention_mask,
-                output_attentions=output_attentions,
-            )
-            cross_attention_output = cross_attention_outputs[0]
-            # normalize outputs tuples to concatenation
-            outputs = outputs + cross_attention_outputs[1:]
-            hidden_states = hidden_states + cross_attention_output
-
-        mlp_output = (
-            self.compiled_mlp(hidden_states)
-            if self.config.reference_compile
-            else self.mlp(self.mlp_norm(hidden_states))
-        )
-        hidden_states = hidden_states + mlp_output
-
-        return (hidden_states,) + outputs  # add attentions if outputted
-
-
 class ModernBertCrossAttention(nn.Module):
-    """Cross-attention wrapper for ModernBERT that accepts separate query/key/value tensors.
+    """Cross-attention wrapper for ModernBERT that accepts separate query/key/value tensors."""
 
-    Mirrors the projection and attention interface of ModernBertDecoderAttention but
-    allows providing distinct key/value tensors coming from an encoder.
-    """
-
-    # TOdo: Consider changing the config type, as we add new attributes to it and only use a subset of ModernBertConfig
     def __init__(self, config: ModernBertConfig, layer_idx: Optional[int] = None):
         super().__init__()
         self.config = config
-        self.layer_idx = layer_idx
         self.head_dim = config.hidden_size // config.num_attention_heads
         self.num_heads = config.num_attention_heads
         self.all_head_size = self.head_dim * self.num_heads
-        self.scaling = (
-            self.head_dim**-0.5
-        )  # See https://github.com/huggingface/transformers/blob/main/src/transformers/models/modernbert_decoder/modular_modernbert_decoder.py#L311
+        self.scaling = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
 
         self.q_proj = nn.Linear(
@@ -670,7 +355,6 @@ class ModernBertCrossAttention(nn.Module):
         self.v_proj = nn.Linear(
             config.hidden_size, self.all_head_size, bias=config.attention_bias
         )
-
         self.Wo = nn.Linear(
             config.hidden_size, config.hidden_size, bias=config.attention_bias
         )
@@ -680,35 +364,21 @@ class ModernBertCrossAttention(nn.Module):
             else nn.Identity()
         )
 
-        # Note: Cross-attention is always global (full attention from query to all document tokens)
-        # No sliding window restriction is applied here
+    def forward(self, query, key, value, attention_mask, **kwargs):
+        q_shape = query.shape[:-1]
+        query_states = (
+            self.q_proj(query).view(*q_shape, -1, self.head_dim).transpose(1, 2)
+        )
+        key_states = (
+            self.k_proj(key).view(*key.shape[:-1], -1, self.head_dim).transpose(1, 2)
+        )
+        value_states = (
+            self.v_proj(value)
+            .view(*value.shape[:-1], -1, self.head_dim)
+            .transpose(1, 2)
+        )
 
-    def forward(
-        self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        attention_mask: Optional[torch.Tensor],
-        **kwargs,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        # Handle different sequence lengths for query / key / value
-        q_input_shape = query.shape[:-1]
-        q_hidden_shape = (*q_input_shape, -1, self.head_dim)
-        k_input_shape = key.shape[:-1]
-        k_hidden_shape = (*k_input_shape, -1, self.head_dim)
-        v_input_shape = value.shape[:-1]
-        v_hidden_shape = (*v_input_shape, -1, self.head_dim)
-
-        query_states = self.q_proj(query).view(q_hidden_shape).transpose(1, 2)
-        key_states = self.k_proj(key).view(k_hidden_shape).transpose(1, 2)
-        value_states = self.v_proj(value).view(v_hidden_shape).transpose(1, 2)
-
-        # Fallback to a direct (explicit) cross-attention implementation
-        # This handles different query/key/value sequence lengths and
-        # doesn't rely on attention helpers that expect packed qkv tensors.
-        output_attentions = kwargs.get("output_attentions", False)
-
-        attention_interface: Callable = eager_attention_forward
+        attention_interface = eager_attention_forward
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[
                 self.config._attn_implementation
@@ -722,270 +392,380 @@ class ModernBertCrossAttention(nn.Module):
             attention_mask,
             dropout=self.attention_dropout if self.training else 0.0,
             scaling=self.scaling,
-            # sliding_window=self.sliding_window,
             **kwargs,
         )
-        attn_output = attn_output.reshape(*q_input_shape, -1).contiguous()
-        attn_output = self.out_drop(self.Wo(attn_output))
-
-        if output_attentions:
-            return attn_output, attn_weights
-        return attn_output, None
+        attn_output = attn_output.reshape(*q_shape, -1).contiguous()
+        return self.out_drop(self.Wo(attn_output)), attn_weights
 
 
-class EttinMidFusionCrossEncoder(MidFusionCrossEncoder):
+class ModernBertCrossAttentionLayer(nn.Module):
     """
-    Mid-Fusion Cross Encoder based on ModernBERT Architecture.
+    A ModernBERT encoder layer with added cross-attention for mid-fusion ranking.
     """
+
+    def __init__(self, config: ModernBertConfig, layer_id: Optional[int] = None):
+        super().__init__()
+        self.config = config
+        self.attn_norm = (
+            nn.Identity()
+            if layer_id == 0
+            else nn.LayerNorm(config.hidden_size, eps=config.norm_eps)
+        )
+        self.attn = ModernBertAttention(config=config, layer_id=layer_id)
+        self.crossattention = ModernBertCrossAttention(
+            config=config, layer_idx=layer_id
+        )
+        self.mlp_norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps)
+        self.mlp = ModernBertMLP(config)
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        position_ids=None,
+    ):
+        # Self-attn residual
+        attn_out = self.attn(
+            self.attn_norm(hidden_states),
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+        )[0]
+        hidden_states = hidden_states + attn_out
+
+        # Cross-attn residual
+        if encoder_hidden_states is not None:
+            cross_out = self.crossattention(
+                query=self.attn_norm(hidden_states),
+                key=self.attn_norm(encoder_hidden_states),
+                value=self.attn_norm(encoder_hidden_states),
+                attention_mask=encoder_attention_mask,
+            )[0]
+            hidden_states = hidden_states + cross_out
+
+        # MLP residual
+        hidden_states = hidden_states + self.mlp(self.mlp_norm(hidden_states))
+        return (hidden_states,)
+
+
+class ModernBertMiceCrossEncoder(MiceCrossEncoder):
+    """Mid-Fusion Cross Encoder based on ModernBERT Architecture."""
 
     pooling_method: Param[Optional[str]] = None
-    """Pooling method to use for the Ettin based scorer: cls or mean.
+    """Pooling method to use for the ModernBert based scorer: cls or mean.
     Leave it to None for models coming from the Hub, as it will be inferred from the model config."""
 
-    _version: Constant[int] = 10
-    """Model version"""
-
-    def __initialize__(self, options):
-        super().__initialize__(options)
-        if self.pooling_method is None:
-            if self.config.classifier_pooling == PoolingMethod.CLS.value:
-                self.pooling_function = lambda x: x[:, 0]
-            elif self.config.classifier_pooling == PoolingMethod.MEAN.value:
-                self.pooling_function = lambda x: (x).mean(dim=1)
-            else:
-                raise ValueError(
-                    f"Unsupported pooling method in model config: {self.config.classifier_pooling}"
-                )
+    def __initialize__(self):
+        super().__initialize__()
+        pm = self.pooling_method or getattr(self.config, "classifier_pooling", "cls")
+        if pm == "cls":
+            self.pooling_function = lambda x: x[:, 0]
         else:
-            if self.pooling_method == PoolingMethod.CLS.value:
-                self.pooling_function = lambda x: x[:, 0]
-            elif self.pooling_method == PoolingMethod.MEAN.value:
-                self.pooling_function = lambda x: (x).mean(dim=1)
-            else:
-                raise ValueError(
-                    f"Unsupported pooling method provided: {self.pooling_method}"
-                )
+            self.pooling_function = lambda x: x.mean(dim=1)
 
-        # The Bottom Encoders (Shared weights for Query and Doc)
-        # We load the pre-trained BERT model for the bottom half
-        full_modernbert = AutoModelForSequenceClassification.from_pretrained(self.hf_id)
-        self.embeddings = full_modernbert.model.embeddings
-
-        # Take layers 0 to merge_layer-1
-        self.bottom_layers = nn.ModuleList(
-            full_modernbert.model.layers[: self.merge_layer]
+        # Structure setup
+        # Weights copied later by InitTask
+        temp_model = AutoModelForSequenceClassification.from_config(self.config)
+        self.add_module("embeddings", temp_model.model.embeddings)
+        self.add_module(
+            "bottom_layers",
+            nn.ModuleList(
+                [
+                    type(temp_model.model.layers[0])(self.config, i)
+                    for i in range(self.merge_layer)
+                ]
+            ),
         )
 
-        self.top_layers = nn.ModuleList()
-        # Load original top layers to copy weights from
-        if self.drop_layer > 0:
-            assert self.drop_layer >= self.merge_layer, (
-                "drop_layer must be >= merge_layer"
-            )
-            assert self.drop_layer < len(full_modernbert.model.layers), (
-                f"drop_layer {self.drop_layer} exceeds number of layers in the backbone: {len(full_modernbert.model.layers)}"
-            )
-            original_top_layers = full_modernbert.model.layers[
-                self.merge_layer : self.drop_layer
-            ]
-            logging.info(
-                f"Dropping backbone layers {self.drop_layer}-{len(full_modernbert.model.layers) - 1}"
-            )
-        else:
-            original_top_layers = full_modernbert.model.layers[self.merge_layer :]
+        num_top = (self.drop_layer or len(temp_model.model.layers)) - self.merge_layer
+        self.add_module(
+            "top_layers",
+            nn.ModuleList(
+                [
+                    ModernBertCrossAttentionLayer(self.config, self.merge_layer + i)
+                    for i in range(num_top)
+                ]
+            ),
+        )
 
-        for i in range(len(original_top_layers)):
-            # Instantiate a fresh layer with Cross-Attention enabled
-            # Re-uses the same config from the original layer
-            new_layer = ModernBertCrossAttentionLayer(
-                full_modernbert.model.layers[self.merge_layer + i].config,
-                layer_id=self.merge_layer + i,
-            )
-
-            # COPY trained weights (Self-Attention + FFN) from original BERT to new layer
-            # Note: The Cross-Attention block (new_layer.crossattention) will remain random!
-            if not self.random_top_layers:
-                logger.info(
-                    f"Copying weights from original ModernBERT to Mid-Fusion top layer {i}"
-                )
-                self._copy_weights(original_top_layers[i], new_layer)
-            else:
-                logger.info(f"Initializing Mid-Fusion top layer {i} randomly")
-
-            self.top_layers.append(new_layer)
-
-        self.final_norm = full_modernbert.model.final_norm
-
-        # ModernBertPredictionHead
-        self.head: ModernBertPredictionHead = full_modernbert.head
-
-        # Classifier
+        self.add_module("final_norm", temp_model.model.final_norm)
+        self.add_module("head", temp_model.head)
         self.dropout_layer = nn.Dropout(self.config.classifier_dropout)
         self.classifier = nn.Linear(self.config.hidden_size, 1)
 
-        if self.freeze_base:
-            logger.info("Freezing base model (bottom layers) parameters.")
-            self.bottom_layers.requires_grad_(False)
-            self.embeddings.requires_grad_(False)
+    def forward(
+        self, inputs: BaseItems, tokenized: Optional[MICETokenizedTexts] = None
+    ):
+        if tokenized is None:
+            tokenized = self.batch_tokenize(inputs)
 
-        del full_modernbert  # free memory
-        torch.cuda.empty_cache()
+        query_ids = to_device(tokenized.query_ids, self.device)
+        query_mask = to_device(tokenized.query_mask, self.device)
+        doc_ids = to_device(tokenized.doc_ids, self.device)
+        doc_mask = to_device(tokenized.doc_mask, self.device)
 
-    def _init_decoder_qkv_from_encoder(self, decoder_attention, encoder_attention):
-        """Initialize decoder's separate Q, K, V projections from encoder's combined Wqkv."""
-        all_head_size = encoder_attention.all_head_size
+        # Pos IDs for RoPE
+        def _get_pos_ids(ids):
+            b, s = ids.size()
+            return torch.arange(s, device=ids.device).unsqueeze(0).expand(b, s)
 
-        with torch.no_grad():
-            # Split and copy weights
-            decoder_attention.q_proj.weight.copy_(
-                encoder_attention.Wqkv.weight[0:all_head_size, :]
-            )
-            decoder_attention.k_proj.weight.copy_(
-                encoder_attention.Wqkv.weight[all_head_size : 2 * all_head_size, :]
-            )
-            decoder_attention.v_proj.weight.copy_(
-                encoder_attention.Wqkv.weight[2 * all_head_size : 3 * all_head_size, :]
-            )
+        # Bottom
+        q_ext = self.get_extended_attention_mask(query_mask, torch.float32)
+        d_ext = self.get_extended_attention_mask(doc_mask, torch.float32)
 
-            # Split and copy biases if they exist
-            if encoder_attention.Wqkv.bias is not None:
-                decoder_attention.q_proj.bias.copy_(
-                    encoder_attention.Wqkv.bias[0:all_head_size]
+        x_q = self.embeddings(query_ids)
+        x_d = self.embeddings(doc_ids)
+
+        q_pos = _get_pos_ids(query_ids)
+        d_pos = _get_pos_ids(doc_ids)
+
+        for layer in self.bottom_layers:
+            x_q = layer(x_q, q_ext, position_ids=q_pos)[0]
+            x_d = layer(x_d, d_ext, position_ids=d_pos)[0]
+
+        # Top
+        q_self = self.get_self_attention_mask(query_mask, x_q.dtype)
+        cross_mask = self.get_cross_attention_mask(query_mask, doc_mask, x_q.dtype)
+
+        for layer in self.top_layers:
+            x_q = layer(
+                x_q,
+                attention_mask=q_self,
+                encoder_hidden_states=x_d,
+                encoder_attention_mask=cross_mask,
+                position_ids=q_pos,
+            )[0]
+
+        x_q = self.final_norm(x_q)
+        pooled = self.pooling_function(x_q)
+        return self.classifier(self.dropout_layer(self.head(pooled))).squeeze(-1)
+
+
+class InitMICEBERTFromHFID(LightweightTask):
+    """Worker-node task to load weights into MICE BERT model"""
+
+    model: Param[BertMiceCrossEncoder]
+
+    def execute(self):
+        # Ensure model is instantiated and initialized
+        model = self.model
+        hf_id = model.hf_id
+
+        # Ensure config is available even before full initialization
+        if not hasattr(model, "config"):
+            model.config = AutoConfig.from_pretrained(hf_id)
+        if not hasattr(model, "head_config"):
+            model.head_config = AutoConfig.from_pretrained(hf_id)
+            model.head_config.is_decoder = True
+            model.head_config.add_cross_attention = True
+            if (
+                not hasattr(model.head_config, "_attn_implementation")
+                or model.head_config._attn_implementation is None
+            ):
+                model.head_config._attn_implementation = getattr(
+                    model.config, "_attn_implementation", "eager"
                 )
-                decoder_attention.k_proj.bias.copy_(
-                    encoder_attention.Wqkv.bias[all_head_size : 2 * all_head_size]
+
+        logger.info(f"Building MICE from pretrained Bert model: {hf_id}")
+
+        full_bert = AutoModel.from_pretrained(hf_id)
+        model.embeddings = full_bert.embeddings
+
+        model.top_layers = nn.ModuleList()
+
+        # Load original top layers to copy weights from
+        if model.drop_layer > 0:
+            assert model.drop_layer >= model.merge_layer, (
+                "drop_layer must be >= merge_layer"
+            )
+            assert model.drop_layer < len(full_bert.encoder.layer), (
+                f"drop_layer {model.drop_layer} exceeds number of layers in the backbone: {len(full_bert.encoder.layer)}"
+            )
+            original_top_layers = full_bert.encoder.layer[
+                model.merge_layer : model.drop_layer
+            ]
+            logging.info(
+                f"Dropping backbone layers {model.drop_layer}-{len(full_bert.encoder.layer) - 1}"
+            )
+        else:
+            original_top_layers = full_bert.encoder.layer[model.merge_layer :]
+
+        for i in range(len(original_top_layers)):
+            # Instantiate a fresh layer with Cross-Attention enabled
+            new_layer = BertLayer(model.head_config)
+
+            # COPY trained weights (Self-Attention + FFN) from original BERT to new layer
+            # Note: The Cross-Attention block (new_layer.crossattention) will remain random!
+            if not model.random_top_layers:
+                logger.info(
+                    f"Copying weights from original BERT to Mid-Fusion top layer {i}"
                 )
-                decoder_attention.v_proj.bias.copy_(
-                    encoder_attention.Wqkv.bias[2 * all_head_size : 3 * all_head_size]
+                self._copy_bert_weights(original_top_layers[i], new_layer)
+            else:
+                logger.info(f"Initializing Mid-Fusion top layer {i} randomly")
+
+            model.top_layers.append(new_layer)
+
+        # pooler
+        # Preserve the pretrained pooler to keep the original [CLS] projection
+        model.pooler = getattr(full_bert, "pooler", None)
+
+        if model.pooler is None:
+            logger.warning(
+                "No pooler found in the base model; using [CLS] token directly."
+            )
+
+        # Call initialize at the end
+        model.initialize()
+
+    def _copy_bert_weights(self, src, target):
+        """
+        Copies Self-Attention and FFN weights from src to target.
+        Leaves Cross-Attention weights (only in target) initialized randomly.
+        """
+        target.attention.self.load_state_dict(src.attention.self.state_dict())
+        target.attention.output.load_state_dict(src.attention.output.state_dict())
+        target.intermediate.load_state_dict(src.intermediate.state_dict())
+        target.output.load_state_dict(src.output.state_dict())
+        if hasattr(target, "crossattention") and target.crossattention:
+            target.crossattention.self.load_state_dict(src.attention.self.state_dict())
+            target.crossattention.output.load_state_dict(
+                src.attention.output.state_dict()
+            )
+
+
+class InitMICEModernBERTFromHFID(LightweightTask):
+    """Worker-node task to load weights into MICE ModernBERT model"""
+
+    model: Param[ModernBertMiceCrossEncoder]
+
+    def execute(self):
+        # Ensure model is instantiated and initialized
+        model = self.model
+        hf_id = model.hf_id
+
+        # Ensure config is available even before full initialization
+        if not hasattr(model, "config"):
+            model.config = AutoConfig.from_pretrained(hf_id)
+        if not hasattr(model, "head_config"):
+            model.head_config = AutoConfig.from_pretrained(hf_id)
+            model.head_config.is_decoder = True
+            model.head_config.add_cross_attention = True
+            if (
+                not hasattr(model.head_config, "_attn_implementation")
+                or model.head_config._attn_implementation is None
+            ):
+                model.head_config._attn_implementation = getattr(
+                    model.config, "_attn_implementation", "eager"
                 )
 
-    def _copy_weights(self, src_layer, target_layer):
+        logger.info(f"Loading MICE ModernBERT weights from {hf_id}")
+
+        full_backbone = AutoModelForSequenceClassification.from_pretrained(hf_id)
+        model.embeddings.load_state_dict(full_backbone.model.embeddings.state_dict())
+        for i in range(model.merge_layer):
+            model.bottom_layers[i].load_state_dict(
+                full_backbone.model.layers[i].state_dict()
+            )
+
+        src_layers = full_backbone.model.layers[model.merge_layer :]
+        for i, target_layer in enumerate(model.top_layers):
+            if not model.random_top_layers:
+                self._copy_modernbert_weights(src_layers[i], target_layer)
+        model.final_norm.load_state_dict(full_backbone.model.final_norm.state_dict())
+        model.head.load_state_dict(full_backbone.head.state_dict())
+
+        # Call initialize at the end
+        model.initialize()
+
+    def _copy_modernbert_weights(self, src, target):
         """
         Copies Attention and MLP weights from src to target.
         Leaves Cross-Attention weights (only in target) initialized randomly.
         """
-        # Copy Self-Attention
-        target_layer.attn_norm.load_state_dict(src_layer.attn_norm.state_dict())
-        target_layer.attn.load_state_dict(src_layer.attn.state_dict())
+        target.attn_norm.load_state_dict(src.attn_norm.state_dict())
+        target.attn.load_state_dict(src.attn.state_dict())
+        target.mlp_norm.load_state_dict(src.mlp_norm.state_dict())
+        target.mlp.load_state_dict(src.mlp.state_dict())
+        # Seed cross-attention
+        all_head = src.attn.all_head_size
+        with torch.no_grad():
+            target.crossattention.q_proj.weight.copy_(
+                src.attn.Wqkv.weight[0:all_head, :]
+            )
+            target.crossattention.k_proj.weight.copy_(
+                src.attn.Wqkv.weight[all_head : 2 * all_head, :]
+            )
+            target.crossattention.v_proj.weight.copy_(
+                src.attn.Wqkv.weight[2 * all_head : 3 * all_head, :]
+            )
+            target.crossattention.Wo.load_state_dict(src.attn.Wo.state_dict())
 
-        target_layer.mlp_norm.load_state_dict(src_layer.mlp_norm.state_dict())
-        # Copy MLP
-        target_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
 
-        # Seed cross-attention with self-attention weights when available
-        if (
-            hasattr(target_layer, "crossattention")
-            and target_layer.crossattention is not None
-        ):
-            try:
-                self._init_decoder_qkv_from_encoder(
-                    target_layer.crossattention, src_layer.attn
-                )
-                # Copy output projection and dropout
-                target_layer.crossattention.Wo.load_state_dict(
-                    src_layer.attn.Wo.state_dict()
-                )
-                target_layer.crossattention.out_drop.load_state_dict(
-                    src_layer.attn.out_drop.state_dict()
-                )
-                logger.info("Cross-attention weights initialized from self-attention")
-            except Exception:
-                logger.exception("Cross-attention weight copy failed")
+def mice_scorer(
+    hf_id: str,
+    merge_layer: int = 6,
+    drop_layer: int = 0,
+    mask_cls_to_doc: bool = True,
+    mask_query_to_cls: bool = True,
+    freeze_base: bool = False,
+    random_top_layers: bool = False,
+    compress_dim: float = 1.0,
+    pooling_method: Optional[str] = None,
+    max_query_length: Optional[int] = None,
+    max_doc_length: Optional[int] = None,
+    max_length: int = 512,
+) -> Tuple[MiceCrossEncoder, List[LightweightTask]]:
+    """
+    Unified entry point for creating a MICE scorer.
+    Automatically selects between BERT and ModernBERT architectures based on the hf_id.
 
-    def forward_bottom(self, input_ids, attention_mask):
-        """Compute bottom layers (independent encoding)"""
-        x = self.embeddings(input_ids)
-        # Standard BERT extended mask logic
-        ext_mask = self.get_extended_attention_mask(attention_mask, x.dtype)
-        # Compute position ids and pass them to ModernBertEncoderLayer which expects them
-        batch, seq_len = input_ids.size()
-        position_ids = (
-            torch.arange(seq_len, device=input_ids.device)
-            .unsqueeze(0)
-            .expand(batch, seq_len)
+    Args:
+        hf_id: Hugging Face checkpoint identifier.
+        merge_layer: Layer index where mid-fusion starts.
+        drop_layer: Layer index at which to stop (dropping subsequent backbone layers).
+        mask_cls_to_doc: If True, prevents [CLS] from attending to document tokens.
+        mask_query_to_cls: If True, prevents query tokens from attending to [CLS].
+        freeze_base: If True, freezes the bottom layers.
+        random_top_layers: If True, initializes top layers randomly.
+        compress_dim: Dimensionality compression factor for top layers.
+        pooling_method: (ModernBERT only) "cls" or "mean" pooling.
+        max_query_length: Maximum number of tokens for the query.
+        max_doc_length: Maximum number of tokens for the document.
+        max_length: Maximum total number of tokens (used as default for query/doc if not specified).
+    """
+    tokenizer = MICEQueryDocTokenizer.C(
+        model_id=hf_id,
+        max_query_length=max_query_length,
+        max_doc_length=max_doc_length,
+        max_length=max_length,
+    )
+
+    if "modernbert" in hf_id.lower() or "ettin" in hf_id.lower():
+        model = ModernBertMiceCrossEncoder.C(
+            hf_id=hf_id,
+            tokenizer=tokenizer,
+            merge_layer=merge_layer,
+            drop_layer=drop_layer,
+            mask_cls_to_doc=mask_cls_to_doc,
+            mask_query_to_cls=mask_query_to_cls,
+            freeze_base=freeze_base,
+            random_top_layers=random_top_layers,
+            compress_dim=compress_dim,
+            pooling_method=pooling_method,
         )
-
-        for layer_idx, layer in enumerate(self.bottom_layers):
-            x = layer(x, ext_mask, position_ids=position_ids)[0]
-
-        return x
-
-    def forward(self, inputs: BaseRecords, info: TrainerContext = None):
-        # Prepare inputs
-        queries = [t[TextItem].text for t in inputs.topics]
-        docs = [d[TextItem].text for d in inputs.documents]
-
-        # Tokenize
-        q_out = self.tokenizer(
-            queries,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.max_length,
+        return model, [InitMICEModernBERTFromHFID.C(model=model)]
+    else:
+        model = BertMiceCrossEncoder.C(
+            hf_id=hf_id,
+            tokenizer=tokenizer,
+            merge_layer=merge_layer,
+            drop_layer=drop_layer,
+            mask_cls_to_doc=mask_cls_to_doc,
+            mask_query_to_cls=mask_query_to_cls,
+            freeze_base=freeze_base,
+            random_top_layers=random_top_layers,
+            compress_dim=compress_dim,
         )
-        d_out = self.tokenizer(
-            docs,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.max_length,
-        )
-
-        query_ids = q_out.input_ids.to(self.device)
-        query_mask = q_out.attention_mask.to(self.device)
-        doc_ids = d_out.input_ids.to(self.device)
-        doc_mask = d_out.attention_mask.to(self.device)
-
-        # 1. Process Query through Bottom Layers
-        q_hidden = self.forward_bottom(query_ids, query_mask)
-
-        # Process Doc through Bottom Layers
-        doc_hidden_states = self.forward_bottom(doc_ids, doc_mask)
-        # 2. Prepare Masks for Top Layers
-
-        # Mask for Self-Attention (Query) shape [batch, 1, 1, seq_len_query]
-        q_ext_mask = self.get_self_attention_mask(query_mask, q_hidden.dtype)
-
-        # Mask for Cross-Attention (Query attending to Doc) shape [batch, 1, 1, seq_len_doc]
-        d_ext_mask = self.get_cross_attention_mask(query_mask, doc_mask, q_hidden.dtype)
-
-        # 3. Process Query through Top Layers (with Cross-Attention to Doc)
-        x = q_hidden
-        # Prepare position ids for the query (used by rotary / RoPE implementations)
-        q_batch, q_seq = query_ids.size()
-        q_position_ids = (
-            torch.arange(q_seq, device=query_ids.device)
-            .unsqueeze(0)
-            .expand(q_batch, q_seq)
-        )
-
-        for layer_idx, layer in enumerate(self.top_layers):
-            layer: ModernBertCrossAttentionLayer
-            # ModernBertCrossAttentionLayer: self-attention + cross-attention + MLP
-            if self.use_self_attention:
-                layer_out = layer(
-                    hidden_states=x,  # Query (Self-Attn)
-                    attention_mask=q_ext_mask,
-                    encoder_hidden_states=doc_hidden_states,  # Document (Cross-Attn Key/Value)
-                    encoder_attention_mask=d_ext_mask,
-                    position_ids=q_position_ids,
-                )
-            else:
-                layer_out = layer.forward_modernbertLayer_wo_selfAttention(
-                    hidden_states=x,  # Query (Self-Attn)
-                    attention_mask=q_ext_mask,
-                    encoder_hidden_states=doc_hidden_states,  # Document (Cross-Attn Key/Value)
-                    encoder_attention_mask=d_ext_mask,
-                    position_ids=q_position_ids,
-                )
-
-            x = layer_out[0]
-
-        x = self.final_norm(x)
-        pooled_last_hidden_state = self.pooling_function(x)
-
-        head_output = self.head(pooled_last_hidden_state)
-        head_output = self.dropout_layer(head_output)
-        logits = self.classifier(head_output).squeeze(1)
-
-        return logits
+        return model, [InitMICEBERTFromHFID.C(model=model)]

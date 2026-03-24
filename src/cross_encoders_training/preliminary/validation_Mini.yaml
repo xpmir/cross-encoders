@@ -4,7 +4,7 @@ description:
     Using the best parameters from the grid search for MiniLM
     we run additional trainings validating on nanobeir to see the impact on OOD.
 
-module: ir_training.experiment
+module: cross_encoders_training.experiment
 pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp

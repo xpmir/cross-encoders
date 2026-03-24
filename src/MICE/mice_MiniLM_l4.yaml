@@ -1,17 +1,14 @@
-
-id: reproduction_RankDistiLLM
-title: "Evaluation on top 100 for comparison"
+id: core_base_ettin150
+title: "Ettin-150-InfoNCE Training"
 description:
-    Using the best parameters from the grid search,
-    we run additional trainings validating on nanobeir to see the impact on OOD.
+    💡 this config load everything from core_base.yaml, and just overrides the base and learner.loss
+    So that only ettin-150m is launched with infoNCE loss
 
-module: cross_encoders_training.experiment
+module: MICE.mice_training
 pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 3
-base: google/electra-base-discriminator
-
+nb_repetitions: 1
 
 retriever: "naver/splade-v3-distilbert"
 
@@ -29,11 +26,11 @@ validation:
 learner:
     optimization:
         steps_per_epoch: 100
-        batch_size: 32
+        batch_size: 64
         max_epochs: 2000 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
-        lr: 1e-5
+        lr: 7e-6
         eps: 1.0e-8
     # sample_max: 2_000_000
     max_grad_norm: 1.0
@@ -41,19 +38,29 @@ learner:
     validation_interval: 50
     validation_top_k: 100
     validation: nanobeir
-    requirements: duration=12h & cpu(cores=16) & cuda(mem=50G)
-
+    requirements: duration=12h & cpu(cores=16) & cuda(mem=80G)
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
-    k: 100
+    k: 1000
 
 evaluation:
-
+    all_datasets: true
 
 #### Params that are grid searched
 grid_search:
+    base:
+        values_list:
+            - microsoft/MiniLM-L12-H384-uncased
+            - jhu-clsp/ettin-encoder-17m
+            - jhu-clsp/ettin-encoder-32m
+            - jhu-clsp/ettin-encoder-68m
+
     learner.loss:
         values_list:
+            - bce
+            - hingeLoss
+            - marginMSE
             - infoNCE_RankDistiLLM
             - distillRankNET
+            - ADR_MSE
