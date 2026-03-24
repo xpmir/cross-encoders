@@ -1,12 +1,30 @@
+"""
+Two-Stage Information Retrieval Evaluation Experiment.
+
+This module provides the infrastructure to evaluate Information Retrieval (IR) systems,
+supporting both first-stage retrievers (BM25, SPLADE) and two-stage systems
+integrating Cross-Encoders for re-ranking.
+
+The experiment workflow includes:
+1. Configuration of retrieval, indexation, and preprocessing parameters.
+2. Building test collections across multiple datasets.
+3. First-stage evaluation: Running and caching results for base retrievers.
+4. Second-stage evaluation: Applying Cross-Encoders (scorers) to the first-stage runs.
+5. Result processing: Aggregating metrics (RR@10, nDCG@10, R@1000) and
+   generating standardized outputs (CSV, LaTeX tables).
+
+Usage:
+    This module is designed to be invoked via experimaestro.
+    `uv run experimaestro run-experiment src/Evaluation/cross-encoders.yaml`
+"""
+
 from typing import List
-import logging
 from attrs import Factory
 from functools import partial
 import pandas as pd
 
 from experimaestro.launcherfinder import find_launcher
-
-from xpm_torch.utils.huggingface import prepare_hf_model
+from xpm_torch.huggingface import prepare_hf_model
 from datamaestro_ir.data import Documents
 
 from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
@@ -24,6 +42,8 @@ from tests import build_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from index_utils import get_splade_index
 from retrievers import MultiRunRetrieverFactory
+
+import logging
 
 logging.basicConfig(level=logging.INFO)
 

@@ -38,7 +38,7 @@ This model is intended for **re-ranking** the top results returned by a retrieva
 - **Language:** English
 - **Loss** {{loss}}
 
-Training can be easily reproduced using the assiciated repository. 
+Training can be easily reproduced using the assiciated repository.
 The exact training configuration used for this model is also detailed in [config.yaml](./config.yaml).
 
 ## Usage

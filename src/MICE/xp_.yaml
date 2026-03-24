@@ -1,20 +1,20 @@
 id: ir_training_debug
 title: "Debugging main Cross Encoder training Experiment"
-description: 
+description:
     Starts from the checkpoint > microsoft/MiniLM-L12-H384-uncased
     trains on MS_Marco with margin MSE loss, distilling from Hofstätter et al. 2020
 
 module: src.ir_training.experiment
 
 gpu: true
-seed: 12 # To mimick the HF xp 
+seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
 retriever: "" #BM25 by default
 
 #model definition
 base: microsoft/MiniLM-L12-H384-uncased
-#Can be microsoft/MiniLM-L12-H384-uncased, jhu-clsp/ettin-encoder-32m , bert-base-uncased 
+#Can be microsoft/MiniLM-L12-H384-uncased, jhu-clsp/ettin-encoder-32m , bert-base-uncased
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)

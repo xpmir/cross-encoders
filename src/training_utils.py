@@ -1,0 +1,397 @@
+"""Utility functions for training and result processing."""
+
+import logging
+import shutil
+import yaml
+from pathlib import Path
+from typing import Any
+from attrs import asdict
+import numpy as np
+import pandas as pd
+from jinja2 import Template
+
+from experimaestro.annotations import tags as get_tags
+from experimaestro.launcherfinder import find_launcher
+
+from xpm_torch.trainers import LossTrainer
+from xpm_torch.trainers.batchwise import BatchwiseTrainer
+from xpm_torch.trainers.pairwise import PairwiseTrainer
+from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
+from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
+
+from xpmir.papers.helpers.samplers import (
+    msmarco_colbertv2_annotated,
+    msmarco_rankdistillm_colbert_top50,
+    msmarco_hofstaetter_ensemble_hard_negatives,
+    msmarco_v1_docpairs_efficient_sampler,
+)
+from xpmir.letor.samplers import PairwiseInBatchNegativesSampler
+from xpmir.letor.distillation.listwise import (
+    ADR_MSE,
+    DistillRankNetLoss,
+    DistillationListwiseTrainer,
+    ListwiseSoftmaxCrossEntropy,
+)
+from xpmir.letor.distillation.pairwise import (
+    DistillationPairwiseTrainer,
+    MSEDifferenceLoss,
+)
+
+from configuration import Losses, CE_FineTuning
+from format import dataframe_to_latex, loss_names, backbone_names_lower
+
+logger = logging.getLogger(__name__)
+
+
+def get_task_by_tags(tasks: list, tags: dict):
+    """Return the first task in tasks that has all the given tags."""
+    for task in tasks:
+        task_tags = get_tags(task)
+        logging.debug(f"Checking task with tags {task_tags} against {tags}")
+        if all(str(task_tags.get(tag)) == str(value) for tag, value in tags.items()):
+            return task
+    return None
+
+
+def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
+    try:
+        loss_member = Losses(cfg.learner.loss)
+    except ValueError:
+        raise ValueError(
+            f"Unknown loss function: {cfg.learner.loss}. Accepted values are: {[e.value for e in Losses]}"
+        )
+
+    ### Pointwise losses
+    if loss_member is Losses.BCE:
+        launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+        return PairwiseTrainer.C(
+            lossfn=PointwiseCrossEntropyLoss.C(),
+            sampler=msmarco_v1_docpairs_efficient_sampler(
+                sample_rate=cfg.learner.sample_rate,
+                sample_max=cfg.learner.sample_max,
+                launcher=launcher_preprocessing,
+            ),
+            batch_size=cfg.learner.optimization.batch_size,
+        )
+
+    ### Pairwise losses ###
+    elif loss_member is Losses.hingeLoss:
+        launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+        return PairwiseTrainer.C(
+            lossfn=HingeLoss.C(),
+            sampler=msmarco_v1_docpairs_efficient_sampler(
+                sample_rate=cfg.learner.sample_rate,
+                sample_max=cfg.learner.sample_max,
+                launcher=launcher_preprocessing,
+            ),
+            batch_size=cfg.learner.optimization.batch_size,
+        )
+
+    ### Pairwise distillation losses ###
+    elif loss_member is Losses.marginMSE:
+        return DistillationPairwiseTrainer.C(
+            batch_size=cfg.learner.optimization.batch_size,
+            sampler=msmarco_hofstaetter_ensemble_hard_negatives(),
+            lossfn=MSEDifferenceLoss.C(),
+        )
+
+    ### Listwise losses ###
+    elif loss_member is Losses.infoNCE_RankDistiLLM:
+        passages_per_query = 8
+        batch_size = cfg.learner.optimization.batch_size
+
+        if cfg.normalize_docs_per_batch:
+            batch_size = batch_size // passages_per_query
+            logging.warning(
+                f"normalized batch size to {batch_size} to get {batch_size * passages_per_query} docs per batch"
+            )
+        else:
+            logging.warning(
+                f"Not normalizing docs per batch, {passages_per_query} docs x {batch_size} = {batch_size * passages_per_query} docs per batch"
+            )
+
+        return DistillationListwiseTrainer.C(
+            sampler=msmarco_colbertv2_annotated(passages_per_query=passages_per_query),
+            lossfn=ListwiseSoftmaxCrossEntropy.C(),
+            batch_size=batch_size,
+        )
+
+    ### Listwise distillation losses ###
+    elif loss_member is Losses.distillRankNET:
+        logging.warning(
+            "Using loss function DistillRankNET, switching to batch size = 1 (i.e. 100 passages per batch)."
+        )
+        return DistillationListwiseTrainer.C(
+            batch_size=1,
+            sampler=msmarco_rankdistillm_colbert_top50(),
+            lossfn=DistillRankNetLoss.C(),
+        )
+
+    elif loss_member is Losses.ADR_MSE:
+        logging.warning(
+            "Using loss function ADR_MSE, switching to batch size = 1 (i.e. 100 passages per batch)."
+        )
+        return DistillationListwiseTrainer.C(
+            batch_size=1,
+            sampler=msmarco_rankdistillm_colbert_top50(),
+            lossfn=ADR_MSE.C(),
+        )
+    ## Not using this one
+    elif loss_member is Losses.infoNCE:
+        batch_size = cfg.learner.optimization.batch_size
+
+        if cfg.normalize_docs_per_batch:
+            batch_size = int(np.sqrt(batch_size))
+            passages_per_batch = batch_size * batch_size
+            logging.warning(
+                f"normalized batch size to {batch_size} to get {passages_per_batch} docs per batch"
+            )
+        else:
+            passages_per_batch = batch_size * batch_size
+            logging.warning(
+                f"Not normalizing docs per batch for InfoNCE, {batch_size}**2 docs = {passages_per_batch} docs per batch"
+            )
+
+        return BatchwiseTrainer.C(
+            sampler=PairwiseInBatchNegativesSampler.C(
+                sampler=msmarco_v1_docpairs_efficient_sampler(),
+            ),
+            lossfn=SoftmaxCrossEntropy.C(),
+            batch_size=batch_size,
+            hooks=[],
+        )
+
+    else:
+        raise NotImplementedError(
+            f"Loss function {cfg.learner.loss} is not implemented yet."
+        )
+
+
+def get_name_from_tags(model_tags: dict) -> str:
+    """Creates the HF id from tags using formatting conventions."""
+    loss = model_tags.get("learner.loss")
+    base = model_tags.get("base")
+    # try to get prettier name
+    loss = loss_names.get(loss, loss).replace("/", "-")
+    base = backbone_names_lower.get(base, base).replace("/", "-")
+    return f"cross-encoder-{base}-{loss}"
+
+
+def save_raw_results(df: pd.DataFrame, resultspath: Path):
+    """Formats and saves the raw experimental results to disk."""
+    if not resultspath.exists():
+        resultspath.mkdir(parents=True, exist_ok=True)
+
+    output_file = resultspath / "raw_results.csv"
+    df.to_csv(output_file, index=False)
+    logging.info(f"Raw results saved to {output_file}")
+
+
+def identify_best_models(
+    df: pd.DataFrame, dataset: str, metric: str, group_by_tags: list
+) -> pd.DataFrame:
+    """Identifies the best model for each configuration based on a specific dataset and metric."""
+    subset = df[df["dataset"] == dataset]
+    if subset.empty:
+        logging.warning(f"Dataset {dataset} not found in results for model selection")
+        return pd.DataFrame()
+
+    metric_col = [("metric", metric)]
+    best_models_indices = subset.groupby(group_by_tags, dropna=False)[
+        metric_col
+    ].idxmax()
+
+    if isinstance(best_models_indices, pd.DataFrame):
+        best_models_indices = best_models_indices.iloc[:, 0]
+
+    return subset.loc[best_models_indices]
+
+
+def add_dataset_aggregations(
+    df: pd.DataFrame,
+    group_by_cols: list,
+    aggregations: dict[str, list[str]] = None,
+    add_mean: bool = True,
+) -> pd.DataFrame:
+    """Adds aggregate rows (e.g., mean across datasets) to the results dataframe."""
+    new_rows = []
+
+    def get_agg(mask, name):
+        subset = df[mask] if mask is not None else df
+        if group_by_cols:
+            agg = (
+                subset.groupby(group_by_cols, dropna=False)
+                .mean(numeric_only=True)
+                .reset_index()
+            )
+        else:
+            agg = subset.mean(numeric_only=True).to_frame().T
+        agg["dataset"] = name
+        return agg
+
+    if aggregations:
+        for agg_name, datasets in aggregations.items():
+            present_datasets = df["dataset"].unique()
+            missing = [ds for ds in datasets if ds not in present_datasets]
+            if not missing:
+                mask = df["dataset"].isin(datasets)
+                new_rows.append(get_agg(mask, agg_name))
+            else:
+                logging.warning(
+                    f"Aggregation {agg_name} skipped because the following datasets are missing: {missing}"
+                )
+
+    if add_mean and df["dataset"].nunique() > 1:
+        new_rows.append(get_agg(None, "mean"))
+
+    if new_rows:
+        new_rows = [row[row.columns.intersection(df.columns)] for row in new_rows]
+        return pd.concat([df] + new_rows, ignore_index=True)
+
+    return df
+
+
+def format_model_results(
+    model_df: pd.DataFrame, aggregations: dict[str, list[str]]
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Processes results for a single model, adding aggregations and formatting for MD."""
+    if isinstance(model_df.columns, pd.MultiIndex):
+        flat_cols = []
+        for col in model_df.columns:
+            if col[0] == "metric":
+                flat_cols.append(col[1])
+            elif col[0] == "dataset":
+                flat_cols.append("dataset")
+            else:
+                flat_cols.append("_".join(str(x) for x in col if x))
+        model_df.columns = flat_cols
+
+    metrics_to_show = ["RR@10", "nDCG@10"]
+    cols_to_keep = [c for c in ["dataset"] + metrics_to_show if c in model_df.columns]
+
+    if not cols_to_keep:
+        return pd.DataFrame(), pd.DataFrame()
+
+    results = model_df[cols_to_keep].copy()
+    agg_names = list(aggregations.keys())
+    numeric_cols = results.select_dtypes(include=[np.number]).columns
+    results[numeric_cols] = results[numeric_cols] * 100
+
+    csv_results = results.copy()
+    csv_results[numeric_cols] = csv_results[numeric_cols].round(2)
+
+    md_results = results.copy()
+    for col in numeric_cols:
+        md_results[col] = md_results[col].apply(
+            lambda x: f"{x:.2f}" if pd.notna(x) else x
+        )
+
+    for agg_name in agg_names:
+        idx = md_results[md_results["dataset"] == agg_name].index
+        if not idx.empty:
+            md_results.loc[idx, "dataset"] = f"**{agg_name}**"
+            for col in numeric_cols:
+                md_results.loc[idx, col] = md_results.loc[idx, col].apply(
+                    lambda x: f"**{x}**" if pd.notna(x) else x
+                )
+
+    return csv_results, md_results
+
+
+def export_model_artifacts(
+    best_tags: dict,
+    scorer_tagspath: str,
+    csv_results: pd.DataFrame,
+    md_results: pd.DataFrame,
+    learners: list,
+    all_weights: list,
+    best_cfg: Any,
+    resultspath: Path,
+    card_template_txt: str = None,
+    aggregations: dict[str, list[str]] = None,
+):
+    """Exports all artifacts (weights, logs, readme, config) for a best model."""
+    model_tags = {}
+    for s in best_tags["scorer"].split("_"):
+        try:
+            k, v = s.split("=")
+            model_tags[k] = v
+        except ValueError:
+            logging.warning(f"Unexpected tag format '{s}' in scorer tags")
+    logging.warning(f"got tags {model_tags}")
+
+    model_name = get_name_from_tags(model_tags)
+    models_path = resultspath / "models"
+    best_model_path = models_path / model_name
+    best_model_path.mkdir(parents=True, exist_ok=True)
+
+    csv_results.to_csv(best_model_path / "results.csv", index=False)
+    logging.info(f"Model results saved to {best_model_path / 'results.csv'}")
+
+    best_model_learner = get_task_by_tags(learners, best_tags)
+    if best_model_learner:
+        symlink_path = best_model_path / "job_logs"
+        if symlink_path.exists():
+            symlink_path.unlink()
+        symlink_path.symlink_to(best_model_learner.jobpath)
+
+        tb_path = best_model_learner.logpath
+        if tb_path.exists():
+            tb_symlink_path = best_model_path / "tensorboard_logs"
+            if tb_symlink_path.exists():
+                tb_symlink_path.unlink()
+            tb_symlink_path.symlink_to(tb_path)
+
+    best_model_val = get_task_by_tags(all_weights, best_tags)
+    if best_model_val:
+        weights_path = best_model_val.loader.path
+        if weights_path.name.endswith(".pth"):
+            shutil.copy(weights_path, best_model_path / "model_weights.pt")
+        else:
+            logging.warning(f"Model weights is not a file: {weights_path}")
+
+    if card_template_txt and best_cfg:
+        template = Template(card_template_txt)
+        card = template.render(
+            base=best_cfg.base,
+            k=best_cfg.retrieval.k,
+            retriever=best_cfg.retriever if best_cfg.retriever else "BM25",
+            model_id=model_name,
+            training_data="MS MARCO Passage",
+            dataset="msmarco",
+            loss=model_tags.get("learner.loss"),
+            results=md_results.to_markdown(index=False),
+        )
+        with open(best_model_path / "README.md", "w") as f:
+            f.write(card)
+
+        with open(best_model_path / "config.yaml", "w") as f:
+            yaml.dump(asdict(best_cfg.learner), f, default_flow_style=False)
+
+
+def compute_aggregated_results(
+    df: pd.DataFrame,
+    metric_cols: list,
+    group_by_tags: list,
+    resultspath: Path,
+    aggregations: dict[str, list[str]] = None,
+):
+    """Computes final grouped results across all experiments and saves to CSV/LaTeX."""
+    df_grouped = (
+        df.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
+        .agg(["mean", "var"])
+        .reset_index()
+    )
+    df_grouped = df_grouped.sort_index(axis=1)
+
+    output_file = resultspath / "results.csv"
+    df_grouped.to_csv(output_file, index=False)
+
+    latex_table = dataframe_to_latex(
+        df_grouped,
+        caption="Evaluation Results",
+        label="tab:eval_results",
+        sig_df=None,
+    )
+    with open(resultspath / "results.tex", "w") as f:
+        f.write(latex_table)

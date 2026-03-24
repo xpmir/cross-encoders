@@ -1,11 +1,18 @@
 from functools import lru_cache
+from typing import Any
+
+from experimaestro import stop_tags
+from experimaestro.experiments import configuration
 
 from xpmir.datasets.adapters import RandomFold
-
 from xpmir.papers.helpers.samplers import ValidationSample
 from xpmir.papers.helpers.samplers import prepare_collection
+from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
+from xpmir.evaluation import Evaluations, EvaluationsCollection
+from xpmir.rankers import scorer_retriever
 
-from tests import NANO_BEIR_KEYS
+from configuration import CE_FineTuning, Validation
+from tests import NANO_BEIR_KEYS, CE_MEASURES
 
 import logging
 
@@ -57,3 +64,91 @@ def nanobeir_validation_datasets(cfg: ValidationSample, launcher=None):
         if hasattr(dataset, "assessments"):
             _ = dataset.assessments.iter()
     return random_folds, documents
+
+
+@configuration()
+class ValidationSet:
+    cfg: CE_FineTuning
+    items: list[tuple[str, Any, Any]]  # (name, dataset, documents)
+
+    @classmethod
+    def load(cls, cfg: CE_FineTuning, launcher):
+        items = []
+        if cfg.learner.validation == Validation.MSMARCO.value:
+            ds_val, docs = nano_msmarco_validation_datasets(
+                cfg.validation, launcher=launcher
+            )
+            items.append(("msmarco", ds_val, docs))
+        elif cfg.learner.validation in [
+            Validation.NanoBEIR.value,
+            Validation.ALL.value,
+        ]:
+            validations, documents = nanobeir_validation_datasets(
+                cfg.validation, launcher=launcher
+            )
+            for name in validations:
+                items.append((name, validations[name], documents[name]))
+        return cls(cfg=cfg, items=items)
+
+    def to_evaluations(self) -> EvaluationsCollection:
+        """Returns an EvaluationsCollection for the validation datasets"""
+        evals = {}
+        for name, ds, _ in self.items:
+            # Use standard measures for validation evaluations
+            evals[name] = Evaluations(ds, measures=CE_MEASURES)
+        return EvaluationsCollection(**evals)
+
+    def build_listeners(
+        self,
+        scorer_model,
+        val_retrievers_factory,
+        retriever_tag,
+    ) -> tuple[list[ValidationListener], dict[str, ValidationListener]]:
+        """Build the validation Listeners based of the logic from Validation enum"""
+        listeners = []
+        msmarco_validation = None
+
+        for name, ds, docs in self.items:
+            # build the listener
+            retriever = scorer_retriever(
+                documents=docs,
+                retrievers=val_retrievers_factory,
+                scorer=scorer_model,
+                batch_size=self.cfg.retrieval.batch_size,
+            ).tag("first_stage", retriever_tag)
+
+            listener = ValidationListener.C(
+                id=f"bestval_zs_{name}"
+                if len(self.items) > 1
+                else "bestval",  # Maintain ID compatibility
+                dataset=ds,
+                retriever=stop_tags(retriever),  # remove dependency
+                validation_interval=self.cfg.learner.validation_interval,
+                metrics={"nDCG": True, "RR@10": False},
+            )
+            listeners.append(listener)
+            if name == "msmarco":
+                msmarco_validation = listener
+
+        tracked_validations = {}
+
+        if self.cfg.learner.validation in [
+            Validation.NanoBEIR.value,
+            Validation.ALL.value,
+        ]:
+            aggregator = AggregatorValidationListener.C(
+                listeners=listeners,
+                id="aggregated_validation",
+                validation_interval=self.cfg.learner.validation_interval,
+                metrics={"nDCG": True, "RR@10": False},
+            )
+            listeners.append(aggregator)
+            tracked_validations["nano-beir"] = aggregator
+
+        if self.cfg.learner.validation in [
+            Validation.MSMARCO.value,
+            Validation.ALL.value,
+        ]:
+            tracked_validations["msmarco"] = msmarco_validation
+
+        return listeners, tracked_validations
