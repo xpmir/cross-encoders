@@ -836,11 +836,11 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             logging.info(f"Best evaluated model is {best_tags}")
 
             # Filter the original dataframe for this specific best model (all datasets)
-            mask = pd.Series(True, index=df.index)
+            mask = pd.Series(True, index=df_with_aggs.index)
             for tag in model_id_tags:
-                mask &= df[tag].astype(str) == str(best_row[tag])
+                mask &= df_with_aggs[tag].astype(str) == str(best_row[tag])
 
-            best_model_df = df[mask].copy()
+            best_model_df = df_with_aggs[mask].copy()
             best_models_list.append(best_model_df)
 
             # Format and Export artifacts

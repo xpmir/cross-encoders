@@ -20,7 +20,7 @@ indexation:
     batch_size: 128
 
 validation:
-    # Use 500 topics for validation
+    # Use 500 topics maximum for validation
     size: 500
 
 # This set of hyperparameters follows: https://github.com/huggingface/sentence-transformers/blob/9f76b5790fa8f0175ccdc27e41f9ae348f557144/examples/training/ms_marco/train_cross-encoder-v2.py

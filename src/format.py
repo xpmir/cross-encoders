@@ -65,9 +65,8 @@ aggregations = {
         "lotte_science",
         "lotte_technology",
         "lotte_writing",
-        "robust04",
     ],
-    "Nano BEIR": NANO_BEIR_KEYS,
+    "Nano BEIR": list(NANO_BEIR_KEYS.keys()),
 }
 
 ## Aggregations used in the HF Card (keep short)

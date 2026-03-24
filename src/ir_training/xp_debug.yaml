@@ -61,6 +61,7 @@ grid_search:
     base:
         values_list:
             - jhu-clsp/ettin-encoder-32m
+            - microsoft/deberta-v3-base
             # - microsoft/MiniLM-L12-H384-uncased
             # - jhu-clsp/ettin-encoder-17m
             # - jhu-clsp/ettin-encoder-68m
