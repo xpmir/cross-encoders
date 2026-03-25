@@ -5,12 +5,12 @@ description:
     Example configuration for training an ettin-150m model with two different losses.
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 1
 
 
 ### Overrides parameters from core_base
 learner:
-    precision: bf16-mixed
+    fabric:
+        precision: bf16-mixed
 
 max_doc_len: 1024
 
@@ -18,19 +18,15 @@ normalize_docs_per_batch: true
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
-    k: 100
+    k: 1000
 
 evaluation:
     all_datasets: false
     in_domain: true
-    nano_beir: true
+
 
 #### Params that are grid searched
 grid_search:
     base:
         values_list:
             - microsoft/deberta-v3-base
-    learner.loss:
-        values_list:
-            - marginMSE
-            - infoNCE_RankDistiLLM

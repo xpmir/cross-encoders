@@ -10,7 +10,8 @@ nb_repetitions: 1
 
 ### Overrides parameters from core_base
 learner:
-    precision: bf16-mixed
+    fabric:
+        precision: bf16-mixed
 
 max_doc_len: 1024
 
@@ -23,7 +24,7 @@ retrieval:
 evaluation:
     all_datasets: false
     in_domain: true
-    nano_beir: true
+    nanobeir: true
 
 #### Params that are grid searched
 grid_search:

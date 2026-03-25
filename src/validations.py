@@ -56,6 +56,7 @@ def nanobeir_validation_datasets(cfg: ValidationSample, launcher=None):
             fold=0,
             sizes=[cfg.size],
         ).submit(launcher=launcher)
+
         documents[dataset_name] = dataset.documents
 
         # Force load documents, queries, and qrels (if available)
@@ -109,6 +110,14 @@ class ValidationSet:
         msmarco_validation = None
 
         for name, ds, docs in self.items:
+            if (
+                self.cfg.learner.validation == Validation.MSMARCO.value
+                and name == "msmarco"
+            ):
+                track = True
+            else:
+                track = False
+
             # build the listener
             retriever = scorer_retriever(
                 documents=docs,
@@ -118,15 +127,16 @@ class ValidationSet:
             ).tag("first_stage", retriever_tag)
 
             listener = ValidationListener.C(
-                id=f"bestval_zs_{name}"
-                if len(self.items) > 1
-                else "bestval",  # Maintain ID compatibility
+                id=(
+                    f"bestval_zs_{name}" if len(self.items) > 1 else "bestval"
+                ),  # Maintain ID compatibility
                 dataset=ds,
                 retriever=stop_tags(retriever),  # remove dependency
                 validation_interval=self.cfg.learner.validation_interval,
-                metrics={"nDCG": True, "RR@10": False},
+                metrics={"nDCG": track, "RR@10": False},
             )
             listeners.append(listener)
+
             if name == "msmarco":
                 msmarco_validation = listener
 

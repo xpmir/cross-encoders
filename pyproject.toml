@@ -16,6 +16,7 @@ dependencies = [
     "tabulate>=0.9.0",
     "transformers>=5.0.0",
     "xpm-torch",
+    "torch",
 ]
 
 [tool.setuptools]
@@ -24,7 +25,14 @@ package-dir = {"" = "src"}
 [tool.mypy]
 plugins = ["experimaestro.mypy"]
 
+# Our cluster don't have Cuda 13 yet
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
 [tool.uv.sources]
+torch = { index = "pytorch-cu126", marker = "sys_platform != 'darwin'" }
 experimaestro = { path = "experimaestro-python", editable = true }
 experimaestro-ir = { path = "experimaestro-ir", editable = true }
 ir-datasets = { git = "https://github.com/bpiwowar/ir_datasets.git" }

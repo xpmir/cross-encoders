@@ -20,7 +20,6 @@ from experimaestro import setmeta, stop_tags
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch import Random
-from xpm_torch.configuration import FabricConfiguration
 from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
@@ -196,11 +195,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                 # The hook used for evaluation
                 hooks=hooks,
                 # fabric settings
-                fabric_config=FabricConfiguration.C(
-                    strategy=cfg.learner.strategy,
-                    precision=cfg.learner.precision,
-                    accelerator=cfg.learner.accelerator,
-                ),
+                fabric_config=cfg.learner.fabric.get_config(),
             )
             learners.append(learner)
 

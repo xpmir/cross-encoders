@@ -39,6 +39,6 @@ grid_search:
         values_list:
             - marginMSE
 
-    learner.precision:
+    learner.fabric.precision:
         values_list:
             - bf16-mixed

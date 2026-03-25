@@ -1,5 +1,5 @@
-id: core_base_ettin150
-title: "Ettin-150-InfoNCE Training"
+id: mice_training_debug
+title: "Debugging Mice training"
 description:
     💡 this config load everything from core_base.yaml, and just overrides the base and learner.loss
     So that only ettin-150m is launched with infoNCE loss
@@ -33,6 +33,8 @@ learner:
         weight_decay: 0.00
         lr: 7e-6
         eps: 1.0e-8
+    fabric:
+        precision: bf16-mixed
     # sample_max: 2_000_000
     max_grad_norm: 1.0
     checkpoint_interval: 100

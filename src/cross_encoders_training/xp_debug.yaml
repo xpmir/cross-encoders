@@ -38,13 +38,14 @@ learner:
         weight_decay: 0.00
         lr: 7e-6
         eps: 1.0e-8
+    fabric:
+        precision: bf16-mixed
     # sample_max: 2_000_000
     max_grad_norm: 1.0
     checkpoint_interval: 50
     validation_interval: 10
     validation_top_k: 100
     validation: nanobeir
-    precision: bf16-mixed
     requirements: duration=20h & cuda(mem=40G)
 
 retrieval:
@@ -55,13 +56,14 @@ retrieval:
 evaluation:
     test_max_topics: 100
     in_domain: true
+    nanobeir: true
 
 #### Params that are grid searched
 grid_search:
     base:
         values_list:
             - jhu-clsp/ettin-encoder-32m
-            - microsoft/deberta-v3-base
+            # - microsoft/deberta-v3-base
             # - microsoft/MiniLM-L12-H384-uncased
             # - jhu-clsp/ettin-encoder-17m
             # - jhu-clsp/ettin-encoder-68m

@@ -14,8 +14,8 @@ from experimaestro.annotations import tags as get_tags
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch.trainers import LossTrainer
-from xpm_torch.trainers.batchwise import BatchwiseTrainer
-from xpm_torch.trainers.pairwise import PairwiseTrainer
+from xpmir.letor.trainers.batchwise import BatchwiseTrainer
+from xpmir.letor.trainers.pairwise import PairwiseTrainer
 from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
 from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
 

@@ -155,17 +155,24 @@ class MiceCrossEncoder(AbstractModuleScorer):
     def __initialize__(self):
         super().__initialize__()
         self.tokenizer.initialize()
-        # Fast config loading
-        self.config = AutoConfig.from_pretrained(self.hf_id)
-        self.head_config = AutoConfig.from_pretrained(self.hf_id)
 
-        if (
-            not hasattr(self.head_config, "_attn_implementation")
-            or self.head_config._attn_implementation is None
-        ):
-            self.head_config._attn_implementation = getattr(
-                self.config, "_attn_implementation", "eager"
-            )
+        # Ensure _attn_implementation is not None to avoid warnings
+        # Configs should be set by InitTask or manually before calling initialize()
+        if hasattr(self, "config") and self.config is not None:
+            if (
+                not hasattr(self.config, "_attn_implementation")
+                or self.config._attn_implementation is None
+            ):
+                self.config._attn_implementation = "eager"
+
+        if hasattr(self, "head_config") and self.head_config is not None:
+            if (
+                not hasattr(self.head_config, "_attn_implementation")
+                or self.head_config._attn_implementation is None
+            ):
+                self.head_config._attn_implementation = getattr(
+                    self.config, "_attn_implementation", "eager"
+                )
 
     def batch_tokenize(
         self, input_records: BaseItems, options=None
@@ -185,7 +192,6 @@ class MiceCrossEncoder(AbstractModuleScorer):
 
     def get_self_attention_mask(self, mask, dtype):
         """Helper to create the -inf mask for transformers"""
-        logger.info(f"get_self_attention_mask input mask shape: {mask.shape}")
         mask_bool = mask.to(torch.bool)
         # Build a square attention map where both query and key positions must be valid tokens
         valid_pairs = mask_bool[:, None, :, None] & mask_bool[:, None, None, :]
@@ -194,7 +200,7 @@ class MiceCrossEncoder(AbstractModuleScorer):
             valid_pairs[:, :, 1:, 0] = False
         attn_mask = torch.zeros(valid_pairs.shape, dtype=dtype, device=mask.device)
         attn_mask.masked_fill_(~valid_pairs, torch.finfo(dtype).min)
-        logger.info(f"get_self_attention_mask output shape: {attn_mask.shape}")
+
         return attn_mask
 
     def get_cross_attention_mask(self, query_mask, doc_mask, dtype):
@@ -562,20 +568,17 @@ class InitMICEBERTFromHFID(LightweightTask):
         model = self.model
         hf_id = model.hf_id
 
-        # Ensure config is available even before full initialization
-        if not hasattr(model, "config"):
+        # Ensure configs are available
+        if not hasattr(model, "config") or model.config is None:
             model.config = AutoConfig.from_pretrained(hf_id)
-        if not hasattr(model, "head_config"):
+
+        if not hasattr(model, "head_config") or model.head_config is None:
             model.head_config = AutoConfig.from_pretrained(hf_id)
             model.head_config.is_decoder = True
             model.head_config.add_cross_attention = True
-            if (
-                not hasattr(model.head_config, "_attn_implementation")
-                or model.head_config._attn_implementation is None
-            ):
-                model.head_config._attn_implementation = getattr(
-                    model.config, "_attn_implementation", "eager"
-                )
+
+        # Build the model structure first
+        model.initialize()
 
         logger.info(f"Building MICE from pretrained Bert model: {hf_id}")
 
@@ -626,9 +629,6 @@ class InitMICEBERTFromHFID(LightweightTask):
                 "No pooler found in the base model; using [CLS] token directly."
             )
 
-        # Call initialize at the end
-        model.initialize()
-
     def _copy_bert_weights(self, src, target):
         """
         Copies Self-Attention and FFN weights from src to target.
@@ -655,20 +655,17 @@ class InitMICEModernBERTFromHFID(LightweightTask):
         model = self.model
         hf_id = model.hf_id
 
-        # Ensure config is available even before full initialization
-        if not hasattr(model, "config"):
+        # Ensure configs are available
+        if not hasattr(model, "config") or model.config is None:
             model.config = AutoConfig.from_pretrained(hf_id)
-        if not hasattr(model, "head_config"):
+
+        if not hasattr(model, "head_config") or model.head_config is None:
             model.head_config = AutoConfig.from_pretrained(hf_id)
             model.head_config.is_decoder = True
             model.head_config.add_cross_attention = True
-            if (
-                not hasattr(model.head_config, "_attn_implementation")
-                or model.head_config._attn_implementation is None
-            ):
-                model.head_config._attn_implementation = getattr(
-                    model.config, "_attn_implementation", "eager"
-                )
+
+        # Build the model structure first
+        model.initialize()
 
         logger.info(f"Loading MICE ModernBERT weights from {hf_id}")
 
@@ -685,9 +682,6 @@ class InitMICEModernBERTFromHFID(LightweightTask):
                 self._copy_modernbert_weights(src_layers[i], target_layer)
         model.final_norm.load_state_dict(full_backbone.model.final_norm.state_dict())
         model.head.load_state_dict(full_backbone.head.state_dict())
-
-        # Call initialize at the end
-        model.initialize()
 
     def _copy_modernbert_weights(self, src, target):
         """

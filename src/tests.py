@@ -365,7 +365,7 @@ def build_tests(
                 all_evals[name] = evals
 
     # 1. NanoBEIR
-    if cfg.nano_beir:
+    if cfg.nanobeir:
         add_evals(
             nano_beir_tests(
                 cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher

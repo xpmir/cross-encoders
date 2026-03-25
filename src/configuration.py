@@ -1,4 +1,5 @@
 from enum import Enum
+import copy
 from attrs import Factory, field
 from typing import (
     Any,
@@ -13,10 +14,9 @@ from typing import (
     get_origin,
     get_type_hints,
 )
-import copy
+from xpm_torch.experiments.configuration import TransformerOptimization, Fabric
 from xpmir.papers import configuration
 from xpmir.papers.helpers import LauncherSpecification
-from xpmir.papers.helpers.optim import TransformerOptimization
 from xpmir.papers.helpers.msmarco import RerankerMSMarcoV1Configuration
 from itertools import product
 import logging
@@ -169,6 +169,39 @@ class Indexation(LauncherSpecification):
 
 
 @configuration()
+class Retrieval:
+    k: int = 1000
+    batch_size: int = 128
+    requirements: str = "duration=2 days & cuda(mem=24G)"
+
+
+@configuration()
+class Preprocessing:
+    requirements: str = "duration=12h & cpu(cores=4)"
+
+
+@configuration()
+class Evaluation:
+    test_max_topics: int = 0
+    """Development test size (0 to leave it like this)"""
+
+    all_datasets: bool = False
+    """Whether to evaluate on all BEIR datasets (minus the 5 not publicly available)"""
+
+    nanobeir: bool = False
+    """Whether to evaluate on NanoBEIR datasets"""
+
+    beir13: bool = False
+    """Whether to evaluate on all BEIR13 datasets"""
+
+    in_domain: bool = False
+    """Whether to evaluate on in-domain datasets (MSMarco, TREC DL 19 and 20)"""
+
+    datasets: List[str] = Factory(list)
+    """List of specific datasets to evaluate on"""
+
+
+@configuration()
 class xpm_torch_Learner:
     validation_interval: int = field(default=32)
 
@@ -198,49 +231,8 @@ class xpm_torch_Learner:
     early_stop_epochs: int = 0
     """ number of **epochs** without improvements before early stopping based on validation"""
 
-    ## Lighnting Fabric training Configuration
-    # see https://lightning.ai/docs/fabric/stable/api/generated/lightning.fabric.fabric.Fabric.html#lightning.fabric.fabric.Fabric
-    strategy: str = "auto"
-    """Distributed training strategy"""
-
-    precision: Optional[str] = None
-    """Precision to use - e.g., '16-mixed', 'bf16-mixed', etc."""
-
-    accelerator: str = "auto"
-    """ Accelerator to use """
-
-
-@configuration()
-class Retrieval:
-    k: int = 1000
-    batch_size: int = 128
-    requirements: str = "duration=2 days & cuda(mem=24G)"
-
-
-@configuration()
-class Preprocessing:
-    requirements: str = "duration=12h & cpu(cores=4)"
-
-
-@configuration()
-class Evaluation:
-    test_max_topics: int = 0
-    """Development test size (0 to leave it like this)"""
-
-    all_datasets: bool = False
-    """Whether to evaluate on all BEIR datasets (minus the 5 not publicly available)"""
-
-    nano_beir: bool = False
-    """Whether to evaluate on NanoBEIR datasets"""
-
-    beir13: bool = False
-    """Whether to evaluate on all BEIR13 datasets"""
-
-    in_domain: bool = False
-    """Whether to evaluate on in-domain datasets (MSMarco, TREC DL 19 and 20)"""
-
-    datasets: List[str] = Factory(list)
-    """List of specific datasets to evaluate on"""
+    fabric: Fabric = Factory(Fabric)
+    """Configuration for Fabric device management"""
 
 
 @configuration()

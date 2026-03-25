@@ -25,23 +25,18 @@ import pandas as pd
 
 from experimaestro.launcherfinder import find_launcher
 from xpm_torch.huggingface import prepare_hf_model
-from datamaestro_ir.data import Documents
 
 from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
-from xpmir.index.sparse import SparseRetriever
-from xpmir.neural.splade import splade_encoder_from_pretrained_hf, SpladeTextEncoder
+from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 from xpmir.papers.helpers import NeuralIRExperiment
 from xpmir.neural.huggingface import hf_cross_scorer
-from xpmir.rankers.standard import BM25
-import xpmir.interfaces.anserini as anserini
-from xpmir.rankers import scorer_retriever, Retriever
+from xpmir.rankers import scorer_retriever
 
 from format import dataframe_to_latex
 from tests import build_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
-from index_utils import get_splade_index
-from retrievers import MultiRunRetrieverFactory
+from retrievers import MultiRunRetrieverFactory, splade_retriever, bm25_retriever
 
 import logging
 
@@ -62,44 +57,6 @@ class BaselinesConfig(NeuralIRExperiment):
 
     retrievers_only: bool = False
     """If true, only evaluate first-stage retrievers without cross-encoders"""
-
-
-### Contexual Retriever Factory
-def bm25_retriever(
-    cfg: BaselinesConfig, name: str, documents: Documents, launcher_index
-) -> Retriever.C:
-    return anserini.AnseriniRetriever.C(
-        k=cfg.retrieval.k,
-        model=BM25.C(),
-        index=anserini.index_builder(launcher=launcher_index)(documents),
-        store=documents,
-    ).tag("first_stage", name)
-
-
-def splade_retriever(
-    cfg: BaselinesConfig,
-    name: str,
-    encoder: SpladeTextEncoder,
-    documents: Documents,
-    launcher_index,
-    init_tasks: list = None,
-    **kwargs,
-) -> Retriever.C:
-    """Factory for Splade Retriever, given the current configuration"""
-
-    return SparseRetriever.C(
-        index=get_splade_index(
-            documents,
-            splade_encoder=encoder,
-            indexation_cfg=cfg.indexation,
-            launcher_index=launcher_index,
-            init_tasks=init_tasks,
-        ),
-        topk=cfg.retrieval.k,
-        batchsize=1,
-        encoder=encoder,
-        in_memory=False,
-    ).tag("first_stage", name)
 
 
 @ir_experiment()

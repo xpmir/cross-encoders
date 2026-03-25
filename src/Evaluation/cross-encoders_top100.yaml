@@ -1,4 +1,4 @@
-id: cross_scorer_evaluation
+id: eval_scorer_top100
 title: cross_scorer_evaluation
 description: Experiment whose purpose is to evaluate HF Cross-scorers
 
@@ -34,5 +34,5 @@ retrieval:
 evaluation:
   #just for debugging
   test_max_topics: 100
-  nano_beir: true
+  nanobeir: true
   in_domain: true
