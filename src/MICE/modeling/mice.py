@@ -1,9 +1,10 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, NamedTuple
 import torch
 import torch.nn as nn
 import logging
 
 from experimaestro import Param, LightweightTask, Constant
+from xpmir.text import TokenizedTexts
 from xpmir.letor.records import BaseItems
 from xpmir.rankers import AbstractModuleScorer
 from xpm_torch.utils import to_device
@@ -38,14 +39,14 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
-class MICETokenizedTexts:
+class MICETokenizedTexts(NamedTuple):
     """Container for MICE tokenized inputs (separate query and document streams)"""
 
-    def __init__(self, query_ids, query_mask, doc_ids, doc_mask):
-        self.query_ids = query_ids
-        self.query_mask = query_mask
-        self.doc_ids = doc_ids
-        self.doc_mask = doc_mask
+    tokenized_q: TokenizedTexts
+    """tokenized Queries"""
+
+    tokenized_docs: TokenizedTexts
+    """tokenized Documents"""
 
 
 class MICEQueryDocTokenizer(HFTokenizer):
@@ -78,23 +79,26 @@ class MICEQueryDocTokenizer(HFTokenizer):
         docs = [input_records.unique_documents[i]["text_item"].text for i in ix_ds]
 
         def _encode(texts: List[str], max_tokens: int):
-            return self.tokenizer(
+            r = self.tokenizer(
                 texts,
                 add_special_tokens=True,
                 truncation=True,
                 max_length=max_tokens,
                 padding=True,
                 return_tensors="pt",
+                return_length=True,
+            )
+            return TokenizedTexts(
+                tokens=None,
+                ids=r["input_ids"],
+                lens=r["length"].tolist(),
+                mask=r.get("attention_mask", None),
+                token_type_ids=r.get("token_type_ids", None),
             )
 
-        q_enc = _encode(queries, q_max)
-        d_enc = _encode(docs, d_max)
-
         return MICETokenizedTexts(
-            query_ids=q_enc["input_ids"],
-            query_mask=q_enc["attention_mask"],
-            doc_ids=d_enc["input_ids"],
-            doc_mask=d_enc["attention_mask"],
+            tokenized_q=_encode(queries, q_max),
+            tokenized_docs=_encode(docs, d_max),
         )
 
 
@@ -286,10 +290,13 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         if tokenized is None:
             tokenized = self.batch_tokenize(inputs)
 
-        query_ids = tokenized.query_ids
-        query_mask = tokenized.query_mask
-        doc_ids = tokenized.doc_ids
-        doc_mask = tokenized.doc_mask
+        tokenized_q = to_device(tokenized.tokenized_q, self.device)
+        tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
+
+        query_ids = tokenized_q.ids
+        query_mask = tokenized_q.mask
+        doc_ids = tokenized_docs.ids
+        doc_mask = tokenized_docs.mask
 
         # 1. Process Query through Bottom Layers
         q_hidden = self.forward_bottom(query_ids, query_mask)
@@ -500,10 +507,13 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         if tokenized is None:
             tokenized = self.batch_tokenize(inputs)
 
-        query_ids = to_device(tokenized.query_ids, self.device)
-        query_mask = to_device(tokenized.query_mask, self.device)
-        doc_ids = to_device(tokenized.doc_ids, self.device)
-        doc_mask = to_device(tokenized.doc_mask, self.device)
+        tokenized_q = to_device(tokenized.tokenized_q, self.device)
+        tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
+
+        query_ids = tokenized_q.ids
+        query_mask = tokenized_q.mask
+        doc_ids = tokenized_docs.ids
+        doc_mask = tokenized_docs.mask
 
         # Pos IDs for RoPE
         def _get_pos_ids(ids):
