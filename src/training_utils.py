@@ -344,11 +344,12 @@ def export_model_artifacts(
 
     best_model_val = get_task_by_tags(all_weights, best_tags)
     if best_model_val:
-        weights_path = best_model_val.loader.path
-        if weights_path.name.endswith(".pth"):
-            shutil.copy(weights_path, best_model_path / "model_weights.pt")
+        weights_path = Path(best_model_val.encoder_path)
+        if weights_path.is_dir():
+            shutil.copytree(weights_path, best_model_path, dirs_exist_ok=True)
+            logging.info(f"HuggingFace model artifacts copied to {best_model_path}")
         else:
-            logging.warning(f"Model weights is not a file: {weights_path}")
+            logging.warning(f"Model weights path is not a directory: {weights_path}")
 
     if card_template_txt and best_cfg:
         template = Template(card_template_txt)

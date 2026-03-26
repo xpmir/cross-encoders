@@ -126,6 +126,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
         ### Validation ###
         validation_set = ValidationSet.load(cfg, launcher_preprocessing)
         val_tests = validation_set.to_evaluations()
+
+        # Evaluate First stage on validation and store the topk
+        # this enables faster validations during training
         val_runs = val_tests.evaluate_retriever(
             val_retrievers_factory,
             launcher=launcher_evaluate,
