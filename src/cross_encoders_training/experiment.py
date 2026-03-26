@@ -31,7 +31,7 @@ from retrievers import MultiRunRetrieverFactory, splade_retriever, bm25_retrieve
 from validations import ValidationSet
 from configuration import CE_FineTuning, generate_grid
 from tests import build_tests
-from format import aggregation_hf
+from format import aggregation_hf, dataframe_to_latex
 from training_utils import (
     build_trainer,
     save_raw_results,
@@ -39,7 +39,6 @@ from training_utils import (
     add_dataset_aggregations,
     format_model_results,
     export_model_artifacts,
-    compute_aggregated_results,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -270,8 +269,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
         & (df_with_aggs[("tag", "scorer")] != "")
     ]
 
-    logging.info(scorer_only_df)
-
     # Read model card template
     template_path = Path(__file__).parent / "CrossEncoderCard.md"
     card_template_txt = template_path.read_text() if template_path.exists() else None
@@ -330,10 +327,23 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             )
 
     # Final aggregation and LaTeX table generation
-    compute_aggregated_results(
-        df_with_aggs,
-        metric_cols,
-        group_by_tags,
-        helper.xp.resultspath,
-        aggregations=aggregation_hf,
+    df_grouped = (
+        df_with_aggs.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
+        .agg(["mean", "var"])
+        .reset_index()
     )
+    df_grouped = df_grouped.sort_index(axis=1)
+
+    logging.info(df_grouped)
+
+    output_file = helper.xp.resultspath / "results.csv"
+    df_grouped.to_csv(output_file, index=False)
+
+    latex_table = dataframe_to_latex(
+        df_grouped,
+        caption="Evaluation Results",
+        label="tab:eval_results",
+        sig_df=None,
+    )
+    with open(helper.xp.resultspath / "results.tex", "w") as f:
+        f.write(latex_table)

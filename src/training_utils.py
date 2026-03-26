@@ -36,7 +36,7 @@ from xpmir.letor.distillation.pairwise import (
 )
 
 from configuration import Losses, CE_FineTuning
-from format import dataframe_to_latex, loss_names, backbone_names_lower
+from format import loss_names, backbone_names_lower
 
 logger = logging.getLogger(__name__)
 
@@ -388,31 +388,3 @@ def export_model_artifacts(
 
         with open(best_model_path / "config.yaml", "w") as f:
             yaml.dump(asdict(best_cfg.learner), f, default_flow_style=False)
-
-
-def compute_aggregated_results(
-    df: pd.DataFrame,
-    metric_cols: list,
-    group_by_tags: list,
-    resultspath: Path,
-    aggregations: dict[str, list[str]] = None,
-):
-    """Computes final grouped results across all experiments and saves to CSV/LaTeX."""
-    df_grouped = (
-        df.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
-        .agg(["mean", "var"])
-        .reset_index()
-    )
-    df_grouped = df_grouped.sort_index(axis=1)
-
-    output_file = resultspath / "results.csv"
-    df_grouped.to_csv(output_file, index=False)
-
-    latex_table = dataframe_to_latex(
-        df_grouped,
-        caption="Evaluation Results",
-        label="tab:eval_results",
-        sig_df=None,
-    )
-    with open(resultspath / "results.tex", "w") as f:
-        f.write(latex_table)

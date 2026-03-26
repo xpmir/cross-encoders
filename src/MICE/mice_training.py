@@ -23,17 +23,18 @@ from xpm_torch import Random
 from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
+from xpm_torch.optim import GradientLogHook, GradientClippingHook
 
 from xpmir.papers.results import PaperResults
-from MICE.modeling.mice import mice_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
+from MICE.modeling.mice import mice_scorer
 from retrievers import MultiRunRetrieverFactory, splade_retriever, bm25_retriever
 from validations import ValidationSet
 from configuration import Mice_FineTuning, generate_grid
 from tests import build_tests
-from format import aggregation_hf
+from format import aggregation_hf, dataframe_to_latex
 from training_utils import (
     build_trainer,
     save_raw_results,
@@ -41,7 +42,6 @@ from training_utils import (
     add_dataset_aggregations,
     format_model_results,
     export_model_artifacts,
-    compute_aggregated_results,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -141,8 +141,9 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
         ### TRAINING CROSS ENCODER
 
         ce_trainer: LossTrainer = build_trainer(cfg)
+
         # Build the model using the unified scorer factory
-        scorer_model, scorer_hf_init_tasks = mice_scorer(
+        mice_model, scorer_hf_init_tasks = mice_scorer(
             hf_id=cfg.base,
             merge_layer=cfg.merge_layer,
             drop_layer=cfg.drop_layer,
@@ -153,7 +154,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             compress_dim=cfg.compress_dim,
             pooling_method=cfg.pooling_method,
         )
-        scorer_model.tag("scorer", grid_search_id)
+        mice_model.tag("scorer", grid_search_id)
 
         # Run one Training and eval per seed
         for i in range(cfg.nb_repetitions):
@@ -164,12 +165,10 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             # (retriever + scorer) and keep the best performing model
             # on the validation set
             validations, tracked_validations = validation_set.build_listeners(
-                scorer_model,
+                mice_model,
                 val_run_retriever_factory,
                 retriever_tag,
             )
-
-            from xpm_torch.optim import GradientLogHook, GradientClippingHook
 
             hooks = [setmeta(GradientLogHook.C(), True)]
 
@@ -184,7 +183,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                 # Misc settings
                 random=random,
                 trainer=ce_trainer,  # How to train the model
-                model=scorer_model,  # The model to train
+                model=mice_model,  # The model to train
                 # Optimization settings
                 steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
                 optimizers=cfg.learner.optimization.optimizer,
@@ -222,7 +221,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                     tests.evaluate_retriever(
                         partial(
                             scorer_retriever,
-                            scorer=scorer_model,
+                            scorer=mice_model,
                             retrievers=test_run_retriever_factory,
                             batch_size=cfg.retrieval.batch_size,
                         ),
@@ -276,8 +275,6 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
         df_with_aggs[("tag", "scorer")].notna()
         & (df_with_aggs[("tag", "scorer")] != "")
     ]
-
-    logging.info(scorer_only_df)
 
     # Read model card template
     template_path = Path(__file__).parent / "CrossEncoderCard.md"
@@ -337,10 +334,20 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             )
 
     # Final aggregation and LaTeX table generation
-    compute_aggregated_results(
-        df_with_aggs,
-        metric_cols,
-        group_by_tags,
-        helper.xp.resultspath,
-        aggregations=aggregation_hf,
+    df_grouped = (
+        df_with_aggs.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
+        .agg(["mean", "var"])
+        .reset_index()
     )
+    df_grouped = df_grouped.sort_index(axis=1)
+    logging.info(df_grouped)
+    df_grouped.to_csv(helper.xp.resultspath / "results.csv", index=False)
+
+    latex_table = dataframe_to_latex(
+        df_grouped,
+        caption="Evaluation Results",
+        label="tab:eval_results",
+        sig_df=None,
+    )
+    with open(helper.xp.resultspath / "results.tex", "w") as f:
+        f.write(latex_table)
