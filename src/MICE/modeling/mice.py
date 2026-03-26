@@ -161,17 +161,17 @@ class MiceCrossEncoder(AbstractModuleScorer):
     """Top layers: cross-attention encoding"""
 
     def __initialize__(self):
+        """Instanciates the Config and skeleton of the model"""
         super().__initialize__()
         self.tokenizer.initialize()
 
         # Ensure configs are available
-        if not hasattr(self, "config") or self.config is None:
-            self.config = AutoConfig.from_pretrained(self.hf_id)
-
-        if not hasattr(self, "head_config") or self.head_config is None:
-            self.head_config = AutoConfig.from_pretrained(self.hf_id)
-            self.head_config.is_decoder = True
-            self.head_config.add_cross_attention = True
+        # TODO we should fetch the head_config file if available
+        # (if we need to instanciate from a pretrained Mice model)
+        self.config = AutoConfig.from_pretrained(self.hf_id)
+        self.head_config = AutoConfig.from_pretrained(self.hf_id)
+        self.head_config.is_decoder = True
+        self.head_config.add_cross_attention = True
 
         # Ensure _attn_implementation is not None to avoid warnings
         # Configs should be set by InitTask or manually before calling initialize()
@@ -244,7 +244,7 @@ class MiceCrossEncoder(AbstractModuleScorer):
         # Save tokenizer
         if hasattr(self.tokenizer, "tokenizer"):
             self.tokenizer.tokenizer.save_pretrained(path)
-        # Save config
+        # Save configs
         if hasattr(self, "config") and self.config:
             self.config.save_pretrained(path)
         if hasattr(self, "head_config") and self.head_config:
