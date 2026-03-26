@@ -1,10 +1,8 @@
 """Utility functions for training and result processing."""
 
 import logging
-import shutil
 import yaml
 from pathlib import Path
-from typing import Any
 from attrs import asdict
 import numpy as np
 import pandas as pd
@@ -47,13 +45,35 @@ def get_task_by_tags(tasks: list, tags: dict):
     """Return the first task in tasks that has all the given tags."""
     for task in tasks:
         task_tags = get_tags(task)
-        logging.debug(f"Checking task with tags {task_tags} against {tags}")
+        logger.debug(f"Checking task with tags {task_tags} against {tags}")
         if all(str(task_tags.get(tag)) == str(value) for tag, value in tags.items()):
             return task
     return None
 
 
 def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
+    """
+    Builds a trainer based on the configuration's loss function.
+
+    The trainer is responsible for the training loop, including sampling and loss calculation.
+    Depending on the loss type, it returns one of:
+    - `PairwiseTrainer` for BCE and Hinge loss.
+    - `DistillationPairwiseTrainer` for MarginMSE.
+    - `DistillationListwiseTrainer` for RankDistiLLM, DistillRankNET, and ADR_MSE.
+    - `BatchwiseTrainer` for InfoNCE with in-batch negatives.
+
+    Args:
+        cfg: The fine-tuning configuration. It uses `cfg.learner.loss` to determine
+            the loss function and `cfg.learner.optimization.batch_size` for the batch size.
+
+    Returns:
+        LossTrainer: A configured trainer instance from `xpm_torch` or `xpmir`.
+
+    Raises:
+        ValueError: If `cfg.learner.loss` is not a valid member of the `Losses` enum.
+        NotImplementedError: If the specified loss is valid but its trainer construction
+            is not implemented.
+    """
     try:
         loss_member = Losses(cfg.learner.loss)
     except ValueError:
@@ -102,11 +122,11 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
 
         if cfg.normalize_docs_per_batch:
             batch_size = batch_size // passages_per_query
-            logging.warning(
+            logger.warning(
                 f"normalized batch size to {batch_size} to get {batch_size * passages_per_query} docs per batch"
             )
         else:
-            logging.warning(
+            logger.warning(
                 f"Not normalizing docs per batch, {passages_per_query} docs x {batch_size} = {batch_size * passages_per_query} docs per batch"
             )
 
@@ -118,7 +138,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
 
     ### Listwise distillation losses ###
     elif loss_member is Losses.distillRankNET:
-        logging.warning(
+        logger.warning(
             "Using loss function DistillRankNET, switching to batch size = 1 (i.e. 100 passages per batch)."
         )
         return DistillationListwiseTrainer.C(
@@ -128,7 +148,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         )
 
     elif loss_member is Losses.ADR_MSE:
-        logging.warning(
+        logger.warning(
             "Using loss function ADR_MSE, switching to batch size = 1 (i.e. 100 passages per batch)."
         )
         return DistillationListwiseTrainer.C(
@@ -143,12 +163,12 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         if cfg.normalize_docs_per_batch:
             batch_size = int(np.sqrt(batch_size))
             passages_per_batch = batch_size * batch_size
-            logging.warning(
+            logger.warning(
                 f"normalized batch size to {batch_size} to get {passages_per_batch} docs per batch"
             )
         else:
             passages_per_batch = batch_size * batch_size
-            logging.warning(
+            logger.warning(
                 f"Not normalizing docs per batch for InfoNCE, {batch_size}**2 docs = {passages_per_batch} docs per batch"
             )
 
@@ -184,7 +204,7 @@ def save_raw_results(df: pd.DataFrame, resultspath: Path):
 
     output_file = resultspath / "raw_results.csv"
     df.to_csv(output_file, index=False)
-    logging.info(f"Raw results saved to {output_file}")
+    logger.info(f"Raw results saved to {output_file}")
 
 
 def identify_best_models(
@@ -193,7 +213,7 @@ def identify_best_models(
     """Identifies the best model for each configuration based on a specific dataset and metric."""
     subset = df[df["dataset"] == dataset]
     if subset.empty:
-        logging.warning(f"Dataset {dataset} not found in results for model selection")
+        logger.warning(f"Dataset {dataset} not found in results for model selection")
         return pd.DataFrame()
 
     metric_col = [("metric", metric)]
@@ -237,7 +257,7 @@ def add_dataset_aggregations(
                 mask = df["dataset"].isin(datasets)
                 new_rows.append(get_agg(mask, agg_name))
             else:
-                logging.warning(
+                logger.warning(
                     f"Aggregation {agg_name} skipped because the following datasets are missing: {missing}"
                 )
 
@@ -305,7 +325,7 @@ def export_model_artifacts(
     md_results: pd.DataFrame,
     learners: list,
     all_weights: list,
-    best_cfg: Any,
+    best_cfg: CE_FineTuning,
     resultspath: Path,
     card_template_txt: str = None,
     aggregations: dict[str, list[str]] = None,
@@ -317,8 +337,8 @@ def export_model_artifacts(
             k, v = s.split("=")
             model_tags[k] = v
         except ValueError:
-            logging.warning(f"Unexpected tag format '{s}' in scorer tags")
-    logging.warning(f"got tags {model_tags}")
+            logger.warning(f"Unexpected tag format '{s}' in scorer tags")
+    logger.warning(f"got tags {model_tags}")
 
     model_name = get_name_from_tags(model_tags)
     models_path = resultspath / "models"
@@ -326,7 +346,7 @@ def export_model_artifacts(
     best_model_path.mkdir(parents=True, exist_ok=True)
 
     csv_results.to_csv(best_model_path / "results.csv", index=False)
-    logging.info(f"Model results saved to {best_model_path / 'results.csv'}")
+    logger.info(f"Model results saved to {best_model_path / 'results.csv'}")
 
     best_model_learner = get_task_by_tags(learners, best_tags)
     if best_model_learner:
@@ -342,14 +362,14 @@ def export_model_artifacts(
                 tb_symlink_path.unlink()
             tb_symlink_path.symlink_to(tb_path)
 
-    best_model_val = get_task_by_tags(all_weights, best_tags)
-    if best_model_val:
-        weights_path = Path(best_model_val.encoder_path)
-        if weights_path.is_dir():
-            shutil.copytree(weights_path, best_model_path, dirs_exist_ok=True)
-            logging.info(f"HuggingFace model artifacts copied to {best_model_path}")
-        else:
-            logging.warning(f"Model weights path is not a directory: {weights_path}")
+    # best_model_val = get_task_by_tags(all_weights, best_tags)
+    # if best_model_val:
+    #     weights_path = Path(best_model_val.encoder_path)
+    #     if weights_path.is_dir():
+    #         shutil.copytree(weights_path, best_model_path, dirs_exist_ok=True)
+    #         logger.info(f"HuggingFace model artifacts copied to {best_model_path}")
+    #     else:
+    #         logger.warning(f"Model weights path is not a directory: {weights_path}")
 
     if card_template_txt and best_cfg:
         template = Template(card_template_txt)

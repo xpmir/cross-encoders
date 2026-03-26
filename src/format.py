@@ -1,8 +1,6 @@
 """Formatting utilities for experiment results"""
 
 import pandas as pd
-from pathlib import Path
-import sys
 
 from tests import NANO_BEIR_KEYS
 
@@ -477,37 +475,3 @@ def dataframe_to_latex(
     latex_lines.append("\\end{table*}")
 
     return "\n".join(latex_lines)
-
-
-def _read_results_csv(path: Path) -> pd.DataFrame:
-    # results.csv uses a 3-line header to form a MultiIndex
-    return pd.read_csv(path, header=[0, 1, 2])
-
-
-if __name__ == "__main__":
-    repo_root = Path(
-        "/home/vast/sota-cross-encoders/"
-    )  # Path(__file__).resolve().parents[1]
-    csv_path = repo_root / "results.csv"
-    if not csv_path.exists():
-        print(f"Could not find results.csv at {csv_path}", file=sys.stderr)
-        raise SystemExit(1)
-
-    df = _read_results_csv(csv_path)
-    # Try to load statistical significance results (optional)
-    sig_csv = repo_root / "statistical_significance_results.csv"
-    sig_df = None
-    if sig_csv.exists():
-        try:
-            sig_df = pd.read_csv(sig_csv)
-        except Exception:
-            sig_df = None
-
-    latex = dataframe_to_latex(
-        df,
-        caption="NDCG@10 results",
-        label="tab:ndcg10",
-        sig_df=sig_df,
-        metric_col="R@1000",
-    )
-    print(latex)

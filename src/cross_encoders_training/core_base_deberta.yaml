@@ -17,7 +17,8 @@ max_doc_len: 1024
 normalize_docs_per_batch: true
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=40G)
+    batch_size: 64
     k: 1000
 
 evaluation:
@@ -30,3 +31,9 @@ grid_search:
     base:
         values_list:
             - microsoft/deberta-v3-base
+
+    learner.loss:
+        values_list:
+            - marginMSE
+            - infoNCE_RankDistiLLM
+            # - distillRankNET

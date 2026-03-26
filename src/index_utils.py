@@ -1,6 +1,10 @@
+"""Utilities for index management."""
+
 import logging
 from xpmir.index.sparse import SparseRetrieverIndexBuilder
 from xpmir.rankers import Documents
+
+logger = logging.getLogger(__name__)
 
 # cache the indexes
 _indexes = {}
@@ -29,7 +33,7 @@ def get_splade_index(
     indexer_id = index_cfg.__identifier__()
 
     if indexer_id not in _indexes:
-        logging.info(
+        logger.info(
             "Indexing %s (%s documents) with %s",
             documents.id,
             documents.count,

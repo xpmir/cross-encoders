@@ -5,7 +5,7 @@ from xpmir.letor.records import PointwiseItems
 from experimaestro import LightweightTask, Param
 
 # Set up logging to see what's happening
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 
 class TestMiceForwardTask(LightweightTask):
@@ -58,18 +58,12 @@ if __name__ == "__main__":
     # that need to be executed to load the weights
     scorer_cfg, init_tasks = mice_scorer(hf_id=model_id, merge_layer=3)
 
-    # Create and run the task
-    test_task = TestMiceForwardTask.C(scorer=scorer_cfg).instance()
-
-    scorer = test_task.scorer
-    # The scorer needs to be initialized to create its internal modules
-    # before we can load weights into them
-    scorer.initialize()
-
     # Run initialization tasks if they exist
     for init_task in init_tasks:
         init_task.instance().execute()
 
-    print(scorer)
+    print(scorer_cfg)
 
+    # Create and run the task
+    test_task = TestMiceForwardTask.C(scorer=scorer_cfg).instance()
     test_task.execute()

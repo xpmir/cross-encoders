@@ -2,12 +2,14 @@ from typing import List, Tuple, Optional, NamedTuple
 import torch
 import torch.nn as nn
 import logging
+from pathlib import Path
 
-from experimaestro import Param, LightweightTask, Constant
+from experimaestro import Param, LightweightTask, Constant, field
 from xpmir.text import TokenizedTexts
 from xpmir.letor.records import BaseItems
 from xpmir.rankers import AbstractModuleScorer
 from xpm_torch.utils import to_device
+from xpm_torch.module import SimpleModuleLoader
 
 from xpmir.text.huggingface.tokenizers import HFTokenizer
 from xpmir.text.tokenizers import TokenizerOptions
@@ -138,6 +140,12 @@ class MiceCrossEncoder(AbstractModuleScorer):
     compress_dim: Param[float] = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
 
+    doc: Param[Optional[str]] = field(overrides=True)
+    """Documentation for the model"""
+
+    bibtex: Param[Optional[str]] = field(overrides=True)
+    """BibTeX for the model"""
+
     _version: Constant[int] = 2
     """Model version"""
 
@@ -156,23 +164,30 @@ class MiceCrossEncoder(AbstractModuleScorer):
         super().__initialize__()
         self.tokenizer.initialize()
 
+        # Ensure configs are available
+        if not hasattr(self, "config") or self.config is None:
+            self.config = AutoConfig.from_pretrained(self.hf_id)
+
+        if not hasattr(self, "head_config") or self.head_config is None:
+            self.head_config = AutoConfig.from_pretrained(self.hf_id)
+            self.head_config.is_decoder = True
+            self.head_config.add_cross_attention = True
+
         # Ensure _attn_implementation is not None to avoid warnings
         # Configs should be set by InitTask or manually before calling initialize()
-        if hasattr(self, "config") and self.config is not None:
-            if (
-                not hasattr(self.config, "_attn_implementation")
-                or self.config._attn_implementation is None
-            ):
-                self.config._attn_implementation = "eager"
+        if (
+            not hasattr(self.config, "_attn_implementation")
+            or self.config._attn_implementation is None
+        ):
+            self.config._attn_implementation = "eager"
 
-        if hasattr(self, "head_config") and self.head_config is not None:
-            if (
-                not hasattr(self.head_config, "_attn_implementation")
-                or self.head_config._attn_implementation is None
-            ):
-                self.head_config._attn_implementation = getattr(
-                    self.config, "_attn_implementation", "eager"
-                )
+        if (
+            not hasattr(self.head_config, "_attn_implementation")
+            or self.head_config._attn_implementation is None
+        ):
+            self.head_config._attn_implementation = getattr(
+                self.config, "_attn_implementation", "eager"
+            )
 
     def batch_tokenize(
         self, input_records: BaseItems, options=None
@@ -218,6 +233,41 @@ class MiceCrossEncoder(AbstractModuleScorer):
         )
         attn_mask.masked_fill_(~valid_pairs[:, None, :, :], torch.finfo(dtype).min)
         return attn_mask
+
+    def save_model(self, path: Path):
+        """Save the model and tokenizer in standard pretrained format."""
+        from safetensors.torch import save_file
+
+        path.mkdir(parents=True, exist_ok=True)
+        # Save model weights
+        save_file(self.state_dict(), str(path / "model.safetensors"))
+        # Save tokenizer
+        if hasattr(self.tokenizer, "tokenizer"):
+            self.tokenizer.tokenizer.save_pretrained(path)
+        # Save config
+        if hasattr(self, "config") and self.config:
+            self.config.save_pretrained(path)
+        if hasattr(self, "head_config") and self.head_config:
+            self.head_config.save_pretrained(path / "head")
+
+    def load_model(self, path: Path):
+        """Load from the directory."""
+        from safetensors.torch import load_file
+
+        # Load weights
+        self.load_state_dict(load_file(str(path / "model.safetensors")))
+
+    def loader_config(self, path: Path, *, settings=None) -> "SimpleModuleLoader":
+        return SimpleModuleLoader.C(value=self, path=path, settings=settings)
+
+    def export_action(self, loader, **kwargs):
+        from xpmir.models import XPMIRExportAction
+
+        if self.doc:
+            kwargs.setdefault("doc", self.doc)
+        if self.bibtex:
+            kwargs.setdefault("bibtex", self.bibtex)
+        return XPMIRExportAction.C(loader=loader, **kwargs)
 
 
 class BertMiceCrossEncoder(MiceCrossEncoder):
@@ -609,7 +659,7 @@ class InitMICEBERTFromHFID(LightweightTask):
             new_layer = BertLayer(model.head_config)
 
             # COPY trained weights (Self-Attention + FFN) from original BERT to new layer
-            # Note: The Cross-Attention block (new_layer.crossattention) will remain random!
+            # Also seed Cross-Attention from the same weights
             if not model.random_top_layers:
                 logger.info(
                     f"Copying weights from original BERT to Mid-Fusion top layer {i}"
@@ -632,13 +682,15 @@ class InitMICEBERTFromHFID(LightweightTask):
     def _copy_bert_weights(self, src, target):
         """
         Copies Self-Attention and FFN weights from src to target.
-        Leaves Cross-Attention weights (only in target) initialized randomly.
+        Also seeds Cross-Attention weights from Self-Attention weights.
         """
+        logger.debug("Copying BERT self-attention and MLP weights")
         target.attention.self.load_state_dict(src.attention.self.state_dict())
         target.attention.output.load_state_dict(src.attention.output.state_dict())
         target.intermediate.load_state_dict(src.intermediate.state_dict())
         target.output.load_state_dict(src.output.state_dict())
         if hasattr(target, "crossattention") and target.crossattention:
+            logger.debug("Seeding BERT cross-attention from self-attention weights")
             target.crossattention.self.load_state_dict(src.attention.self.state_dict())
             target.crossattention.output.load_state_dict(
                 src.attention.output.state_dict()
@@ -686,13 +738,15 @@ class InitMICEModernBERTFromHFID(LightweightTask):
     def _copy_modernbert_weights(self, src, target):
         """
         Copies Attention and MLP weights from src to target.
-        Leaves Cross-Attention weights (only in target) initialized randomly.
+        Also seeds Cross-Attention weights from Self-Attention weights.
         """
+        logger.debug("Copying ModernBERT self-attention and MLP weights")
         target.attn_norm.load_state_dict(src.attn_norm.state_dict())
         target.attn.load_state_dict(src.attn.state_dict())
         target.mlp_norm.load_state_dict(src.mlp_norm.state_dict())
         target.mlp.load_state_dict(src.mlp.state_dict())
         # Seed cross-attention
+        logger.debug("Seeding ModernBERT cross-attention from Wqkv weights")
         all_head = src.attn.all_head_size
         with torch.no_grad():
             target.crossattention.q_proj.weight.copy_(

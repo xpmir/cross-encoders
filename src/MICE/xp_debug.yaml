@@ -28,10 +28,10 @@ learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 64
-        max_epochs: 200 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        max_epochs: 100 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
-        lr: 7e-6
+        lr: 1e-5
         eps: 1.0e-8
     fabric:
         precision: bf16-mixed
@@ -58,3 +58,12 @@ grid_search:
     base:
         values_list:
             - microsoft/MiniLM-L12-H384-uncased
+
+    learner.loss:
+        values_list:
+            - infoNCE_RankDistiLLM
+            # - bce
+            # - hingeLoss
+            # - marginMSE
+            # - distillRankNET
+            # - ADR_MSE
