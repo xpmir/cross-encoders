@@ -31,12 +31,12 @@ from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 from xpmir.papers.helpers import NeuralIRExperiment
 from xpmir.neural.huggingface import hf_cross_scorer
-from xpmir.rankers import scorer_retriever
+from xpmir.rankers import scorer_retriever, MultiRunRetrieverFactory
 
 from format import dataframe_to_latex
 from tests import build_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
-from retrievers import MultiRunRetrieverFactory, splade_retriever, bm25_retriever
+from retrievers import splade_retriever, bm25_retriever
 
 import logging
 

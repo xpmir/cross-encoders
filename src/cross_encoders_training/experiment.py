@@ -24,10 +24,10 @@ from xpm_torch.learner import Learner
 
 from xpmir.papers.results import PaperResults
 from xpmir.neural.huggingface import hf_cross_scorer
-from xpmir.rankers import scorer_retriever
+from xpmir.rankers import scorer_retriever, MultiRunRetrieverFactory
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
-from retrievers import MultiRunRetrieverFactory, splade_retriever, bm25_retriever
+from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
 from configuration import CE_FineTuning, generate_grid
 from tests import build_tests
