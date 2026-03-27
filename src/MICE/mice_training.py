@@ -26,7 +26,8 @@ from xpm_torch.learner import Learner
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 
 from xpmir.papers.results import PaperResults
-from xpmir.rankers import scorer_retriever, MultiRunRetrieverFactory
+from xpmir.rankers import scorer_retriever
+from xpmir.evaluation import MultiRunRetrieverFactory
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
 from MICE.modeling.mice import mice_scorer
