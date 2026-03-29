@@ -5,7 +5,7 @@ description:
     Example configuration for training an ettin-150m model with two different losses.
 
 seed: 12 # To mimick the HF xp
-
+nb_repetitions: 1
 
 ### Overrides parameters from core_base
 learner:

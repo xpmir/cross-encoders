@@ -661,6 +661,7 @@ name = "cross-encoders"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "datamaestro-ir" },
     { name = "experimaestro" },
     { name = "experimaestro-ir", extra = ["anserini", "neural"] },
     { name = "ir-datasets" },
@@ -681,6 +682,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "datamaestro-ir", editable = "datamaestro-ir" },
     { name = "experimaestro", editable = "experimaestro-python" },
     { name = "experimaestro-ir", extras = ["anserini", "neural"], editable = "experimaestro-ir" },
     { name = "ir-datasets", git = "https://github.com/bpiwowar/ir_datasets.git" },
@@ -903,7 +905,7 @@ wheels = [
 
 [[package]]
 name = "datamaestro-ir"
-source = { editable = "experimaestro-ir/datamaestro-ir" }
+source = { editable = "datamaestro-ir" }
 dependencies = [
     { name = "attrs" },
     { name = "datamaestro" },
@@ -1213,7 +1215,7 @@ neural = [
 requires-dist = [
     { name = "attrs" },
     { name = "datamaestro", specifier = ">=1.0.1" },
-    { name = "datamaestro-ir", editable = "experimaestro-ir/datamaestro-ir" },
+    { name = "datamaestro-ir", specifier = ">=0.2.0" },
     { name = "docstring-parser" },
     { name = "experimaestro", specifier = ">=2.3" },
     { name = "impact-index", specifier = ">=1.2.0" },
