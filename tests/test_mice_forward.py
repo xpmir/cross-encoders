@@ -103,12 +103,8 @@ class TestMiceReloadTask(LightweightTask):
         print("Model reload test successful! Outputs match.")
 
 
-if __name__ == "__main__":
-    # Use a small BERT model for testing purposes
-    # MiniLM is a good candidate as it is fast and small
-    model_id = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    merge_layer = 3
-
+def test_mice(model_id, merge_layer):
+    """tests mice loading, forward pass saving."""
     # mice_scorer returns the model and a list of initialization tasks
     # that need to be executed to load the weights
     scorer_cfg, init_tasks = mice_scorer(hf_id=model_id, merge_layer=merge_layer)
@@ -130,3 +126,13 @@ if __name__ == "__main__":
     for init_task in init_tasks:
         init_task.instance().execute()
     test_reload_task.execute()
+
+
+if __name__ == "__main__":
+    # Use a small BERT model for testing purposes
+    # MiniLM is a good candidate as it is fast and small
+    model_id = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    model_id = "Qwen/Qwen3-0.6B"
+    merge_layer = 3
+
+    test_mice(model_id, merge_layer)

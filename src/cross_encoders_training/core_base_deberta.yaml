@@ -18,7 +18,7 @@ normalize_docs_per_batch: true
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=40G)
-    batch_size: 64
+    batch_size: 100
     k: 1000
 
 evaluation:

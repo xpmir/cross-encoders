@@ -814,7 +814,30 @@ def mice_scorer(
             pooling_method=pooling_method,
         )
         return model, [InitMICEModernBERTFromHFID.C(model=model)]
+
+    elif "qwen" in hf_id.lower():
+        from .qwen_mice import QwenMiceCrossEncoder, InitMICEQwenFromHFID
+
+        model = QwenMiceCrossEncoder.C(
+            hf_id=hf_id,
+            tokenizer=tokenizer,
+            merge_layer=merge_layer,
+            drop_layer=drop_layer,
+            mask_cls_to_doc=mask_cls_to_doc,
+            mask_query_to_cls=mask_query_to_cls,
+            freeze_base=freeze_base,
+            random_top_layers=random_top_layers,
+            compress_dim=compress_dim,
+            pooling_method=pooling_method or "cls",
+        )
+        return model, [InitMICEQwenFromHFID.C(model=model)]
+
     else:
+        if "bert" not in hf_id.lower():
+            logger.warning(
+                f"Not Backbone recognized for {hf_id}, using default 'BertMiceCrossEncoder' architecture"
+            )
+
         model = BertMiceCrossEncoder.C(
             hf_id=hf_id,
             tokenizer=tokenizer,

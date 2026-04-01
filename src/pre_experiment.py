@@ -22,13 +22,15 @@ modules_to_mock = [
     "torch",
     "torchmetrics",
     "torchdata",
-    "pytorch_lightning",
     "lightning",
+    "pytorch_lightning",
+    "lightning_fabric",
     "sentence_transformers",
     "transformers",
     "huggingface_hub.hub_mixin",
     "pylate",
     "xpmir.learning.losses",
+    "xpmir.neural._sparton",
     "xpm_torch.datasets",
 ]
 logger.info(

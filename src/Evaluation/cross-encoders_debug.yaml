@@ -1,4 +1,4 @@
-id: cross_scorer_evaluation_debug
+id: eval_scorer_debug
 title: cross_scorer_evaluation
 description: Experiment whose purpose is to evaluate HF Cross-scorers
 
@@ -8,7 +8,10 @@ pre_experiment: ../pre_experiment.py
 gpu: true
 
 scorers_hf_id:
-  - xpmir/cross-encoder-MiniLM-L12-MarginMSE
+  - cross-encoder/ms-marco-MiniLM-L12-v2
+  # - xpmir/cross-encoder-bert-base-infoNCE
+  # - xpmir/cross-encoder-MiniLM-L12-MarginMSE
+  # - naver/trecdl22-crossencoder-debertav3
   # - tomaarsen/ms-marco-ettin-150m-reranker
   # - cross-encoder/ms-marco-MiniLM-L6-v2
   # - tomaarsen/ms-marco-ettin-68m-reranker
@@ -31,5 +34,5 @@ retrieval:
 evaluation:
   #just for debugging
   test_max_topics: 100
-  all_datasets: true
   in_domain: true
+  # nanobeir: true
