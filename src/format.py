@@ -1,9 +1,79 @@
 """Formatting utilities for experiment results"""
 
-import numpy as np
 import pandas as pd
-from pathlib import Path
-import sys
+
+from tests import NANO_BEIR_KEYS
+
+### Some dicts for formatting
+
+loss_names = {
+    "bce": "BCE",
+    "hingeLoss": "Hinge",
+    "marginMSE": "MarginMSE",
+    "distillRankNET": "DistillRankNET",
+    "infoNCE_RankDistiLLM_norm_size=True": "InfoNCE",
+    "ADR_MSE": "ADR-MSE",
+    "ADR": "ADR-MSE",
+}
+
+backbone_names = {
+    "jhu-clsp/ettin-encoder-17m": "Ettin-17M",
+    "jhu-clsp/ettin-encoder-32m": "Ettin-32M",
+    "microsoft/MiniLM-L12-H384-uncased": "MiniLM-L12 (33M)",
+    "jhu-clsp/ettin-encoder-68m": "Ettin-68M",
+    "bert-base-uncased": "BERT-Base (110M)",
+    "google/electra-base-discriminator": "ELECTRA (110M)",
+    "FacebookAI/roberta-base": "RoBERTa (125M)",
+    "jhu-clsp/ettin-encoder-150m": "Ettin-150M",
+    "microsoft/deberta-v3-base": "DeBERTav3 (184M)",
+}
+
+backbone_names_lower = {
+    "jhu-clsp/ettin-encoder-17m": "ettin-17m",
+    "jhu-clsp/ettin-encoder-32m": "ettin-32m",
+    "microsoft/MiniLM-L12-H384-uncased": "MiniLM-L12",
+    "jhu-clsp/ettin-encoder-68m": "ettin-68m",
+    "bert-base-uncased": "bert-base",
+    "google/electra-base-discriminator": "ELECTRA",
+    "FacebookAI/roberta-base": "RoBERTa",
+    "jhu-clsp/ettin-encoder-150m": "ettin-150m",
+    "microsoft/deberta-v3-base": "DeBERTav3",
+}
+
+aggregations = {
+    "In Domain": ["msmarco_dev", "trec2019", "trec2020"],
+    "BEIR13 (Semi OOD)": [
+        "arguana",
+        "climate_fever",
+        "dbpedia",
+        "fever",
+        "fiqa",
+        "hotpotqa",
+        "nfcorpus",
+        "nq",
+        "quora",
+        "scidocs",
+        "scifact",
+        "touche",
+        "trec_covid",
+    ],
+    "OOD": [
+        "lotte_lifestyle",
+        "lotte_recreation",
+        "lotte_science",
+        "lotte_technology",
+        "lotte_writing",
+    ],
+    "Nano BEIR": list(NANO_BEIR_KEYS.keys()),
+}
+
+## Aggregations used in the HF Card (keep short)
+aggregation_hf = {
+    "Mean In Domain": aggregations["In Domain"],
+    "BEIR 13": aggregations["BEIR13 (Semi OOD)"],
+    "LoTTE (OOD)": aggregations["OOD"],
+    "Nano BEIR": aggregations["Nano BEIR"],
+}
 
 DATASET_TO_ABB = {
     "fiqa": "Fi",
@@ -52,6 +122,7 @@ def escape_latex(text: str) -> str:
         text = text.replace(char, replacement)
     return text
 
+
 def dataframe_to_latex(
     df: pd.DataFrame,
     caption: str = "Results",
@@ -88,7 +159,9 @@ def dataframe_to_latex(
         # Ensure there's a `p_value` column (tolerant renaming if needed)
         if "p_value" not in sig_df.columns:
             for col in sig_df.columns:
-                if "p" in str(col).lower() and ("value" in str(col).lower() or "val" in str(col).lower()):
+                if "p" in str(col).lower() and (
+                    "value" in str(col).lower() or "val" in str(col).lower()
+                ):
                     sig_df = sig_df.rename(columns={col: "p_value"})
                     break
 
@@ -203,17 +276,17 @@ def dataframe_to_latex(
 
         # get mean and var
         mean_val = None
-        var_val = None
         try:
             if ndcg_mean_col is not None:
                 mean_val = row[ndcg_mean_col]
         except Exception:
             mean_val = None
-        try:
-            if ndcg_var_col is not None:
-                var_val = row[ndcg_var_col]
-        except Exception:
-            var_val = None
+        # var_val = None
+        # try:
+        #     if ndcg_var_col is not None:
+        #         var_val = row[ndcg_var_col]
+        # except Exception:
+        #     var_val = None
 
         # Format cell: display as percentage (multiply by 100) with one decimal, no variance
         try:
@@ -221,7 +294,7 @@ def dataframe_to_latex(
                 cell = "-"
             else:
                 m = float(mean_val)
-                cell = f"{100*m:.1f}"
+                cell = f"{100 * m:.1f}"
         except Exception:
             cell = "-"
 
@@ -328,12 +401,14 @@ def dataframe_to_latex(
 
     # Use abbreviations for dataset display names when available
     header = ["Model"] + [escape_latex(DATASET_TO_ABB.get(d, d)) for d in datasets]
-    header.extend([
-        "Avg. (ID)",
-        "Avg. (BEIR OOD)",
-        "Avg. (LoTTE OOD)",
-        "Avg. (OOD)",
-    ])
+    header.extend(
+        [
+            "Avg. (ID)",
+            "Avg. (BEIR OOD)",
+            "Avg. (LoTTE OOD)",
+            "Avg. (OOD)",
+        ]
+    )
     latex_lines.append(" & ".join(header) + " \\\\")
     latex_lines.append("\\midrule")
 
@@ -352,7 +427,7 @@ def dataframe_to_latex(
         ]
         if id_vals:
             avg = sum(id_vals) / len(id_vals)
-            row_parts.append(f"{100*avg:.1f}")
+            row_parts.append(f"{100 * avg:.1f}")
         else:
             row_parts.append("-")
 
@@ -364,7 +439,7 @@ def dataframe_to_latex(
         ]
         if beir_vals:
             beir_avg = sum(beir_vals) / len(beir_vals)
-            row_parts.append(f"{100*beir_avg:.1f}")
+            row_parts.append(f"{100 * beir_avg:.1f}")
         else:
             row_parts.append("-")
 
@@ -376,7 +451,7 @@ def dataframe_to_latex(
         ]
         if lotte_vals:
             lotte_avg = sum(lotte_vals) / len(lotte_vals)
-            row_parts.append(f"{100*lotte_avg:.1f}")
+            row_parts.append(f"{100 * lotte_avg:.1f}")
         else:
             row_parts.append("-")
 
@@ -389,7 +464,7 @@ def dataframe_to_latex(
         ]
         if all_ood_vals:
             all_ood_avg = sum(all_ood_vals) / len(all_ood_vals)
-            row_parts.append(f"{100*all_ood_avg:.1f}")
+            row_parts.append(f"{100 * all_ood_avg:.1f}")
         else:
             row_parts.append("-")
 
@@ -400,31 +475,3 @@ def dataframe_to_latex(
     latex_lines.append("\\end{table*}")
 
     return "\n".join(latex_lines)
-
-
-def _read_results_csv(path: Path) -> pd.DataFrame:
-    # results.csv uses a 3-line header to form a MultiIndex
-    return pd.read_csv(path, header=[0, 1, 2])
-
-
-if __name__ == "__main__":
-    repo_root = Path("/home/vast/sota-cross-encoders/") # Path(__file__).resolve().parents[1]
-    csv_path = repo_root / "results.csv"
-    if not csv_path.exists():
-        print(f"Could not find results.csv at {csv_path}", file=sys.stderr)
-        raise SystemExit(1)
-
-    df = _read_results_csv(csv_path)
-    # Try to load statistical significance results (optional)
-    sig_csv = repo_root / "statistical_significance_results.csv"
-    sig_df = None
-    if sig_csv.exists():
-        try:
-            sig_df = pd.read_csv(sig_csv)
-        except Exception:
-            sig_df = None
-
-    latex = dataframe_to_latex(
-        df, caption="NDCG@10 results", label="tab:ndcg10", sig_df=sig_df, metric_col="R@1000"
-    )
-    print(latex)

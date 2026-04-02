@@ -1,0 +1,454 @@
+import torch
+from torch import nn
+from typing import Optional
+from transformers import AutoModelForCausalLM
+
+from experimaestro import Param, LightweightTask
+from xpm_torch.utils import to_device
+from xpmir.letor.records import BaseItems
+
+from .mice import MiceCrossEncoder, MICETokenizedTexts
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class QwenCrossAttention(nn.Module):
+    """
+    Cross-attention layer for Qwen models, designed to attend to an external
+    encoder's hidden states (e.g., a document representation in MICE).
+    Supports Qwen3 features like q_norm, k_norm, and output gating.
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.head_dim = getattr(config, "head_dim", self.hidden_size // self.num_heads)
+        self.num_key_value_heads = config.num_key_value_heads
+        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
+        self.scaling = self.head_dim**-0.5
+
+        # Determine if bias is needed (Qwen2 uses bias, Qwen3 does not for Q/K/V)
+        has_bias = getattr(config, "attention_bias", True)
+
+        self.q_proj = nn.Linear(
+            self.hidden_size, self.num_heads * self.head_dim, bias=has_bias
+        )
+        self.k_proj = nn.Linear(
+            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=has_bias
+        )
+        self.v_proj = nn.Linear(
+            self.hidden_size, self.num_key_value_heads * self.head_dim, bias=has_bias
+        )
+        self.o_proj = nn.Linear(
+            self.num_heads * self.head_dim, self.hidden_size, bias=False
+        )
+
+        # Output gating (Qwen3)
+        self.gate_proj = None
+        if hasattr(config, "model_type") and config.model_type == "qwen3":
+            self.gate_proj = nn.Linear(
+                self.hidden_size, self.num_heads * self.head_dim, bias=False
+            )
+
+        # Qwen3 specific: RMSNorm for Q and K
+        # We use Qwen2RMSNorm if available, or try to import it
+        try:
+            from transformers.models.qwen2.modeling_qwen2 import Qwen2RMSNorm as RMSNorm
+        except ImportError:
+            try:
+                from transformers.models.qwen3.modeling_qwen3 import (
+                    Qwen3RMSNorm as RMSNorm,
+                )
+            except ImportError:
+                # Fallback implementation of RMSNorm if not found
+                class RMSNorm(nn.Module):
+                    def __init__(self, dim, eps=1e-6):
+                        super().__init__()
+                        self.eps = eps
+                        self.weight = nn.Parameter(torch.ones(dim))
+
+                    def forward(self, x):
+                        return (
+                            x
+                            * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+                            * self.weight
+                        )
+
+        self.q_norm = (
+            RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+            if hasattr(config, "model_type") and config.model_type == "qwen3"
+            else nn.Identity()
+        )
+        self.k_norm = (
+            RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+            if hasattr(config, "model_type") and config.model_type == "qwen3"
+            else nn.Identity()
+        )
+
+    def forward(
+        self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None
+    ):
+        bsz, q_len, _ = hidden_states.size()
+
+        query_states = self.q_proj(hidden_states).view(
+            bsz, q_len, self.num_heads, self.head_dim
+        )
+        key_states = self.k_proj(encoder_hidden_states).view(
+            bsz, -1, self.num_key_value_heads, self.head_dim
+        )
+        value_states = self.v_proj(encoder_hidden_states).view(
+            bsz, -1, self.num_key_value_heads, self.head_dim
+        )
+
+        # Apply q_norm and k_norm if they are not Identity
+        if not isinstance(self.q_norm, nn.Identity):
+            query_states = self.q_norm(query_states)
+        if not isinstance(self.k_norm, nn.Identity):
+            key_states = self.k_norm(key_states)
+
+        query_states = query_states.transpose(1, 2)
+        key_states = key_states.transpose(1, 2)
+        value_states = value_states.transpose(1, 2)
+
+        # Standard GQA: repeat key/value states to match query heads
+        if self.num_key_value_groups > 1:
+            key_states = key_states.repeat_interleave(self.num_key_value_groups, dim=1)
+            value_states = value_states.repeat_interleave(
+                self.num_key_value_groups, dim=1
+            )
+
+        # Using scaled_dot_product_attention (PyTorch 2.0+)
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            attn_mask=encoder_attention_mask,
+            dropout_p=self.config.attention_dropout if self.training else 0.0,
+            is_causal=False,
+        )
+
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.view(bsz, q_len, self.num_heads * self.head_dim)
+
+        # Output gating (Qwen3)
+        if self.gate_proj is not None:
+            gate = self.gate_proj(hidden_states)
+            attn_output = attn_output * torch.nn.functional.silu(gate)
+
+        attn_output = self.o_proj(attn_output)
+
+        return attn_output
+
+
+class QwenCrossAttentionLayer(nn.Module):
+    """
+    A Qwen decoder layer augmented with cross-attention, following the MICE architecture.
+    """
+
+    def __init__(self, config, layer_idx):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+
+        # Determine the attention class to use (Qwen2 or Qwen3)
+        if hasattr(config, "model_type") and config.model_type == "qwen3":
+            from transformers.models.qwen3.modeling_qwen3 import (
+                Qwen3Attention,
+                Qwen3RMSNorm,
+                Qwen3MLP,
+                Qwen3RotaryEmbedding,
+            )
+
+            self.input_layernorm = Qwen3RMSNorm(
+                config.hidden_size, eps=config.rms_norm_eps
+            )
+            self.self_attn = Qwen3Attention(config, layer_idx)
+            self.post_attention_layernorm = Qwen3RMSNorm(
+                config.hidden_size, eps=config.rms_norm_eps
+            )
+            self.mlp = Qwen3MLP(config)
+            self.rotary_emb = Qwen3RotaryEmbedding(config)
+        else:
+            from transformers.models.qwen2.modeling_qwen2 import (
+                Qwen2Attention,
+                Qwen2RMSNorm,
+                Qwen2MLP,
+                Qwen2RotaryEmbedding,
+            )
+
+            self.input_layernorm = Qwen2RMSNorm(
+                config.hidden_size, eps=config.rms_norm_eps
+            )
+            self.self_attn = Qwen2Attention(config, layer_idx)
+            self.post_attention_layernorm = Qwen2RMSNorm(
+                config.hidden_size, eps=config.rms_norm_eps
+            )
+            self.mlp = Qwen2MLP(config)
+            self.rotary_emb = Qwen2RotaryEmbedding(config)
+
+        self.cross_attn = QwenCrossAttention(config)
+
+    def forward(
+        self,
+        hidden_states,
+        attention_mask=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        position_ids=None,
+        position_embeddings=None,
+    ):
+        # Prepare position embeddings for RoPE if not provided
+        if position_embeddings is None and position_ids is not None:
+            position_embeddings = self.rotary_emb(hidden_states, position_ids)
+
+        # 1. Self-Attention Block
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states, _ = self.self_attn(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            position_embeddings=position_embeddings,
+        )
+        hidden_states = residual + hidden_states
+
+        # 2. Cross-Attention Block (Mid-Fusion)
+        if encoder_hidden_states is not None:
+            residual = hidden_states
+            # MICE: attend to document states using query states
+            # We use the same pre-norm (input_layernorm) for query and doc
+            hidden_states = self.cross_attn(
+                self.input_layernorm(hidden_states),
+                encoder_hidden_states=self.input_layernorm(encoder_hidden_states),
+                encoder_attention_mask=encoder_attention_mask,
+            )
+            hidden_states = residual + hidden_states
+
+        # 3. MLP Block
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        return (hidden_states,)
+
+
+class QwenMiceCrossEncoder(MiceCrossEncoder):
+    """Mid-Fusion Cross Encoder based on Qwen Architecture."""
+
+    pooling_method: Param[Optional[str]] = "cls"
+    """Pooling method to use: cls or mean."""
+
+    def __initialize__(self):
+        super().__initialize__()
+
+        # Structure setup
+        # Weights copied later by InitTask
+        temp_model = AutoModelForCausalLM.from_config(self.config)
+        self.add_module("embeddings", temp_model.model.embed_tokens)
+
+        # Bottom layers: use the same class as in the backbone
+        self.add_module(
+            "bottom_layers",
+            nn.ModuleList(
+                [
+                    type(temp_model.model.layers[0])(self.config, i)
+                    for i in range(self.merge_layer)
+                ]
+            ),
+        )
+
+        # Top layers: augmented with cross-attention
+        num_top = (self.drop_layer or len(temp_model.model.layers)) - self.merge_layer
+        self.add_module(
+            "top_layers",
+            nn.ModuleList(
+                [
+                    QwenCrossAttentionLayer(self.config, self.merge_layer + i)
+                    for i in range(num_top)
+                ]
+            ),
+        )
+
+        self.add_module("final_norm", temp_model.model.norm)
+
+        # Rotary embeddings for the whole model
+        if hasattr(self.config, "model_type") and self.config.model_type == "qwen3":
+            from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
+
+            self.rotary_emb = Qwen3RotaryEmbedding(self.config)
+        else:
+            from transformers.models.qwen2.modeling_qwen2 import Qwen2RotaryEmbedding
+
+            self.rotary_emb = Qwen2RotaryEmbedding(self.config)
+
+        self.dropout_layer = nn.Dropout(getattr(self.config, "classifier_dropout", 0.1))
+        self.classifier = nn.Linear(self.config.hidden_size, 1)
+
+    def forward(
+        self, inputs: BaseItems, tokenized: Optional[MICETokenizedTexts] = None
+    ):
+        if tokenized is None:
+            tokenized = self.batch_tokenize(inputs)
+
+        tokenized_q = to_device(tokenized.tokenized_q, self.device)
+        tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
+
+        query_ids = tokenized_q.ids
+        query_mask = tokenized_q.mask
+        doc_ids = tokenized_docs.ids
+        doc_mask = tokenized_docs.mask
+
+        # Pos IDs for RoPE
+        def _get_pos_ids(ids):
+            b, s = ids.size()
+            return torch.arange(s, device=ids.device).unsqueeze(0).expand(b, s)
+
+        x_q = self.embeddings(query_ids)
+        x_d = self.embeddings(doc_ids)
+
+        q_pos = _get_pos_ids(query_ids)
+        d_pos = _get_pos_ids(doc_ids)
+
+        # Compute rotary embeddings once
+        q_position_embeddings = self.rotary_emb(x_q, q_pos)
+        d_position_embeddings = self.rotary_emb(x_d, d_pos)
+
+        # Bottom
+        for layer in self.bottom_layers:
+            x_q = layer(
+                x_q,
+                attention_mask=None,
+                position_ids=q_pos,
+                position_embeddings=q_position_embeddings,
+            )
+            x_d = layer(
+                x_d,
+                attention_mask=None,
+                position_ids=d_pos,
+                position_embeddings=d_position_embeddings,
+            )
+
+        # Top
+        # Mask for Cross-Attention (Query attending to Doc) shape [batch, 1, seq_len_query, seq_len_doc]
+        cross_mask = self.get_cross_attention_mask(query_mask, doc_mask, x_q.dtype)
+
+        for layer in self.top_layers:
+            x_q = layer(
+                x_q,
+                attention_mask=None,
+                encoder_hidden_states=x_d,
+                encoder_attention_mask=cross_mask,
+                position_ids=q_pos,
+                position_embeddings=q_position_embeddings,
+            )[0]
+
+        x_q = self.final_norm(x_q)
+
+        # Pooling
+        if self.pooling_method == "cls":
+            pooled = x_q[:, 0]
+        else:
+            pooled = x_q.mean(dim=1)
+
+        return self.classifier(self.dropout_layer(pooled)).squeeze(-1)
+
+
+class InitMICEQwenFromHFID(LightweightTask):
+    """Worker-node task to load weights into MICE Qwen model"""
+
+    model: Param[QwenMiceCrossEncoder]
+
+    def execute(self):
+        model = self.model
+        hf_id = model.hf_id
+
+        # Build structure
+        model.initialize()
+
+        logger.info(f"Loading MICE Qwen weights from {hf_id}")
+
+        full_backbone = AutoModelForCausalLM.from_pretrained(hf_id)
+
+        # Embeddings
+        model.embeddings.load_state_dict(full_backbone.model.embed_tokens.state_dict())
+
+        # Bottom layers
+        for i in range(model.merge_layer):
+            model.bottom_layers[i].load_state_dict(
+                full_backbone.model.layers[i].state_dict()
+            )
+
+        # Top layers
+        src_layers = full_backbone.model.layers[model.merge_layer :]
+        for i, target_layer in enumerate(model.top_layers):
+            if not model.random_top_layers:
+                self._copy_qwen_weights(src_layers[i], target_layer)
+
+        model.final_norm.load_state_dict(full_backbone.model.norm.state_dict())
+
+    def _copy_qwen_weights(self, src, target):
+        """Copies weights and seeds cross-attention"""
+        with torch.no_grad():
+            # Copy standard components
+            target.self_attn.load_state_dict(src.self_attn.state_dict())
+            target.input_layernorm.load_state_dict(src.input_layernorm.state_dict())
+            target.post_attention_layernorm.load_state_dict(
+                src.post_attention_layernorm.state_dict()
+            )
+            target.mlp.load_state_dict(src.mlp.state_dict())
+
+            # Seed cross-attention
+            src_attn = src.self_attn
+            target_cross = target.cross_attn
+
+            # Qwen3: q_proj split
+            if (
+                hasattr(target_cross, "gate_proj")
+                and target_cross.gate_proj is not None
+            ):
+                all_head = target_cross.num_heads * target_cross.head_dim
+                if src_attn.q_proj.weight.shape[0] == 2 * all_head:
+                    target_cross.q_proj.weight.copy_(src_attn.q_proj.weight[:all_head])
+                    target_cross.gate_proj.weight.copy_(
+                        src_attn.q_proj.weight[all_head:]
+                    )
+                else:
+                    target_cross.q_proj.weight.copy_(src_attn.q_proj.weight)
+            else:
+                target_cross.q_proj.weight.copy_(src_attn.q_proj.weight)
+                if (
+                    hasattr(src_attn.q_proj, "bias")
+                    and src_attn.q_proj.bias is not None
+                ):
+                    if target_cross.q_proj.bias is not None:
+                        target_cross.q_proj.bias.copy_(src_attn.q_proj.bias)
+
+            target_cross.k_proj.weight.copy_(src_attn.k_proj.weight)
+            if hasattr(src_attn.k_proj, "bias") and src_attn.k_proj.bias is not None:
+                if target_cross.k_proj.bias is not None:
+                    target_cross.k_proj.bias.copy_(src_attn.k_proj.bias)
+
+            target_cross.v_proj.weight.copy_(src_attn.v_proj.weight)
+            if hasattr(src_attn.v_proj, "bias") and src_attn.v_proj.bias is not None:
+                if target_cross.v_proj.bias is not None:
+                    target_cross.v_proj.bias.copy_(src_attn.v_proj.bias)
+
+            target_cross.o_proj.weight.copy_(src_attn.o_proj.weight)
+            if hasattr(src_attn.o_proj, "bias") and src_attn.o_proj.bias is not None:
+                if target_cross.o_proj.bias is not None:
+                    target_cross.o_proj.bias.copy_(src_attn.o_proj.bias)
+
+            # Qwen3 specific: copy q_norm and k_norm
+            if hasattr(src_attn, "q_norm") and not isinstance(
+                target_cross.q_norm, nn.Identity
+            ):
+                target_cross.q_norm.load_state_dict(src_attn.q_norm.state_dict())
+            if hasattr(src_attn, "k_norm") and not isinstance(
+                target_cross.k_norm, nn.Identity
+            ):
+                target_cross.k_norm.load_state_dict(src_attn.k_norm.state_dict())

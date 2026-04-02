@@ -1,5 +1,5 @@
 from enum import Enum
-import attrs
+import copy
 from attrs import Factory, field
 from typing import (
     Any,
@@ -8,30 +8,25 @@ from typing import (
     Optional,
     Tuple,
     TypeVar,
-    Generic,
     Union,
     Type,
     get_args,
     get_origin,
     get_type_hints,
 )
-import copy
+from xpm_torch.experiments.configuration import TransformerOptimization, Fabric
 from xpmir.papers import configuration
 from xpmir.papers.helpers import LauncherSpecification
-from xpmir.papers.helpers.optim import TransformerOptimization
 from xpmir.papers.helpers.msmarco import RerankerMSMarcoV1Configuration
-from functools import cached_property as attrs_cached_property
-from xpm_torch.configuration import FabricConfiguration
 from itertools import product
 import logging
-from omegaconf import DictConfig, MISSING
+from omegaconf import DictConfig
 
 logger = logging.getLogger(__name__)
 
 
 class Losses(str, Enum):
     """Possible losses"""
-    
     BCE = "bce"
     """ Binary Cross Entropy loss """
 
@@ -77,7 +72,6 @@ class Validation(str, Enum):
     """ Both Nano MSMARCO and NanoBEIR validations"""
 
 
-
 T = TypeVar("T", int, str, float)
 
 
@@ -108,7 +102,6 @@ class GenericParams:
 
     @classmethod
     def from_any(cls, obj: Any, target_type: Type = Any) -> "GenericParams":
-
         def converter(value: Any) -> Any:
             """Attempts to convert a value to the target_type."""
             if target_type is Any:
@@ -175,43 +168,6 @@ class Indexation(LauncherSpecification):
 
 
 @configuration()
-class xpm_torch_Learner:
-    validation_interval: int = field(default=32)
-
-    validation_top_k: int = 1000
-
-    checkpoint_interval: int = field(default=32)
-
-    optimization: TransformerOptimization = Factory(TransformerOptimization)
-    requirements: str = "duration=4 days & cuda(mem=24G) * 2"
-    sample_rate: float = 1.0
-    """Sample rate for triplets"""
-
-    sample_max: int = 0
-    """Maximum number of samples considered (before shuffling). 0 for no limit."""
-
-    max_grad_norm: float = 0.0
-    """Maximum gradient norm (0 for no clipping)"""
-
-    loss: str = Losses.marginMSE.value
-    """Loss function to use"""
-
-    validation: str = Validation.MSMARCO.value
-    """ The validation subset to use """
-
-    #TODO use FabricConfiguration
-    ## Lighnting Fabric parameters see https://lightning.ai/docs/fabric/stable/api/generated/lightning.fabric.fabric.Fabric.html#lightning.fabric.fabric.Fabric
-    strategy: str = "auto"
-    """Distributed training strategy"""
-
-    precision: Optional[str] = None
-    """Precision to use - e.g., '16-mixed', 'bf16-mixed', etc."""
-
-    accelerator: str = "auto"
-    """ Accelerator to use """
-
-
-@configuration()
 class Retrieval:
     k: int = 1000
     batch_size: int = 128
@@ -228,16 +184,58 @@ class Evaluation:
     test_max_topics: int = 0
     """Development test size (0 to leave it like this)"""
 
-    in_domain_only: bool = False
-    """Whether to evaluate only on in-domain datasets (MSMarco, TREC DL 19 and 20)"""
-
     all_datasets: bool = False
     """Whether to evaluate on all BEIR datasets (minus the 5 not publicly available)"""
+
+    nanobeir: bool = False
+    """Whether to evaluate on NanoBEIR datasets"""
+
+    beir13: bool = False
+    """Whether to evaluate on all BEIR13 datasets"""
+
+    in_domain: bool = False
+    """Whether to evaluate on in-domain datasets (MSMarco, TREC DL 19 and 20)"""
+
+    datasets: List[str] = Factory(list)
+    """List of specific datasets to evaluate on"""
+
+
+@configuration()
+class xpm_torch_Learner:
+    validation_interval: int = field(default=32)
+
+    validation_top_k: int = 1000
+
+    checkpoint_interval: int = field(default=32)
+
+    optimization: TransformerOptimization = Factory(TransformerOptimization)
+
+    requirements: str = "duration=4 days & cuda(mem=24G) * 2"
+
+    sample_rate: float = 1.0
+    """Sample rate for triplets"""
+
+    sample_max: int = 0
+    """Maximum number of samples considered (before shuffling). 0 for no limit."""
+
+    max_grad_norm: float = 0.0
+    """Maximum gradient norm (0 for no clipping)"""
+
+    loss: str = Losses.marginMSE.value
+    """Loss function to use"""
+
+    validation: str = Validation.NanoBEIR.value
+    """ The validation subset to use """
+
+    early_stop_epochs: int = 0
+    """ number of **epochs** without improvements before early stopping based on validation"""
+
+    fabric: Fabric = Factory(Fabric)
+    """Configuration for Fabric device management"""
 
 
 @configuration()
 class CE_FineTuning(RerankerMSMarcoV1Configuration):
-
     nb_repetitions: int = field(default=1)
     """Number of repetitions of the training process"""
 
@@ -258,14 +256,17 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     base: str = ""
     """Identifier for the base model"""
 
+    max_doc_len: Optional[int] = None
+    """max len for scorer, default to 0 = max len of the model"""
+
     pooling_method: str = PoolingMethod.CLS.value
-    """Pooling method to use for the Ettin based scorer: cls or mean"""
+    """Pooling method to use for the ModernBert based scorer: cls or mean"""
 
     compare_with_baseline: bool = False
     """After evaluations are done, whether to test statistical significance against a baseline.
     By default, the baseline is BM25 + the CE simply fine-tuned on the same setup."""
 
-    normalize_docs_per_batch: bool = False
+    normalize_docs_per_batch: bool = True
     """whether to normalize documents per batch for listwise losses"""
 
     grid_search: Dict[str, GenericParams] = field(factory=dict)
@@ -278,6 +279,31 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
       pooling_method:
         value: "cls"
     """
+
+
+@configuration()
+class Mice_FineTuning(CE_FineTuning):
+    ## MICE specific configuration
+    merge_layer: int = 6
+    """Mid-fusion index: encoder layers are split into bottom (independent) and top (cross-attention)"""
+
+    drop_layer: int = 0
+    """Layer at which to drop backbone layers"""
+
+    mask_cls_to_doc: bool = True
+    """Whether to mask the [CLS] token from attending to document tokens."""
+
+    mask_query_to_cls: bool = True
+    """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
+
+    freeze_base: bool = False
+    """Whether to freeze the bottom layers during finetuning"""
+
+    random_top_layers: bool = False
+    """Whether to initialize top layers randomly instead of copying from backbone"""
+
+    compress_dim: float = 1.0
+    """Factor by which to divide the hidden dimensions of the top layers"""
 
 
 def set_nested_attr(obj: Any, path: str, value: Any):
@@ -308,7 +334,7 @@ def get_nested_attr_type(obj: Any, path: str) -> Type:
         return Any
 
 
-def generate_grid(cfg: Any) -> Tuple[List, List[str]]:
+def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
     """
     Generates a list of configuration permutations for a grid search, based
     on a `grid_search` dictionary in the main configuration object.
@@ -322,13 +348,17 @@ def generate_grid(cfg: Any) -> Tuple[List, List[str]]:
         "pooling_method": {"value": "cls"}
     }
     returns:
-     configs: List[Configs] the list of all configs 
-     tagspaths: a unique id per config using fixed params   
+     configs: List[Configs] the list of all configs
+     tags: a list of dicts with the same length as configs, where each dict contains the parameter values that were set for that config. For example:
+     [
+        {"learner.optimization.lr": 1e-5, "pooling_method": "cls"},
+        {"learner.optimization.lr": 2e-5, "pooling_method": "cls"}
+     ]
     """
     # If grid_search is not present or empty, just return the original config.
     if not hasattr(cfg, "grid_search") or not cfg.grid_search:
         logger.info("no params to grid search, returning raw config")
-        return [cfg], [cfg.id]
+        return [cfg], [{}]
 
     grid_params = cfg.grid_search
 
@@ -371,25 +401,23 @@ def generate_grid(cfg: Any) -> Tuple[List, List[str]]:
 
     # Generate Cartesian product of all parameter values
     grid_combinations = product(*value_options)
-    
-    output_configs = []
-    tagspaths = []
 
+    output_configs = []
+    tags = []
     # Create a base configuration to be copied for each permutation
     # and clear its grid_search to make generated configs clean.
     base_cfg = copy.deepcopy(cfg)
     base_cfg.grid_search = {}
     logger.info("Building grid search configs")
     for combination in grid_combinations:
-        tagpath = []
+        cfg_tags = {}
         new_cfg = copy.deepcopy(base_cfg)
         for path, value in zip(param_paths, combination):
-            tagpath.append(f"{path}={value}")
+            cfg_tags[path] = value
             set_nested_attr(new_cfg, path, value)
         output_configs.append(new_cfg)
-        tagspaths.append("_".join(tagpath))
-        logger.info("tagpath: " + tagspaths[-1])
+        tags.append(cfg_tags)
 
     # If the product is empty (e.g., one of the value lists was empty),
     # this will correctly return an empty list.
-    return output_configs, tagspaths
+    return output_configs, tags
