@@ -41,7 +41,7 @@ learner:
     validation_interval: 50
     validation_top_k: 100
     validation: nanobeir
-    requirements: duration=12h & cpu(cores=16) & cuda(mem=80G)
+    requirements: duration=12h & cpu(cores=4) & cuda(mem=30G)
 
 retrieval:
     requirements: duration=20h & cuda(mem=20G)

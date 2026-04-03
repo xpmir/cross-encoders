@@ -1,4 +1,4 @@
-id: core_base_deberta
+id: core_base_deberta_top100
 parent: core_base # load configuration from core base.
 title: "Training Deberta Reranker"
 description:
@@ -22,8 +22,7 @@ retrieval:
     k: 1000
 
 evaluation:
-    all_datasets: false
-    in_domain: true
+    all_datasets: true
 
 
 #### Params that are grid searched
@@ -32,11 +31,12 @@ grid_search:
         values_list:
             - microsoft/deberta-v3-base
 
+    retrieval.k:
+        values_list:
+            - 1000
+            - 100
+
     learner.loss:
         values_list:
-            - bce
-            - hingeLoss
             - marginMSE
             - infoNCE_RankDistiLLM
-            # - distillRankNET
-            # - ADR_MSE
