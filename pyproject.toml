@@ -7,7 +7,7 @@ name = "cross-encoders"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "experimaestro-ir[anserini,neural]",
     "experimaestro>=2.1.0",
@@ -26,6 +26,7 @@ package-dir = {"" = "src"}
 
 [tool.mypy]
 plugins = ["experimaestro.mypy"]
+
 
 # Our cluster don't have Cuda 13 yet
 [[tool.uv.index]]

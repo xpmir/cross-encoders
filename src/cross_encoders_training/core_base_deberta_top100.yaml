@@ -23,6 +23,7 @@ retrieval:
 
 evaluation:
     all_datasets: true
+    in_domain: true
 
 
 #### Params that are grid searched
