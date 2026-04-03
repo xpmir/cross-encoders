@@ -2,7 +2,6 @@
 
 import logging
 from functools import partial
-from typing import Optional
 import numpy as np
 import pandas as pd
 from transformers import AutoConfig
@@ -11,7 +10,7 @@ from experimaestro import setmeta
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch import Random
-from xpm_torch.utils.hugginface import prepare_hf_model
+from xpm_torch.huggingface import prepare_hf_model
 from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
 from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
@@ -19,8 +18,8 @@ from xpm_torch.batchers import PowerAdaptativeBatcher
 from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
-from xpm_torch.trainers.batchwise import BatchwiseTrainer
-from xpm_torch.trainers.pairwise import PairwiseTrainer
+from xpmir.letor.trainers.batchwise import BatchwiseTrainer
+from xpmir.letor.trainers.pairwise import PairwiseTrainer
 
 from xpmir.datasets.samplers import (
     prepare_collection,

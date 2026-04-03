@@ -10,9 +10,9 @@ from transformers import AutoConfig
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch.batchers import PowerAdaptativeBatcher
-from xpm_torch.utils.hugginface import get_hf_config
+from xpm_torch.huggingface import get_hf_config
 
-from datamaestro_text.data.ir import Documents
+from datamaestro_ir.data import Documents
 
 from xpmir.index.sparse import SparseRetriever, SparseRetrieverIndexBuilder
 from xpmir.neural.splade import MaxAggregation, SpladeTextEncoderV2
