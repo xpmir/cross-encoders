@@ -16,8 +16,8 @@ from typing import (
 )
 from xpm_torch.experiments.configuration import TransformerOptimization, Fabric
 from xpmir.papers import configuration
-from xpmir.papers.helpers import LauncherSpecification
-from xpmir.papers.helpers.msmarco import RerankerMSMarcoV1Configuration
+from xpmir.experiments.helpers.launchers import LauncherSpecification
+from xpmir.datasets.msmarco import RerankerMSMarcoV1Configuration
 from itertools import product
 import logging
 from omegaconf import DictConfig

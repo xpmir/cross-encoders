@@ -5,8 +5,8 @@ from experimaestro import stop_tags
 from experimaestro.experiments import configuration
 
 from xpmir.datasets.adapters import RandomFold
-from xpmir.papers.helpers.samplers import ValidationSample
-from xpmir.papers.helpers.samplers import prepare_collection
+from xpmir.datasets.samplers import ValidationSample
+from xpmir.datasets.samplers import prepare_collection
 from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
 from xpmir.evaluation import Evaluations, EvaluationsCollection
 from xpmir.rankers import scorer_retriever

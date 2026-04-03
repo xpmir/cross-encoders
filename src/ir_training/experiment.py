@@ -22,7 +22,7 @@ from xpm_torch.learner import Learner
 from xpm_torch.trainers.batchwise import BatchwiseTrainer
 from xpm_torch.trainers.pairwise import PairwiseTrainer
 
-from xpmir.papers.helpers.samplers import (
+from xpmir.datasets.samplers import (
     prepare_collection,
     msmarco_colbertv2_annotated,
     msmarco_rankdistillm_colbert_top50,

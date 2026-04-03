@@ -17,7 +17,7 @@ from datamaestro_text.data.ir import Documents
 from xpmir.index.sparse import SparseRetriever, SparseRetrieverIndexBuilder
 from xpmir.neural.splade import MaxAggregation, SpladeTextEncoderV2
 from xpmir.papers import configuration
-from xpmir.papers.helpers import NeuralIRExperiment
+from xpmir.experiments.helpers import NeuralIRExperiment
 from xpmir.neural.huggingface import HFCrossScorer
 from xpmir.rankers.standard import BM25
 import xpmir.interfaces.anserini as anserini
