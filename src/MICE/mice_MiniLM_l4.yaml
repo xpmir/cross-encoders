@@ -27,7 +27,7 @@ learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 64
-        max_epochs: 2000 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        max_epochs: 1500 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
         lr: 7e-6
@@ -42,25 +42,20 @@ learner:
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
-    k: 1000
+    k: 100
 
 evaluation:
-    all_datasets: true
+    all_datasets: false
+    in_domain: true
 
 #### Params that are grid searched
 grid_search:
     base:
         values_list:
             - microsoft/MiniLM-L12-H384-uncased
-            - jhu-clsp/ettin-encoder-17m
-            - jhu-clsp/ettin-encoder-32m
             - jhu-clsp/ettin-encoder-68m
 
     learner.loss:
         values_list:
-            - bce
-            - hingeLoss
             - marginMSE
             - infoNCE_RankDistiLLM
-            - distillRankNET
-            - ADR_MSE
