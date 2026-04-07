@@ -1,14 +1,14 @@
-id: core_base_ettin150
-title: "Ettin-150-InfoNCE Training"
+id: train_mice_miniLM
+title: "Mice-MiniLM Training"
 description:
-    💡 this config load everything from core_base.yaml, and just overrides the base and learner.loss
-    So that only ettin-150m is launched with infoNCE loss
+    Base Training for MiniLM-based MICE model.
 
 module: MICE.mice_training
 pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 1
+nb_repetitions: 2
+
 
 retriever: "naver/splade-v3-distilbert"
 
@@ -27,7 +27,7 @@ learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 64
-        max_epochs: 1500 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        max_epochs: 2000 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
         lr: 7e-6
@@ -48,12 +48,27 @@ evaluation:
     all_datasets: false
     in_domain: true
 
+
+merge_layer: 4
+drop_layer: 8
+
+
 #### Params that are grid searched
 grid_search:
+
     base:
         values_list:
             - microsoft/MiniLM-L12-H384-uncased
-            - jhu-clsp/ettin-encoder-68m
+
+    learner.optimization.batch_size:
+        values_list:
+            - 32
+            - 64
+
+    learner.optimization.lr:
+        values_list:
+            - 1e-6
+            - 7e-6
 
     learner.loss:
         values_list:

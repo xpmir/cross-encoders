@@ -5,7 +5,7 @@ from xpmir.rankers import Retriever
 import xpmir.interfaces.anserini as anserini
 from xpmir.index.sparse import SparseRetriever
 from xpmir.rankers.standard import BM25, Model
-
+from xpmir.index.bow import BOWRetriever, BOWSparseRetrieverIndexBuilder
 from configuration import CE_FineTuning
 from index_utils import get_splade_index
 import logging
@@ -44,7 +44,35 @@ def splade_retriever(
 
 
 # TODO - use newer xmpir bm25 version - no need for java anymore
+
+
 def bm25_retriever(
+    cfg: CE_FineTuning,
+    name: str,
+    documents: Documents,
+    launcher_index,
+    topk: int = None,
+    **kwargs,
+) -> Retriever.C:
+    """Factory for BM25 Retriever, given the current configuration"""
+
+    # -----The baseline------
+    base_model = BM25.C()
+
+    bow_index = BOWSparseRetrieverIndexBuilder.C(
+        documents=documents,
+        max_docs=cfg.indexation.max_indexed,
+    ).submit(launcher=launcher_index)
+
+    kwargs = {
+        "index": bow_index,
+        "model": base_model,
+        "topk": topk,
+    }
+    return BOWRetriever.C(**kwargs)
+
+
+def anserini_bm25_retriever(
     cfg: CE_FineTuning,
     name: str,
     documents: Documents,

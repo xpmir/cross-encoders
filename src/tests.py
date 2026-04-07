@@ -2,9 +2,9 @@ from functools import lru_cache
 from datamaestro import prepare_dataset
 
 from xpmir.datasets.adapters import RandomFold
+from xpmir.datasets.samplers import prepare_collection
 from xpmir.evaluation import Evaluations, EvaluationsCollection
 from xpmir.measures import RR, nDCG, R, Success
-from xpmir.papers.helpers.samplers import prepare_collection
 from configuration import Evaluation
 
 import logging

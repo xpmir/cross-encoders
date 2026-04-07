@@ -9,7 +9,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "experimaestro-ir[anserini,neural]",
+    "experimaestro-ir[neural]",
     "experimaestro>=2.1.0",
     "datamaestro-ir",
     "ir-datasets",
@@ -27,6 +27,11 @@ package-dir = {"" = "src"}
 [tool.mypy]
 plugins = ["experimaestro.mypy"]
 
+[tool.uv]
+environments = [
+    "sys_platform == 'darwin'",
+    "sys_platform == 'linux'"
+]
 
 # Our cluster don't have Cuda 13 yet
 [[tool.uv.index]]

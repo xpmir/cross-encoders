@@ -29,7 +29,7 @@ from xpm_torch.huggingface import prepare_hf_model
 from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
-from xpmir.papers.helpers import NeuralIRExperiment
+from xpmir.experiments.helpers import NeuralIRExperiment
 from xpmir.neural.huggingface import hf_cross_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
