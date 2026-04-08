@@ -16,7 +16,7 @@ from typing import (
 )
 from xpm_torch.experiments.configuration import TransformerOptimization, Fabric
 from xpmir.papers import configuration
-from xpmir.experiments.helpers.launchers import LauncherSpecification
+from xpmir.experiments.helpers import LauncherSpecification
 from xpmir.datasets.msmarco import RerankerMSMarcoV1Configuration
 from itertools import product
 import logging
@@ -181,6 +181,8 @@ class Preprocessing:
 
 @configuration()
 class Evaluation:
+    """What datasets to evaluate on, eventually limit the number of queries for debug"""
+
     test_max_topics: int = 0
     """Development test size (0 to leave it like this)"""
 

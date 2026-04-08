@@ -38,5 +38,5 @@ grid_search:
             - hingeLoss
             - marginMSE
             - infoNCE_RankDistiLLM
-            # - distillRankNET
-            # - ADR_MSE
+            - distillRankNET
+            - ADR_MSE

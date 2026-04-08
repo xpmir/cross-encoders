@@ -34,5 +34,6 @@ retrieval:
 evaluation:
   #just for debugging
   test_max_topics: 100
-  in_domain: true
+  in_domain: false
+  beir13: true
   # nanobeir: true

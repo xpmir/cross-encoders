@@ -1,16 +1,17 @@
+import os
+
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 import torch
 import logging
-import tempfile
-from pathlib import Path
 from MICE.modeling.mice import mice_scorer, MiceCrossEncoder
 from xpmir.letor.records import PointwiseItems
 from experimaestro import LightweightTask, Param
 
-# Set up logging to see what's happening
-logging.basicConfig(level=logging.DEBUG)
-
 
 class TestMiceForwardTask(LightweightTask):
+    """Tests Mice Loading, scoring a PointWiseItem, and compare outpus after reloading for checkpointing"""
+
     scorer: Param[MiceCrossEncoder]
 
     def execute(self):
@@ -52,57 +53,6 @@ class TestMiceForwardTask(LightweightTask):
         )
 
 
-class TestMiceReloadTask(LightweightTask):
-    scorer: Param[MiceCrossEncoder]
-    model_id: Param[str]
-    merge_layer: Param[int]
-
-    def execute(self):
-        """
-        Task execution for testing saving and reloading a MICE model.
-        """
-        print(f"\n--- Testing Model Reload (ID: {id(self.scorer)}) ---")
-        self.scorer.initialize()
-        self.scorer.eval()
-
-        queries = ["What is the capital of France?"]
-        documents = ["Paris is the capital and most populous city of France."]
-        input_records = PointwiseItems.from_texts(topics=queries, documents=documents)
-
-        with torch.no_grad():
-            original_output = self.scorer(input_records)
-
-        print(f"Original model output (before reload): {original_output}")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = Path(tmpdir)
-            print(f"Saving model to {tmp_path}...")
-            self.scorer.save_model(tmp_path)
-
-            print("Creating a new model instance and loading weights...")
-            # Create a new configuration and instance
-            new_scorer_cfg, _ = mice_scorer(
-                hf_id=self.model_id, merge_layer=self.merge_layer
-            )
-            new_scorer = new_scorer_cfg.instance()
-            # This NEW instance needs initialization to create the skeleton
-            new_scorer.initialize()
-            new_scorer.load_model(tmp_path)
-            new_scorer.eval()
-
-            with torch.no_grad():
-                reloaded_output = new_scorer(input_records)
-
-            print(f"Reloaded model output: {reloaded_output}")
-
-            # Check if outputs are identical
-            assert torch.allclose(original_output, reloaded_output), (
-                "Reloaded model output differs from original!"
-            )
-
-        print("Model reload test successful! Outputs match.")
-
-
 def test_mice(model_id, merge_layer):
     """tests mice loading, forward pass saving."""
     # mice_scorer returns the model and a list of initialization tasks
@@ -118,21 +68,20 @@ def test_mice(model_id, merge_layer):
         init_task.instance().execute()
     test_forward_task.execute()
 
-    # Create and run the reload task
-    test_reload_task = TestMiceReloadTask.C(
-        scorer=scorer_cfg, model_id=model_id, merge_layer=merge_layer
-    ).instance()
-    # Run initialization tasks if they exist
-    for init_task in init_tasks:
-        init_task.instance().execute()
-    test_reload_task.execute()
-
 
 if __name__ == "__main__":
-    # Use a small BERT model for testing purposes
+    import os
+
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
+    # Set up logging to see what's happening
+    logging.basicConfig(level=logging.INFO)
+
     # MiniLM is a good candidate as it is fast and small
-    model_id = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    model_id = "Qwen/Qwen3-0.6B"
+    model_ids = ["cross-encoder/ms-marco-MiniLM-L-6-v2", "Qwen/Qwen3-0.6B"]
     merge_layer = 3
 
-    test_mice(model_id, merge_layer)
+    for model_id in model_ids:
+        print("\n\n ### TESTING ", model_id)
+        test_mice(model_id, merge_layer)
