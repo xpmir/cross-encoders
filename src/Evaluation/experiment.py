@@ -52,7 +52,7 @@ class BaselinesConfig(NeuralIRExperiment):
 
     scorers_hf_id: List[str] = []
 
-    retrievers_hf_id: List[str] = [""]
+    retrievers_hf_id: List[str] = []
 
     evaluation: Evaluation = Factory(Evaluation)
 
@@ -106,9 +106,11 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             (
                 "bm25",
                 partial(bm25_retriever, cfg, "bm25", launcher_index=launcher_index),
-                [],
+                [],  # no init tasks for bm25
             )
         )
+
+    logging.info(f"Evaluating retrievers: {[name for name, _, _ in all_retrievers]}")
 
     # Evaluate First stage retrievers only and store the results to reuse them with a second stage cross-encoder
     for retriever_name, retriever_factory, retriever_init_tasks in all_retrievers:
