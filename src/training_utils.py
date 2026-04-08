@@ -17,7 +17,7 @@ from xpmir.letor.trainers.pairwise import PairwiseTrainer
 from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
 from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
 
-from xpmir.papers.helpers.samplers import (
+from xpmir.datasets.samplers import (
     msmarco_colbertv2_annotated,
     msmarco_rankdistillm_colbert_top50,
     msmarco_hofstaetter_ensemble_hard_negatives,

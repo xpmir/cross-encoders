@@ -18,8 +18,8 @@ scorers_hf_id:
   # - tomaarsen/ms-marco-ettin-32m-reranker
   # - tomaarsen/ms-marco-ettin-17m-reranker
 
-retrievers_hf_id:
-  - naver/splade-v3-distilbert
+# retrievers_hf_id:
+#   - naver/splade-v3-distilbert
 
 indexation:
   requirements: duration=8h & cpu(cores=4, mem=10G) & cuda(mem=30G)

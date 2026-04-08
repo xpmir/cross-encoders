@@ -43,9 +43,6 @@ def splade_retriever(
     ).tag("first_stage", name)
 
 
-# TODO - use newer xmpir bm25 version - no need for java anymore
-
-
 def bm25_retriever(
     cfg: CE_FineTuning,
     name: str,
@@ -57,19 +54,17 @@ def bm25_retriever(
     """Factory for BM25 Retriever, given the current configuration"""
 
     # -----The baseline------
-    base_model = BM25.C()
 
     bow_index = BOWSparseRetrieverIndexBuilder.C(
         documents=documents,
         max_docs=cfg.indexation.max_indexed,
     ).submit(launcher=launcher_index)
 
-    kwargs = {
-        "index": bow_index,
-        "model": base_model,
-        "topk": topk,
-    }
-    return BOWRetriever.C(**kwargs)
+    return BOWRetriever.C(
+        index=bow_index,
+        model=BM25.C(),
+        topk=topk or cfg.retrieval.k,
+    ).tag("first_stage", name)
 
 
 def anserini_bm25_retriever(
