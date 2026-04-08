@@ -10,9 +10,9 @@ gpu: true
 scorers_hf_id:
   - cross-encoder/ms-marco-MiniLM-L12-v2
   - xpmir/cross-encoder-bert-base-infoNCE
-  # - xpmir/cross-encoder-MiniLM-L12-MarginMSE
   - naver/trecdl22-crossencoder-debertav3
-  - Qwen/Qwen3-Reranker-0.6B
+  # - xpmir/cross-encoder-MiniLM-L12-MarginMSE
+  # - Qwen/Qwen3-Reranker-0.6B
   # - tomaarsen/ms-marco-ettin-150m-reranker
   # - cross-encoder/ms-marco-MiniLM-L6-v2
   # - tomaarsen/ms-marco-ettin-68m-reranker
@@ -34,5 +34,5 @@ retrieval:
 
 evaluation:
   #just for debugging
-  nanobeir: true
   in_domain: true
+  beir13: true
