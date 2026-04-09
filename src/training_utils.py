@@ -189,8 +189,8 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
 
 def get_name_from_tags(model_tags: dict) -> str:
     """Creates the HF id from tags using formatting conventions."""
-    loss = model_tags.get("learner.loss")
-    base = model_tags.get("base")
+    loss = model_tags.get("learner.loss", "")
+    base = model_tags.get("base", "")
     # try to get prettier name
     loss = loss_names.get(loss, loss).replace("/", "-")
     base = backbone_names_lower.get(base, base).replace("/", "-")
