@@ -311,6 +311,12 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         self.pooler = getattr(temp_model, "pooler", None)
         if self.pooler:
+            if self.compress_dim > 1:
+                self.pooler.dense = nn.Linear(
+                    self.head_config.hidden_size,
+                    self.head_config.hidden_size,
+                    bias=True,
+                )
             self.add_module("pooler", self.pooler)
         self.dropout_layer = nn.Dropout(self.config.hidden_dropout_prob)
         self.classifier = nn.Linear(self.head_config.hidden_size, 1)
@@ -472,13 +478,21 @@ class ModernBertCrossAttentionLayer(nn.Module):
         self.attn_norm = (
             nn.Identity()
             if layer_id == 0
-            else nn.LayerNorm(config.hidden_size, eps=config.norm_eps)
+            else nn.LayerNorm(
+                config.hidden_size,
+                eps=config.norm_eps,
+                bias=getattr(config, "norm_bias", True),
+            )
         )
-        self.attn = ModernBertAttention(config=config, layer_id=layer_id)
+        self.attn = ModernBertAttention(config=config, layer_idx=layer_id)
         self.crossattention = ModernBertCrossAttention(
             config=config, layer_idx=layer_id
         )
-        self.mlp_norm = nn.LayerNorm(config.hidden_size, eps=config.norm_eps)
+        self.mlp_norm = nn.LayerNorm(
+            config.hidden_size,
+            eps=config.norm_eps,
+            bias=getattr(config, "norm_bias", True),
+        )
         self.mlp = ModernBertMLP(config)
 
     def forward(
@@ -635,6 +649,12 @@ class InitMICEBERTFromHFID(LightweightTask):
         full_bert = AutoModel.from_pretrained(hf_id)
         model.embeddings = full_bert.embeddings
 
+        # Copy bottom layers
+        for i in range(model.merge_layer):
+            model.bottom_layers[i].load_state_dict(
+                full_bert.encoder.layer[i].state_dict()
+            )
+
         model.top_layers = nn.ModuleList()
 
         # Load original top layers to copy weights from
@@ -758,7 +778,18 @@ class InitMICEModernBERTFromHFID(LightweightTask):
             target.crossattention.v_proj.weight.copy_(
                 src.attn.Wqkv.weight[2 * all_head : 3 * all_head, :]
             )
+            if src.attn.Wqkv.bias is not None:
+                target.crossattention.q_proj.bias.copy_(src.attn.Wqkv.bias[0:all_head])
+                target.crossattention.k_proj.bias.copy_(
+                    src.attn.Wqkv.bias[all_head : 2 * all_head]
+                )
+                target.crossattention.v_proj.bias.copy_(
+                    src.attn.Wqkv.bias[2 * all_head : 3 * all_head]
+                )
             target.crossattention.Wo.load_state_dict(src.attn.Wo.state_dict())
+            target.crossattention.out_drop.load_state_dict(
+                src.attn.out_drop.state_dict()
+            )
 
 
 def mice_scorer(

@@ -70,17 +70,17 @@ def minified_tests(
 
     v1_devsmall_ds = get_fold(v1_devsmall_ds, test_topic_nb, launcher=launcher)
 
-    scifact = prepare_dataset("irds.beir.scifact.test")  # 300 queries
+    scifact = prepare_dataset("org.beir.scifact.test")  # 300 queries
     scifact = get_fold(scifact, test_topic_nb, launcher=launcher)
 
     touche = prepare_dataset(
-        "irds.beir.webis-touche2020.v2"
+        "org.beir.webis.touche2020.v2"
     )  # v2 as it fixes some of v1 issues
 
-    fiqa = prepare_dataset("irds.beir.fiqa.test")  # 648 queries
+    fiqa = prepare_dataset("org.beir.fiqa.test")  # 648 queries
     fiqa = get_fold(fiqa, test_topic_nb, launcher=launcher)
 
-    nfcorpus = prepare_dataset("irds.beir.nfcorpus.test")  # 323 queries
+    nfcorpus = prepare_dataset("org.beir.nfcorpus.test")  # 323 queries
     nfcorpus = get_fold(nfcorpus, test_topic_nb, launcher=launcher)
 
     measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
