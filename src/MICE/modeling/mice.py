@@ -527,7 +527,7 @@ class ModernBertCrossAttentionLayer(nn.Module):
 
         # MLP residual
         hidden_states = hidden_states + self.mlp(self.mlp_norm(hidden_states))
-        return (hidden_states,)
+        return hidden_states
 
 
 class ModernBertMiceCrossEncoder(MiceCrossEncoder):
@@ -605,15 +605,14 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         q_pos = _get_pos_ids(query_ids)
         d_pos = _get_pos_ids(doc_ids)
 
-        q_pos_embeds = {}
-        d_pos_embeds = {}
-        for layer_type in self.config.layer_types:
-            q_pos_embeds[layer_type] = self.rotary_emb(
-                x_q, q_pos, layer_type=layer_type
-            )
-            d_pos_embeds[layer_type] = self.rotary_emb(
-                x_d, d_pos, layer_type=layer_type
-            )
+        # Precompute RoPE for all layer types in config
+        unique_layer_types = set(self.config.layer_types)
+        q_pos_embeds = {
+            lt: self.rotary_emb(x_q, q_pos, layer_type=lt) for lt in unique_layer_types
+        }
+        d_pos_embeds = {
+            lt: self.rotary_emb(x_d, d_pos, layer_type=lt) for lt in unique_layer_types
+        }
 
         for layer in self.bottom_layers:
             x_q = layer(
@@ -634,7 +633,7 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 encoder_hidden_states=x_d,
                 encoder_attention_mask=cross_mask,
                 position_embeddings=q_pos_embeds[layer.attention_type],
-            )[0]
+            )
 
         x_q = self.final_norm(x_q)
         pooled = self.pooling_function(x_q)
