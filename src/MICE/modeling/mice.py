@@ -252,10 +252,10 @@ class MiceCrossEncoder(AbstractModuleScorer):
 
     def load_model(self, path: Path):
         """Load from the directory."""
-        from safetensors.torch import load_file
 
-        # Load weights
-        self.load_state_dict(load_file(str(path / "model.safetensors")))
+        # fow now we just load the checkpoint
+        # will need to fetch the head_config as well later
+        super().load_model(path)
 
     def loader_config(self, path: Path, *, settings=None) -> "SimpleModuleLoader":
         return SimpleModuleLoader.C(value=self, path=path, settings=settings)

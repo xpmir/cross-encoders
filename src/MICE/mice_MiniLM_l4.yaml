@@ -7,10 +7,10 @@ module: MICE.mice_training
 pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 2
+nb_repetitions: 1
 
 
-retriever: "naver/splade-v3-distilbert"
+retriever: ""
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -50,7 +50,7 @@ evaluation:
 
 
 merge_layer: 4
-drop_layer: 8
+drop_layer: 7
 
 
 #### Params that are grid searched
@@ -63,14 +63,14 @@ grid_search:
     learner.optimization.batch_size:
         values_list:
             - 32
-            - 64
+            # - 64
 
     learner.optimization.lr:
         values_list:
-            - 1e-6
+            # - 1e-6
             - 7e-6
 
     learner.loss:
         values_list:
             - marginMSE
-            - infoNCE_RankDistiLLM
+            # - infoNCE_RankDistiLLM
