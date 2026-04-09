@@ -229,7 +229,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
     for config, cfg_tags in zip(all_configs, all_tags):
         # just run the config
-        tagspath = "_".join(f"{k}={v}" for k, v in cfg_tags.items())
+        tagspath = "_".join(f"{k.split('.')[-1]}={v}" for k, v in cfg_tags.items())
         config_map[tagspath] = config
         logging.info(f"Running config with tags {tagspath}")
         run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
