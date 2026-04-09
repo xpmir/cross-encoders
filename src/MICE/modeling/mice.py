@@ -28,6 +28,7 @@ try:
     from transformers.models.modernbert.modeling_modernbert import (
         ModernBertMLP,
         ModernBertAttention,
+        ModernBertRotaryEmbedding,
     )
     from transformers.models.modernbert_decoder.modeling_modernbert_decoder import (
         eager_attention_forward,
@@ -494,6 +495,9 @@ class ModernBertCrossAttentionLayer(nn.Module):
             bias=getattr(config, "norm_bias", True),
         )
         self.mlp = ModernBertMLP(config)
+        self.attention_type = (
+            config.layer_types[layer_id] if layer_id is not None else "full_attention"
+        )
 
     def forward(
         self,
@@ -501,13 +505,13 @@ class ModernBertCrossAttentionLayer(nn.Module):
         attention_mask=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,
-        position_ids=None,
+        position_embeddings=None,
     ):
         # Self-attn residual
         attn_out = self.attn(
             self.attn_norm(hidden_states),
             attention_mask=attention_mask,
-            position_ids=position_ids,
+            position_embeddings=position_embeddings,
         )[0]
         hidden_states = hidden_states + attn_out
 
@@ -544,6 +548,7 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         # Structure setup
         # Weights copied later by InitTask
         temp_model = AutoModelForSequenceClassification.from_config(self.config)
+        self.rotary_emb = ModernBertRotaryEmbedding(self.config)
         self.add_module("embeddings", temp_model.model.embeddings)
         self.add_module(
             "bottom_layers",
@@ -600,9 +605,23 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         q_pos = _get_pos_ids(query_ids)
         d_pos = _get_pos_ids(doc_ids)
 
+        q_pos_embeds = {}
+        d_pos_embeds = {}
+        for layer_type in self.config.layer_types:
+            q_pos_embeds[layer_type] = self.rotary_emb(
+                x_q, q_pos, layer_type=layer_type
+            )
+            d_pos_embeds[layer_type] = self.rotary_emb(
+                x_d, d_pos, layer_type=layer_type
+            )
+
         for layer in self.bottom_layers:
-            x_q = layer(x_q, q_ext, position_ids=q_pos)[0]
-            x_d = layer(x_d, d_ext, position_ids=d_pos)[0]
+            x_q = layer(
+                x_q, q_ext, position_embeddings=q_pos_embeds[layer.attention_type]
+            )
+            x_d = layer(
+                x_d, d_ext, position_embeddings=d_pos_embeds[layer.attention_type]
+            )
 
         # Top
         q_self = self.get_self_attention_mask(query_mask, x_q.dtype)
@@ -614,7 +633,7 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 attention_mask=q_self,
                 encoder_hidden_states=x_d,
                 encoder_attention_mask=cross_mask,
-                position_ids=q_pos,
+                position_embeddings=q_pos_embeds[layer.attention_type],
             )[0]
 
         x_q = self.final_norm(x_q)
@@ -803,6 +822,16 @@ class InitMICEModernBERTFromHFID(LightweightTask):
                 f"Backbone {hf_id} has no layers; skipping top layer seeding"
             )
 
+        if hasattr(full_backbone.model, "rotary_emb"):
+            logger.info("Seeding rotary_emb from backbone")
+            model.rotary_emb.load_state_dict(
+                full_backbone.model.rotary_emb.state_dict()
+            )
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no 'rotary_emb' attribute; skipping seeding"
+            )
+
         if hasattr(full_backbone.model, "final_norm"):
             logger.info("Seeding final_norm from backbone")
             model.final_norm.load_state_dict(
@@ -823,9 +852,10 @@ class InitMICEModernBERTFromHFID(LightweightTask):
         target.attn.load_state_dict(src.attn.state_dict())
         target.mlp_norm.load_state_dict(src.mlp_norm.state_dict())
         target.mlp.load_state_dict(src.mlp.state_dict())
+
         # Seed cross-attention
         logger.debug("Seeding ModernBERT cross-attention from Wqkv weights")
-        all_head = src.attn.all_head_size
+        all_head = src.attn.head_dim * src.attn.config.num_attention_heads
         with torch.no_grad():
             target.crossattention.q_proj.weight.copy_(
                 src.attn.Wqkv.weight[0:all_head, :]

@@ -1,7 +1,3 @@
-import os
-
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 import torch
 import logging
 import tempfile
@@ -127,16 +123,18 @@ def test_mice(model_id, merge_layer):
 
 
 if __name__ == "__main__":
-    import os
-
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+    # os.environ["HF_HUB_OFFLINE"] = "1"
+    # os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
     # Set up logging to see what's happening
     logging.basicConfig(level=logging.INFO)
 
     # MiniLM is a good candidate as it is fast and small
-    model_ids = ["cross-encoder/ms-marco-MiniLM-L-6-v2", "Qwen/Qwen3-0.6B"]
+    model_ids = [
+        "jhu-clsp/ettin-encoder-32m",
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        "Qwen/Qwen3-0.6B",
+    ]
     merge_layer = 3
 
     for model_id in model_ids:
