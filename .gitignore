@@ -1,3 +1,7 @@
+Dev.ipynb
+local/
+
+### Generic Python .gitignore
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.pyc
@@ -37,7 +41,6 @@ UV_HOME/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb
 
 # MyPy
 .mypy_cache/
@@ -56,3 +59,7 @@ logs/
 # Temp files
 tmp/
 *.tmp
+
+.gemini/
+gha-creds-*.json
+GEMINI.md
