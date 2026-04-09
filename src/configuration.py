@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 class Losses(str, Enum):
     """Possible losses"""
-
     BCE = "bce"
     """ Binary Cross Entropy loss """
 
