@@ -7,7 +7,7 @@ module: MICE.mice_training
 pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 1
+nb_repetitions: 2
 
 
 retriever: ""
@@ -42,11 +42,12 @@ learner:
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
-    k: 100
+    k: 1000
+    batch_size: 256
 
-evaluation:
-    all_datasets: false
-    in_domain: true
+# evaluation: #default = Minified tests
+#     all_datasets: false
+#     in_domain: true
 
 
 merge_layer: 4

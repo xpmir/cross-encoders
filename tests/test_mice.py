@@ -4,9 +4,12 @@ os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 import torch
 import logging
+import tempfile
+from pathlib import Path
 from MICE.modeling.mice import mice_scorer, MiceCrossEncoder
 from xpmir.letor.records import PointwiseItems
 from experimaestro import LightweightTask, Param
+from xpm_torch.huggingface import TorchHFHub
 
 
 class TestMiceForwardTask(LightweightTask):
@@ -67,6 +70,60 @@ def test_mice(model_id, merge_layer):
     for init_task in init_tasks:
         init_task.instance().execute()
     test_forward_task.execute()
+
+    # --- Loading / Saving check ---
+    model = test_forward_task.scorer
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        save_path = tmp_path / "model"
+        hf_save_path = tmp_path / "hf_model"
+
+        # 2. Save model
+        logging.info(f"Saving model to {save_path}")
+        model.save_model(save_path)
+
+        # 3. Reload model using loader_config
+        # We use the config scorer_cfg here instead of the instance model
+        loader_config = scorer_cfg.loader_config(save_path)
+        loader = loader_config.instance()
+        loader.execute()
+        reloaded_model = loader.model
+
+        logging.info(f"Model reloaded: {reloaded_model}")
+
+        # 4. Verify weights
+        # We check the classifier weights as representative
+        assert torch.allclose(
+            model.classifier.weight, reloaded_model.classifier.weight
+        ), "Classifier weights mismatch!"
+
+        logging.info(
+            "SUCCESS: Model saved and reloaded correctly with identical weights."
+        )
+
+        # 5. HF Export to disk
+        logging.info(f"Exporting model to HF format at {hf_save_path}")
+        # TorchHFHub takes a Loader configuration
+        hub = TorchHFHub(loader_config)
+        hub.save_pretrained(hf_save_path)
+
+        # 6. Load as if from HF
+        logging.info(f"Loading model from HF-formatted directory {hf_save_path}")
+
+        # Use pretrained_loader to get the loader instance
+        # (This matches the multi-step logic: loader -> execute -> model)
+        hf_loader = TorchHFHub.pretrained_loader(hf_save_path, as_instance=True)
+        hf_loader.execute()
+        hf_model = hf_loader.model
+
+        logging.info(f"HF Model reloaded: {hf_model}")
+
+        # 7. Verify HF weights
+        assert torch.allclose(model.classifier.weight, hf_model.classifier.weight), (
+            "HF Classifier weights mismatch!"
+        )
+        logging.info("SUCCESS: HF model saved and reloaded correctly.")
 
 
 if __name__ == "__main__":
