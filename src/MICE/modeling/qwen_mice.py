@@ -375,21 +375,57 @@ class InitMICEQwenFromHFID(LightweightTask):
         full_backbone = AutoModelForCausalLM.from_pretrained(hf_id)
 
         # Embeddings
-        model.embeddings.load_state_dict(full_backbone.model.embed_tokens.state_dict())
+        if hasattr(full_backbone.model, "embed_tokens"):
+            logger.info("Seeding embeddings from backbone")
+            model.embeddings.load_state_dict(
+                full_backbone.model.embed_tokens.state_dict()
+            )
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no 'embed_tokens' attribute; skipping seeding"
+            )
 
         # Bottom layers
-        for i in range(model.merge_layer):
-            model.bottom_layers[i].load_state_dict(
-                full_backbone.model.layers[i].state_dict()
+        if hasattr(full_backbone.model, "layers"):
+            logger.info(f"Seeding {model.merge_layer} bottom layers from backbone")
+            for i in range(model.merge_layer):
+                if i < len(full_backbone.model.layers):
+                    model.bottom_layers[i].load_state_dict(
+                        full_backbone.model.layers[i].state_dict()
+                    )
+                else:
+                    logger.warning(
+                        f"Backbone has only {len(full_backbone.model.layers)} layers; cannot seed bottom layer {i}"
+                    )
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no layers; skipping bottom layer seeding"
             )
 
         # Top layers
-        src_layers = full_backbone.model.layers[model.merge_layer :]
-        for i, target_layer in enumerate(model.top_layers):
-            if not model.random_top_layers:
-                self._copy_qwen_weights(src_layers[i], target_layer)
+        if hasattr(full_backbone.model, "layers"):
+            src_layers = full_backbone.model.layers[model.merge_layer :]
+            logger.info(f"Seeding {len(model.top_layers)} top layers from backbone")
+            for i, target_layer in enumerate(model.top_layers):
+                if i < len(src_layers):
+                    if not model.random_top_layers:
+                        self._copy_qwen_weights(src_layers[i], target_layer)
+                else:
+                    logger.warning(
+                        f"Backbone has only {len(src_layers)} remaining layers; cannot seed top layer {i}"
+                    )
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no layers; skipping top layer seeding"
+            )
 
-        model.final_norm.load_state_dict(full_backbone.model.norm.state_dict())
+        if hasattr(full_backbone.model, "norm"):
+            logger.info("Seeding final_norm from backbone")
+            model.final_norm.load_state_dict(full_backbone.model.norm.state_dict())
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no 'norm' attribute; skipping final_norm seeding"
+            )
 
     def _copy_qwen_weights(self, src, target):
         """Copies weights and seeds cross-attention"""

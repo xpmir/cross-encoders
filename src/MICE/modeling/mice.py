@@ -647,12 +647,30 @@ class InitMICEBERTFromHFID(LightweightTask):
         logger.info(f"Building MICE from pretrained Bert model: {hf_id}")
 
         full_bert = AutoModel.from_pretrained(hf_id)
-        model.embeddings = full_bert.embeddings
+
+        if hasattr(full_bert, "embeddings"):
+            logger.info("Seeding embeddings from backbone")
+            model.embeddings = full_bert.embeddings
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no 'embeddings' attribute; skipping seeding"
+            )
 
         # Copy bottom layers
-        for i in range(model.merge_layer):
-            model.bottom_layers[i].load_state_dict(
-                full_bert.encoder.layer[i].state_dict()
+        if hasattr(full_bert, "encoder") and hasattr(full_bert.encoder, "layer"):
+            logger.info(f"Seeding {model.merge_layer + 1} bottom layers from backbone")
+            for i in range(model.merge_layer):
+                if i < len(full_bert.encoder.layer):
+                    model.bottom_layers[i].load_state_dict(
+                        full_bert.encoder.layer[i].state_dict()
+                    )
+                else:
+                    logger.warning(
+                        f"Backbone has only {len(full_bert.encoder.layer)} layers; cannot seed bottom layer {i}"
+                    )
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no encoder layers; skipping bottom layer seeding"
             )
 
         model.top_layers = nn.ModuleList()
@@ -742,18 +760,58 @@ class InitMICEModernBERTFromHFID(LightweightTask):
         logger.info(f"Loading MICE ModernBERT weights from {hf_id}")
 
         full_backbone = AutoModelForSequenceClassification.from_pretrained(hf_id)
-        model.embeddings.load_state_dict(full_backbone.model.embeddings.state_dict())
-        for i in range(model.merge_layer):
-            model.bottom_layers[i].load_state_dict(
-                full_backbone.model.layers[i].state_dict()
+
+        if hasattr(full_backbone.model, "embeddings"):
+            logger.info("Seeding embeddings from backbone")
+            model.embeddings.load_state_dict(
+                full_backbone.model.embeddings.state_dict()
+            )
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no 'embeddings' attribute; skipping seeding"
             )
 
-        src_layers = full_backbone.model.layers[model.merge_layer :]
-        for i, target_layer in enumerate(model.top_layers):
-            if not model.random_top_layers:
-                self._copy_modernbert_weights(src_layers[i], target_layer)
-        model.final_norm.load_state_dict(full_backbone.model.final_norm.state_dict())
-        model.head.load_state_dict(full_backbone.head.state_dict())
+        if hasattr(full_backbone.model, "layers"):
+            logger.info(f"Seeding {model.merge_layer} bottom layers from backbone")
+            for i in range(model.merge_layer):
+                if i < len(full_backbone.model.layers):
+                    model.bottom_layers[i].load_state_dict(
+                        full_backbone.model.layers[i].state_dict()
+                    )
+                else:
+                    logger.warning(
+                        f"Backbone has only {len(full_backbone.model.layers)} layers; cannot seed bottom layer {i}"
+                    )
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no layers; skipping bottom layer seeding"
+            )
+
+        if hasattr(full_backbone.model, "layers"):
+            src_layers = full_backbone.model.layers[model.merge_layer :]
+            logger.info(f"Seeding {len(model.top_layers)} top layers from backbone")
+            for i, target_layer in enumerate(model.top_layers):
+                if i < len(src_layers):
+                    if not model.random_top_layers:
+                        self._copy_modernbert_weights(src_layers[i], target_layer)
+                else:
+                    logger.warning(
+                        f"Backbone has only {len(src_layers)} remaining layers; cannot seed top layer {i}"
+                    )
+        else:
+            logger.warning(
+                f"Backbone {hf_id} has no layers; skipping top layer seeding"
+            )
+
+        if hasattr(full_backbone.model, "final_norm"):
+            logger.info("Seeding final_norm from backbone")
+            model.final_norm.load_state_dict(
+                full_backbone.model.final_norm.state_dict()
+            )
+
+        if hasattr(full_backbone, "head"):
+            logger.info("Seeding head from backbone")
+            model.head.load_state_dict(full_backbone.head.state_dict())
 
     def _copy_modernbert_weights(self, src, target):
         """
