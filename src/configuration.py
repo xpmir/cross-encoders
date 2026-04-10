@@ -333,18 +333,30 @@ def set_nested_attr(obj: Any, path: str, value: Any):
 def get_nested_attr_type(obj: Any, path: str) -> Type:
     """
     Traverses a nested object to find the type hint of the final attribute.
+    Raises ValueError if the path is invalid.
     """
     keys = path.split(".")
     current_obj = obj
-    for key in keys[:-1]:
-        # In case of intermediate GenericParams, we can't traverse further
+    for i, key in enumerate(keys[:-1]):
         if not hasattr(current_obj, key):
-            return Any
+            raise ValueError(
+                f"Invalid grid search path '{path}': "
+                f"'{key}' not found in {type(current_obj).__name__} "
+                f"(at level {'.'.join(keys[:i]) if i > 0 else 'root'})"
+            )
         current_obj = getattr(current_obj, key)
+
+    last_key = keys[-1]
+    if not hasattr(current_obj, last_key):
+        raise ValueError(
+            f"Invalid grid search path '{path}': "
+            f"'{last_key}' not found in {type(current_obj).__name__} "
+            f"(at level {'.'.join(keys[:-1]) if len(keys) > 1 else 'root'})"
+        )
 
     try:
         type_hints = get_type_hints(type(current_obj))
-        return type_hints.get(keys[-1], Any)
+        return type_hints.get(last_key, Any)
     except Exception:
         return Any
 
@@ -381,6 +393,8 @@ def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
 
     value_options = []
     for path in param_paths:
+        # get target type for this parameter from the config class using the path
+        # raises an error if the attribute is invalid
         target_type = get_nested_attr_type(cfg, path)
 
         # This converter is defined locally to have access to the target_type

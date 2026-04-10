@@ -1,4 +1,4 @@
-id: train_mice_miniLM_ablations
+id: train_mice_miniLM_abl_topk
 title: "Mice-MiniLM Training"
 description:
     Base Training for MiniLM-based MICE model.
@@ -9,8 +9,6 @@ pre_experiment: pre_experiment
 seed: 12 # To mimick the HF xp
 nb_repetitions: 2
 
-
-retriever: ""
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)

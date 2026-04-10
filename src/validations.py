@@ -106,6 +106,7 @@ class ValidationSet:
             )
             for name in validations:
                 items.append((name, validations[name], documents[name]))
+        logger.info(f"Loaded validation datasets: {[name for name, _, _ in items]}")
         return cls(cfg=cfg, items=items)
 
     def to_evaluations(self) -> EvaluationsCollection:
