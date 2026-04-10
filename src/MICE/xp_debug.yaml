@@ -40,7 +40,7 @@ learner:
     validation_interval: 50
     validation_top_k: 100
     validation: nanobeir
-    requirements: duration=12h & cpu(cores=4) & cuda(mem=30G)
+    requirements: duration=12h & cpu(cores=4) & cuda(mem=20G)
 
 retrieval:
     requirements: duration=20h & cuda(mem=20G)
@@ -51,7 +51,8 @@ evaluation:
     test_max_topics: 100
     all_datasets: false
     in_domain: true
-    # robust04: true
+    robust04: true
+    # lotte_search: true
 
 #MICE params
 base: microsoft/MiniLM-L12-H384-uncased

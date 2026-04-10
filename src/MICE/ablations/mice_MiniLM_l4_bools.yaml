@@ -1,7 +1,7 @@
-id: train_mice_miniLM_global_cls
+id: train_mice_miniLM_bools
 title: "Mice-MiniLM Training"
 description:
-    Base Training for MiniLM-based MICE model.
+    try All combinations of boolean flags for Mice training
 
 module: MICE.mice_training
 pre_experiment: pre_experiment
@@ -65,6 +65,17 @@ grid_search:
         values_list:
             - true
             - false
+
+    mask_cls_to_doc:
+        values_list:
+            - true
+            - false
+
+    mask_query_to_cls:
+        values_list:
+            - true
+            - false
+
 
     learner.loss:
         values_list:

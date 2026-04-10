@@ -576,7 +576,7 @@ wheels = [
 
 [[package]]
 name = "datamaestro"
-version = "1.9.6"
+version = "1.9.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bitmath", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -593,9 +593,9 @@ dependencies = [
     { name = "tqdm", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "urllib3", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/51/19/408ea7ca8461400860093329c511d7d8fa664298cc8de85c73b3273f4633/datamaestro-1.9.6.tar.gz", hash = "sha256:e1fa6519b6efab25c38bb46fbaf59b795924489f6334c51d6c0dc9dded6bf9e2", size = 230715, upload-time = "2026-04-03T12:54:25.229Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/e9/d088eb79d4d684a3a77a385270e98c0ec11cbbc71d75a27785a5c58662b4/datamaestro-1.9.9.tar.gz", hash = "sha256:eba0b2b26f8eb1b877f6ef4aa794f402d6adc9468e6cc400e72289848143b38a", size = 231432, upload-time = "2026-04-10T13:24:57.096Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/87/3f/8bf87a435a56e20cf013c94203f3810b350a350ed1c262f450ddd71e95a1/datamaestro-1.9.6-py3-none-any.whl", hash = "sha256:81f2b118f57a5132ee441cfdc9541278d0b0170caa8881da218565d3aa0ed4f4", size = 90248, upload-time = "2026-04-03T12:54:23.199Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/a6/a793f52687a67fb622746fd3279518fd444b198f3bb1c7a5d50dfdfe9205/datamaestro-1.9.9-py3-none-any.whl", hash = "sha256:37974d87ff4efa909f4808bd9390e75ac992327cd9898d394077fd14db0c0153", size = 91006, upload-time = "2026-04-10T13:24:55.507Z" },
 ]
 
 [[package]]
@@ -606,15 +606,17 @@ dependencies = [
     { name = "datamaestro", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "experimaestro", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "impact-index", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "lxml", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "typing-extensions", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "attrs" },
-    { name = "datamaestro", specifier = ">=1.9.6" },
+    { name = "datamaestro", specifier = ">=1.9.9" },
     { name = "experimaestro", specifier = ">=2.0.0" },
     { name = "impact-index", specifier = ">=0.32.0" },
+    { name = "lxml" },
     { name = "typing-extensions" },
 ]
 

@@ -185,7 +185,7 @@ def Robust04_test(
 ) -> EvaluationsCollection:
     """Robust04 dataset"""
     logger.info("Preparing Robust04 dataset...")
-    robust04 = prepare_dataset("gov.nist.trec.adhoc.robust.2004")
+    robust04 = prepare_dataset("gov.nist.trec.adhoc.robust.2004.withstore")
     robust04 = get_fold(robust04, test_topic_nb, launcher=launcher)
 
     return EvaluationsCollection(
