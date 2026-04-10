@@ -14,7 +14,7 @@ evaluation:
     all_datasets: false
     in_domain: true
     beir13: true
-    # robust04: true
+    robust04: true
     # lotte_search: true
     # nanobeir: true
 

@@ -39,7 +39,7 @@ learner:
     checkpoint_interval: 100
     validation_interval: 50
     validation_top_k: 100
-    validation: nanobeir
+    validation: nanobeir11
     requirements: duration=12h & cpu(cores=4) & cuda(mem=20G)
 
 retrieval:

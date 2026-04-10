@@ -69,6 +69,9 @@ class Validation(str, Enum):
     NanoBEIR = "nanobeir"
     """A small subset of BEIR datasets designed specifically for validation"""
 
+    NanoBEIR11 = "nanobeir11"
+    """NanoBEIR excluding argana and touche-2020 as done in [Sentence-Transformers](https://www.sbert.net/docs/package_reference/cross_encoder/evaluation.html#crossencodernanobeirevaluator)"""
+
     ALL = "all"
     """ Both Nano MSMARCO and NanoBEIR validations"""
 

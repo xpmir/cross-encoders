@@ -67,6 +67,17 @@ def nanobeir_validation_datasets(cfg: ValidationSample, launcher=None):
     return random_folds, documents
 
 
+@lru_cache
+def nanobeir11_validation_datasets(cfg: ValidationSample, launcher=None):
+    """Return validations over all the NANO_BEIR datasets except arguana and touche."""
+    random_folds, documents = nanobeir_validation_datasets(cfg, launcher=launcher)
+    # Filter out arguana and touche
+    to_exclude = ["nano_arguana", "nano_webis-touche2020"]
+    random_folds = {k: v for k, v in random_folds.items() if k not in to_exclude}
+    documents = {k: v for k, v in documents.items() if k not in to_exclude}
+    return random_folds, documents
+
+
 @configuration()
 class ValidationSet:
     cfg: CE_FineTuning
@@ -85,6 +96,12 @@ class ValidationSet:
             Validation.ALL.value,
         ]:
             validations, documents = nanobeir_validation_datasets(
+                cfg.validation, launcher=launcher
+            )
+            for name in validations:
+                items.append((name, validations[name], documents[name]))
+        elif cfg.learner.validation == Validation.NanoBEIR11.value:
+            validations, documents = nanobeir11_validation_datasets(
                 cfg.validation, launcher=launcher
             )
             for name in validations:
@@ -144,6 +161,7 @@ class ValidationSet:
 
         if self.cfg.learner.validation in [
             Validation.NanoBEIR.value,
+            Validation.NanoBEIR11.value,
             Validation.ALL.value,
         ]:
             aggregator = AggregatorValidationListener.C(

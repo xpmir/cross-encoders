@@ -39,8 +39,8 @@ grid_search:
     learner.loss:
         values_list:
             - bce
-            # - hingeLoss
-            # - marginMSE
-            # - infoNCE_RankDistiLLM
-            # - distillRankNET
-            # - ADR_MSE
+            - hingeLoss
+            - marginMSE
+            - infoNCE_RankDistiLLM
+            - distillRankNET
+            - ADR_MSE
