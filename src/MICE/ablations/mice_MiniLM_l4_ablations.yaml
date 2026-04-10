@@ -1,4 +1,4 @@
-id: train_mice_miniLM
+id: train_mice_miniLM_ablations
 title: "Mice-MiniLM Training"
 description:
     Base Training for MiniLM-based MICE model.
@@ -42,8 +42,8 @@ learner:
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
-    k: 1000
     batch_size: 256
+    k: 1000
 
 # evaluation: #default = Minified tests
 #     all_datasets: false
@@ -59,6 +59,13 @@ grid_search:
     base:
         values_list:
             - microsoft/MiniLM-L12-H384-uncased
+
     learner.loss:
         values_list:
             - marginMSE
+            - infoNCE_RankDistiLLM
+
+    retrieval.k:
+        values_list:
+            - 1000
+            - 100

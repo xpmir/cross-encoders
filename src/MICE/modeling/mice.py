@@ -951,9 +951,11 @@ def mice_scorer(
         return model, [InitMICEQwenFromHFID.C(model=model)]
 
     else:
-        if "bert" not in hf_id.lower():
+        if not any(
+            key in hf_id.lower() for key in ["bert", "minilm", "roberta", "deberta"]
+        ):
             logger.warning(
-                f"Not Backbone recognized for {hf_id}, using default 'BertMiceCrossEncoder' architecture"
+                f"No Backbone recognized for {hf_id}, using default 'BertMiceCrossEncoder' architecture"
             )
 
         model = BertMiceCrossEncoder.C(
