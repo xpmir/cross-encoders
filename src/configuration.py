@@ -311,6 +311,9 @@ class Mice_FineTuning(CE_FineTuning):
     random_top_layers: bool = False
     """Whether to initialize top layers randomly instead of copying from backbone"""
 
+    global_cls_token: bool = False
+    """Whether to add a fresh [CLS] token before the top layers."""
+
     compress_dim: float = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
 

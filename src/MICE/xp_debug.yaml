@@ -10,7 +10,6 @@ pre_experiment: pre_experiment
 seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
-retriever: naver/splade-v3-distilbert
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -50,14 +49,18 @@ retrieval:
 
 evaluation:
     test_max_topics: 100
+    all_datasets: false
     in_domain: true
+    # robust04: true
 
+#MICE params
+base: microsoft/MiniLM-L12-H384-uncased
+merge_layer: 4
+drop_layer: 7
+global_cls_token: true
 
 #### Params that are grid searched
 grid_search:
-    base:
-        values_list:
-            - microsoft/MiniLM-L12-H384-uncased
 
     learner.loss:
         values_list:

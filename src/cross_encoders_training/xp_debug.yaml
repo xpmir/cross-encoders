@@ -56,6 +56,7 @@ retrieval:
 evaluation:
     test_max_topics: 100
     in_domain: true
+
     # nanobeir: true
 
 #### Params that are grid searched

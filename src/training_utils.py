@@ -275,7 +275,7 @@ def format_model_results(
                 flat_cols.append("_".join(str(x) for x in col if x))
         model_df.columns = flat_cols
 
-    metrics_to_show = ["RR@10", "nDCG@10"]
+    metrics_to_show = ["Success@5", "RR@10", "nDCG@10"]
     cols_to_keep = [c for c in ["dataset"] + metrics_to_show if c in model_df.columns]
 
     if not cols_to_keep:

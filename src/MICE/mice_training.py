@@ -167,6 +167,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             freeze_base=cfg.freeze_base,
             random_top_layers=cfg.random_top_layers,
             compress_dim=cfg.compress_dim,
+            global_cls_token=cfg.global_cls_token,
             pooling_method=cfg.pooling_method,
         )
         mice_model.tag("scorer", grid_search_id)
