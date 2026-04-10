@@ -276,6 +276,11 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
 
         self.add_module("final_norm", temp_model.model.norm)
 
+        if self.global_cls_token:
+            self.global_cls = nn.Parameter(
+                torch.randn(1, 1, self.config.hidden_size) * 0.02
+            )
+
         # Rotary embeddings for the whole model
         if hasattr(self.config, "model_type") and self.config.model_type == "qwen3":
             from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
@@ -332,6 +337,24 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
                 position_ids=d_pos,
                 position_embeddings=d_position_embeddings,
             )
+
+        if self.global_cls_token:
+            cls_token = self.global_cls.expand(x_q.shape[0], -1, -1)
+            x_q = torch.cat([cls_token, x_q], dim=1)
+            query_mask = torch.cat(
+                [
+                    torch.ones(
+                        (query_mask.shape[0], 1),
+                        dtype=query_mask.dtype,
+                        device=query_mask.device,
+                    ),
+                    query_mask,
+                ],
+                dim=1,
+            )
+            # Recompute pos embeds for top layers
+            q_pos = _get_pos_ids(query_mask)
+            q_position_embeddings = self.rotary_emb(x_q, q_pos)
 
         # Top
         # Mask for Cross-Attention (Query attending to Doc) shape [batch, 1, seq_len_query, seq_len_doc]
@@ -426,6 +449,27 @@ class InitMICEQwenFromHFID(LightweightTask):
             logger.warning(
                 f"Backbone {hf_id} has no 'norm' attribute; skipping final_norm seeding"
             )
+
+        if model.global_cls_token:
+            # Qwen might not have a CLS token; try BOS or EOS
+            cls_token_id = (
+                model.tokenizer.tokenizer.cls_token_id
+                or model.tokenizer.tokenizer.bos_token_id
+                or model.tokenizer.tokenizer.eos_token_id
+            )
+            if cls_token_id is not None:
+                logger.info(
+                    f"Seeding global_cls with token ID {cls_token_id} embedding"
+                )
+                with torch.no_grad():
+                    cls_embedding = full_backbone.model.embed_tokens.weight[
+                        cls_token_id
+                    ]
+                    model.global_cls.data.copy_(cls_embedding.view(1, 1, -1))
+            else:
+                logger.warning(
+                    "global_cls is True but no CLS/BOS/EOS token found in tokenizer; skipping seeding"
+                )
 
     def _copy_qwen_weights(self, src, target):
         """Copies weights and seeds cross-attention"""

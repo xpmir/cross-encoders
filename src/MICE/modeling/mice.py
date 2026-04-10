@@ -138,6 +138,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
     random_top_layers: Param[bool] = False
     """Whether to initialize top layers randomly instead of copying from backbone"""
 
+    global_cls_token: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to add a fresh [CLS] token before the top layers."""
+
     compress_dim: Param[float] = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
 
@@ -322,6 +325,11 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         self.dropout_layer = nn.Dropout(self.config.hidden_dropout_prob)
         self.classifier = nn.Linear(self.head_config.hidden_size, 1)
 
+        if self.global_cls_token:
+            self.global_cls = nn.Parameter(
+                torch.randn(1, 1, self.head_config.hidden_size) * 0.02
+            )
+
     def forward_bottom(self, input_ids, attention_mask):
         """Compute bottom layers (independent encoding)"""
         x = self.embeddings(input_ids)
@@ -363,6 +371,21 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         # 1. Process Query through Bottom Layers
         q_hidden = self.forward_bottom(query_ids, query_mask)
+
+        if self.global_cls_token:
+            cls_token = self.global_cls.expand(q_hidden.shape[0], -1, -1)
+            q_hidden = torch.cat([cls_token, q_hidden], dim=1)
+            query_mask = torch.cat(
+                [
+                    torch.ones(
+                        (query_mask.shape[0], 1),
+                        dtype=query_mask.dtype,
+                        device=query_mask.device,
+                    ),
+                    query_mask,
+                ],
+                dim=1,
+            )
 
         # Mask for Self-Attention (Query) shape [batch, 1, seq_len_query, seq_len_query]
         q_ext_mask = self.get_self_attention_mask(query_mask, q_hidden.dtype)
@@ -576,6 +599,11 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         self.dropout_layer = nn.Dropout(self.config.classifier_dropout)
         self.classifier = nn.Linear(self.config.hidden_size, 1)
 
+        if self.global_cls_token:
+            self.global_cls = nn.Parameter(
+                torch.randn(1, 1, self.config.hidden_size) * 0.02
+            )
+
     def forward(
         self, inputs: BaseItems, tokenized: Optional[MICETokenizedTexts] = None
     ):
@@ -621,6 +649,27 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
             x_d = layer(
                 x_d, d_ext, position_embeddings=d_pos_embeds[layer.attention_type]
             )
+
+        if self.global_cls_token:
+            cls_token = self.global_cls.expand(x_q.shape[0], -1, -1)
+            x_q = torch.cat([cls_token, x_q], dim=1)
+            query_mask = torch.cat(
+                [
+                    torch.ones(
+                        (query_mask.shape[0], 1),
+                        dtype=query_mask.dtype,
+                        device=query_mask.device,
+                    ),
+                    query_mask,
+                ],
+                dim=1,
+            )
+            # Recompute pos embeds for top layers
+            q_pos = _get_pos_ids(query_mask)
+            q_pos_embeds = {
+                lt: self.rotary_emb(x_q, q_pos, layer_type=lt)
+                for lt in unique_layer_types
+            }
 
         # Top
         q_self = self.get_self_attention_mask(query_mask, x_q.dtype)
@@ -735,6 +784,22 @@ class InitMICEBERTFromHFID(LightweightTask):
                 "No pooler found in the base model; using [CLS] token directly."
             )
 
+        if model.global_cls_token:
+            cls_token_id = model.tokenizer.tokenizer.cls_token_id
+            if cls_token_id is not None:
+                logger.info(
+                    f"Seeding global_cls with [CLS] embedding (ID {cls_token_id})"
+                )
+                with torch.no_grad():
+                    cls_embedding = full_bert.embeddings.word_embeddings.weight[
+                        cls_token_id
+                    ]
+                    model.global_cls.data.copy_(cls_embedding.view(1, 1, -1))
+            else:
+                logger.warning(
+                    "global_cls is True but no [CLS] token found in tokenizer; skipping seeding"
+                )
+
     def _copy_bert_weights(self, src, target):
         """
         Copies Self-Attention and FFN weights from src to target.
@@ -841,6 +906,33 @@ class InitMICEModernBERTFromHFID(LightweightTask):
             logger.info("Seeding head from backbone")
             model.head.load_state_dict(full_backbone.head.state_dict())
 
+        if model.global_cls_token:
+            cls_token_id = model.tokenizer.tokenizer.cls_token_id
+            if cls_token_id is not None:
+                logger.info(
+                    f"Seeding global_cls with [CLS] embedding (ID {cls_token_id})"
+                )
+                with torch.no_grad():
+                    # ModernBert uses tok_embeddings
+                    emb_layer = getattr(
+                        full_backbone.model.embeddings,
+                        "tok_embeddings",
+                        getattr(
+                            full_backbone.model.embeddings, "word_embeddings", None
+                        ),
+                    )
+                    if emb_layer is not None:
+                        cls_embedding = emb_layer.weight[cls_token_id]
+                        model.global_cls.data.copy_(cls_embedding.view(1, 1, -1))
+                    else:
+                        logger.warning(
+                            "Could not find embedding layer in ModernBERT; skipping seeding"
+                        )
+            else:
+                logger.warning(
+                    "global_cls is True but no [CLS] token found in tokenizer; skipping seeding"
+                )
+
     def _copy_modernbert_weights(self, src, target):
         """
         Copies Attention and MLP weights from src to target.
@@ -888,6 +980,7 @@ def mice_scorer(
     freeze_base: bool = False,
     random_top_layers: bool = False,
     compress_dim: float = 1.0,
+    global_cls_token: bool = False,
     pooling_method: Optional[str] = None,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
@@ -929,6 +1022,7 @@ def mice_scorer(
             freeze_base=freeze_base,
             random_top_layers=random_top_layers,
             compress_dim=compress_dim,
+            global_cls_token=global_cls_token,
             pooling_method=pooling_method,
         )
         return model, [InitMICEModernBERTFromHFID.C(model=model)]
@@ -946,6 +1040,7 @@ def mice_scorer(
             freeze_base=freeze_base,
             random_top_layers=random_top_layers,
             compress_dim=compress_dim,
+            global_cls_token=global_cls_token,
             pooling_method=pooling_method or "cls",
         )
         return model, [InitMICEQwenFromHFID.C(model=model)]
@@ -968,5 +1063,6 @@ def mice_scorer(
             freeze_base=freeze_base,
             random_top_layers=random_top_layers,
             compress_dim=compress_dim,
+            global_cls_token=global_cls_token,
         )
         return model, [InitMICEBERTFromHFID.C(model=model)]
