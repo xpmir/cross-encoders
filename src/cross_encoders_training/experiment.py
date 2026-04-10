@@ -32,17 +32,29 @@ from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
 from configuration import CE_FineTuning, generate_grid
 from tests import build_tests
-from format import aggregation_hf, dataframe_to_latex
+from format import aggregation_hf, dataframe_to_latex, loss_names, backbone_names_lower
 from training_utils import (
     build_trainer,
     save_raw_results,
     identify_best_models,
     add_dataset_aggregations,
     format_model_results,
-    export_model_artifacts,
+    export_model,
 )
 
 logging.basicConfig(level=logging.INFO)
+
+
+def get_name_from_tags(model_tags: dict) -> str:
+    """Creates the HF id from tags using formatting conventions."""
+    loss = model_tags.get("loss", "")
+    base = model_tags.get("base", "")
+    # try to get prettier name
+    loss = loss_names.get(loss, loss).replace("/", "-")
+    if len(loss):
+        loss = f"-{loss}"
+    base = backbone_names_lower.get(base, base).replace("/", "-")
+    return f"cross-encoder-{base}{loss}"
 
 
 @learning_experiment()
@@ -307,9 +319,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 best_model_df, aggregations=aggregation_hf
             )
 
-            export_model_artifacts(
+            export_model(
                 best_tags=best_tags,
-                scorer_tagspath=scorer_tagspath,
+                model_name=get_name_from_tags(best_tags),
                 csv_results=csv_results,
                 md_results=md_results,
                 learners=learners,

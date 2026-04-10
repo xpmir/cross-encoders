@@ -36,7 +36,6 @@ from xpmir.letor.distillation.pairwise import (
 )
 
 from configuration import Losses, CE_FineTuning
-from format import loss_names, backbone_names_lower
 
 logger = logging.getLogger(__name__)
 
@@ -187,16 +186,6 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         )
 
 
-def get_name_from_tags(model_tags: dict) -> str:
-    """Creates the HF id from tags using formatting conventions."""
-    loss = model_tags.get("learner.loss", "")
-    base = model_tags.get("base", "")
-    # try to get prettier name
-    loss = loss_names.get(loss, loss).replace("/", "-")
-    base = backbone_names_lower.get(base, base).replace("/", "-")
-    return f"cross-encoder-{base}-{loss}"
-
-
 def save_raw_results(df: pd.DataFrame, resultspath: Path):
     """Formats and saves the raw experimental results to disk."""
     if not resultspath.exists():
@@ -318,9 +307,9 @@ def format_model_results(
     return csv_results, md_results
 
 
-def export_model_artifacts(
+def export_model(
     best_tags: dict,
-    scorer_tagspath: str,
+    model_name: str,
     csv_results: pd.DataFrame,
     md_results: pd.DataFrame,
     learners: list,
@@ -340,7 +329,6 @@ def export_model_artifacts(
             logger.warning(f"Unexpected tag format '{s}' in scorer tags")
     logger.warning(f"got tags {model_tags}")
 
-    model_name = get_name_from_tags(model_tags)
     models_path = resultspath / "models"
     best_model_path = models_path / model_name
     best_model_path.mkdir(parents=True, exist_ok=True)

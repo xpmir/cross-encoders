@@ -816,7 +816,8 @@ requires-dist = [
     { name = "datamaestro", specifier = ">=0.2.3" },
     { name = "datamaestro-ir", specifier = ">=0.2.0" },
     { name = "docstring-parser" },
-    { name = "experimaestro", specifier = ">=2.3" },
+    { name = "experimaestro", specifier = ">=2.3.4" },
+    { name = "fast-plaid", marker = "extra == 'fast-plaid'" },
     { name = "impact-index", specifier = ">=1.2.0" },
     { name = "ir-measures", specifier = ">=0.3.3" },
     { name = "omegaconf", specifier = ">=2.2" },
@@ -830,7 +831,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'neural'" },
     { name = "xpm-torch", editable = "experimaestro-ir/xpm-torch" },
 ]
-provides-extras = ["anserini", "neural"]
+provides-extras = ["anserini", "fast-plaid", "neural"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3897,7 +3898,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "experimaestro", specifier = ">=2.3" },
+    { name = "experimaestro", specifier = ">=2.3.4" },
     { name = "huggingface-hub", specifier = ">0.17" },
     { name = "lightning", specifier = ">=2.4" },
     { name = "safetensors", specifier = ">=0.4" },

@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 class Losses(str, Enum):
     """Possible losses"""
+
     BCE = "bce"
     """ Binary Cross Entropy loss """
 
@@ -189,14 +190,20 @@ class Evaluation:
     all_datasets: bool = False
     """Whether to evaluate on all BEIR datasets (minus the 5 not publicly available)"""
 
-    nanobeir: bool = False
-    """Whether to evaluate on NanoBEIR datasets"""
+    in_domain: bool = False
+    """Whether to evaluate on in-domain datasets (MSMarco, TREC DL 19 and 20)"""
 
     beir13: bool = False
     """Whether to evaluate on all BEIR13 datasets"""
 
-    in_domain: bool = False
-    """Whether to evaluate on in-domain datasets (MSMarco, TREC DL 19 and 20)"""
+    lotte_search: bool = False
+    """Whether to evaluate on all LOTTE Search datasets"""
+
+    robust04: bool = False
+    """Whether to evaluate on Robust04"""
+
+    nanobeir: bool = False
+    """Whether to evaluate on NanoBEIR datasets"""
 
     datasets: List[str] = Factory(list)
     """List of specific datasets to evaluate on"""

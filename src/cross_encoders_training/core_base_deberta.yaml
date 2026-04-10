@@ -5,7 +5,7 @@ description:
     Example configuration for training an ettin-150m model with two different losses.
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 1
+nb_repetitions: 3
 
 ### Overrides parameters from core_base
 learner:
@@ -22,8 +22,10 @@ retrieval:
     k: 1000
 
 evaluation:
+    all_datasets: false
     in_domain: true
     beir13: true
+    lotte_search: true
     # nanobeir: true
 
 
@@ -36,8 +38,8 @@ grid_search:
     learner.loss:
         values_list:
             - bce
-            - hingeLoss
-            - marginMSE
-            - infoNCE_RankDistiLLM
-            - distillRankNET
-            - ADR_MSE
+            # - hingeLoss
+            # - marginMSE
+            # - infoNCE_RankDistiLLM
+            # - distillRankNET
+            # - ADR_MSE

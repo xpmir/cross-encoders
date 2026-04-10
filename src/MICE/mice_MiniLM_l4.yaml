@@ -26,7 +26,7 @@ validation:
 learner:
     optimization:
         steps_per_epoch: 100
-        batch_size: 64
+        batch_size: 32
         max_epochs: 2000 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
@@ -61,15 +61,15 @@ grid_search:
         values_list:
             - microsoft/MiniLM-L12-H384-uncased
 
-    learner.optimization.batch_size:
-        values_list:
-            - 32
-            # - 64
+    # learner.optimization.batch_size:
+    #     values_list:
+    #         - 32
+    #         # - 64
 
-    learner.optimization.lr:
-        values_list:
-            # - 1e-6
-            - 7e-6
+    # learner.optimization.lr:
+    #     values_list:
+    #         # - 1e-6
+    #         - 7e-6
 
     learner.loss:
         values_list:

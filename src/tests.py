@@ -184,7 +184,8 @@ def Robust04_test(
     test_topic_nb: int, retrievers_only: bool = False, launcher=None
 ) -> EvaluationsCollection:
     """Robust04 dataset"""
-    robust04 = prepare_dataset("irds.disks45.nocr.trec-robust-2004")
+    logger.info("Preparing Robust04 dataset...")
+    robust04 = prepare_dataset("gov.nist.trec.adhoc.robust.2004")
     robust04 = get_fold(robust04, test_topic_nb, launcher=launcher)
 
     return EvaluationsCollection(
@@ -199,19 +200,20 @@ def LoTTE_tests(
     test_topic_nb: int, retrievers_only: bool = False, launcher=None
 ) -> EvaluationsCollection:
     """LoTTE Search dataset"""
-    lotte_writing = prepare_dataset("irds.lotte.writing.test.search")
+    logger.info("Preparing LoTTE Search datasets...")
+    lotte_writing = prepare_dataset("edu.stanford.lotte.writing.test.search")
     lotte_writing = get_fold(lotte_writing, test_topic_nb, launcher=launcher)
 
-    lotte_recreation = prepare_dataset("irds.lotte.recreation.test.search")
+    lotte_recreation = prepare_dataset("edu.stanford.lotte.recreation.test.search")
     lotte_recreation = get_fold(lotte_recreation, test_topic_nb, launcher=launcher)
 
-    lotte_science = prepare_dataset("irds.lotte.science.test.search")
+    lotte_science = prepare_dataset("edu.stanford.lotte.science.test.search")
     lotte_science = get_fold(lotte_science, test_topic_nb, launcher=launcher)
 
-    lotte_technology = prepare_dataset("irds.lotte.technology.test.search")
+    lotte_technology = prepare_dataset("edu.stanford.lotte.technology.test.search")
     lotte_technology = get_fold(lotte_technology, test_topic_nb, launcher=launcher)
 
-    lotte_lifestyle = prepare_dataset("irds.lotte.lifestyle.test.search")
+    lotte_lifestyle = prepare_dataset("edu.stanford.lotte.lifestyle.test.search")
     lotte_lifestyle = get_fold(lotte_lifestyle, test_topic_nb, launcher=launcher)
 
     return EvaluationsCollection(
@@ -364,14 +366,6 @@ def build_tests(
             if name not in all_evals:
                 all_evals[name] = evals
 
-    # 1. NanoBEIR
-    if cfg.nanobeir:
-        add_evals(
-            nano_beir_tests(
-                cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
-            )
-        )
-
     # 2. In-domain (MSMarco + TREC DL)
     if cfg.in_domain:
         v1_dev = prepare_collection("com.microsoft.msmarco.passage.dev.small")
@@ -399,6 +393,27 @@ def build_tests(
             )
         )
 
+    if cfg.robust04 or cfg.all_datasets:
+        add_evals(
+            Robust04_test(
+                cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
+            )
+        )
+
+    if cfg.lotte_search or cfg.all_datasets:
+        add_evals(
+            LoTTE_tests(
+                cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
+            )
+        )
+
+    # 1. NanoBEIR
+    if cfg.nanobeir:
+        add_evals(
+            nano_beir_tests(
+                cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
+            )
+        )
     # 4. Specific datasets
     if cfg.datasets:
         # We need a way to map dataset names to their respective prepare functions
