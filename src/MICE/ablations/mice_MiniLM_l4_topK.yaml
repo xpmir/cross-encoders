@@ -48,8 +48,8 @@ retrieval:
 #     in_domain: true
 
 
-merge_layer: 4
-drop_layer: 7
+n_contextualization_layers: 4
+n_interaction_layers: 3
 
 #### Params that are grid searched
 grid_search:

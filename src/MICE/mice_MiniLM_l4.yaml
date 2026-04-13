@@ -38,7 +38,7 @@ learner:
     checkpoint_interval: 100
     validation_interval: 50
     validation_top_k: 100
-    validation: nanobeir
+    validation: nanobeir11
     requirements: duration=12h & cpu(cores=16) & cuda(mem=80G)
 
 retrieval:
@@ -51,8 +51,8 @@ retrieval:
 #     in_domain: true
 
 base: microsoft/MiniLM-L12-H384-uncased
-merge_layer: 4
-drop_layer: 7
+n_contextualization_layers: 8
+drop_layer: 11
 
 #### Params that are grid searched
 grid_search:

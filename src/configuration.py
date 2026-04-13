@@ -296,11 +296,11 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
 @configuration()
 class Mice_FineTuning(CE_FineTuning):
     ## MICE specific configuration
-    merge_layer: int = 6
-    """Mid-fusion index: encoder layers are split into bottom (independent) and top (cross-attention)"""
+    n_contextualization_layers: int = 6
+    """Number of bottom encoder layers that process query and document independently"""
 
-    drop_layer: int = 0
-    """Layer at which to drop backbone layers"""
+    n_interaction_layers: Optional[int] = None
+    """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
     mask_cls_to_doc: bool = True
     """Whether to mask the [CLS] token from attending to document tokens."""

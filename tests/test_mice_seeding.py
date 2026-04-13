@@ -10,10 +10,12 @@ logger = logging.getLogger(__name__)
 def test_bert_seeding():
     logger.info("### Testing BERT Seeding (MiniLM) ###")
     hf_id = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    merge_layer = 3
+    n_contextualization_layers = 3
 
     # 1. Initialize MICE model configuration
-    scorer_cfg, init_tasks = mice_scorer(hf_id=hf_id, merge_layer=merge_layer)
+    scorer_cfg, init_tasks = mice_scorer(
+        hf_id=hf_id, n_contextualization_layers=n_contextualization_layers
+    )
 
     # We need to get the instance of the scorer
     # In experimaestro, we can use the InitTask's model parameter
@@ -42,10 +44,10 @@ def test_bert_seeding():
     )
     logger.info("✅ Bottom layers match")
 
-    # 5. Compare Top Layers and Cross-Attention Seeding (Layer merge_layer)
-    # The first top layer in MICE corresponds to layer 'merge_layer' in the backbone
+    # 5. Compare Top Layers and Cross-Attention Seeding (Layer n_contextualization_layers)
+    # The first top layer in MICE corresponds to layer 'n_contextualization_layers' in the backbone
     mice_top_0 = model.top_layers[0]
-    backbone_top = backbone.encoder.layer[merge_layer]
+    backbone_top = backbone.encoder.layer[n_contextualization_layers]
 
     # Self-attention part
     assert torch.allclose(
@@ -69,10 +71,12 @@ def test_modernbert_seeding():
     # For this test, we'll try 'answerdotai/ModernBERT-base' if it exists or just describe the check
     logger.info("### Testing ModernBERT Seeding ###")
     hf_id = "answerdotai/ModernBERT-base"
-    merge_layer = 2
+    n_contextualization_layers = 2
 
     try:
-        scorer_cfg, init_tasks = mice_scorer(hf_id=hf_id, merge_layer=merge_layer)
+        scorer_cfg, init_tasks = mice_scorer(
+            hf_id=hf_id, n_contextualization_layers=n_contextualization_layers
+        )
 
         init_task_instances = [t.instance() for t in init_tasks]
         for it in init_task_instances:
@@ -90,7 +94,7 @@ def test_modernbert_seeding():
 
         # Compare Top Layer Cross-Attention Seeding
         mice_top_0 = model.top_layers[0]
-        backbone_layer = backbone.model.layers[merge_layer]
+        backbone_layer = backbone.model.layers[n_contextualization_layers]
         all_head = backbone_layer.attn.all_head_size
 
         # Check Q weight split from Wqkv

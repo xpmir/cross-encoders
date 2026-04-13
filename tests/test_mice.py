@@ -52,11 +52,13 @@ class TestMiceForwardTask(LightweightTask):
         )
 
 
-def test_mice(model_id, merge_layer):
+def test_mice(model_id, n_contextualization_layers):
     """tests mice loading, forward pass saving."""
     # mice_scorer returns the model and a list of initialization tasks
     # that need to be executed to load the weights
-    scorer_cfg, init_tasks = mice_scorer(hf_id=model_id, merge_layer=merge_layer)
+    scorer_cfg, init_tasks = mice_scorer(
+        hf_id=model_id, n_contextualization_layers=n_contextualization_layers
+    )
 
     print(scorer_cfg)
 
@@ -135,8 +137,8 @@ if __name__ == "__main__":
         "cross-encoder/ms-marco-MiniLM-L-6-v2",
         "Qwen/Qwen3-0.6B",
     ]
-    merge_layer = 3
+    n_contextualization_layers = 3
 
     for model_id in model_ids:
         print("\n\n ### TESTING ", model_id)
-        test_mice(model_id, merge_layer)
+        test_mice(model_id, n_contextualization_layers)

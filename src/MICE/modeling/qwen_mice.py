@@ -257,18 +257,24 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
             nn.ModuleList(
                 [
                     type(temp_model.model.layers[0])(self.config, i)
-                    for i in range(self.merge_layer)
+                    for i in range(self.n_contextualization_layers)
                 ]
             ),
         )
 
         # Top layers: augmented with cross-attention
-        num_top = (self.drop_layer or len(temp_model.model.layers)) - self.merge_layer
+        if self.n_interaction_layers is not None:
+            num_top = self.n_interaction_layers
+        else:
+            num_top = len(temp_model.model.layers) - self.n_contextualization_layers
+
         self.add_module(
             "top_layers",
             nn.ModuleList(
                 [
-                    QwenCrossAttentionLayer(self.config, self.merge_layer + i)
+                    QwenCrossAttentionLayer(
+                        self.config, self.n_contextualization_layers + i
+                    )
                     for i in range(num_top)
                 ]
             ),
@@ -410,8 +416,10 @@ class InitMICEQwenFromHFID(LightweightTask):
 
         # Bottom layers
         if hasattr(full_backbone.model, "layers"):
-            logger.info(f"Seeding {model.merge_layer} bottom layers from backbone")
-            for i in range(model.merge_layer):
+            logger.info(
+                f"Seeding {model.n_contextualization_layers} bottom layers from backbone"
+            )
+            for i in range(model.n_contextualization_layers):
                 if i < len(full_backbone.model.layers):
                     model.bottom_layers[i].load_state_dict(
                         full_backbone.model.layers[i].state_dict()
@@ -427,7 +435,13 @@ class InitMICEQwenFromHFID(LightweightTask):
 
         # Top layers
         if hasattr(full_backbone.model, "layers"):
-            src_layers = full_backbone.model.layers[model.merge_layer :]
+            start_idx = model.n_contextualization_layers
+            if model.n_interaction_layers is not None:
+                end_idx = start_idx + model.n_interaction_layers
+                src_layers = full_backbone.model.layers[start_idx:end_idx]
+            else:
+                src_layers = full_backbone.model.layers[start_idx:]
+
             logger.info(f"Seeding {len(model.top_layers)} top layers from backbone")
             for i, target_layer in enumerate(model.top_layers):
                 if i < len(src_layers):

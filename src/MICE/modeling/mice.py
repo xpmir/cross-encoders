@@ -120,11 +120,11 @@ class MiceCrossEncoder(AbstractModuleScorer):
     tokenizer: Param[MICEQueryDocTokenizer]
     """The tokenizer for independent Q/D processing"""
 
-    merge_layer: Param[int] = 6
-    """Mid-fusion index: encoder layers are split into bottom (independent) and top (cross-attention)"""
+    n_contextualization_layers: Param[int] = 6
+    """Number of bottom encoder layers that process query and document independently"""
 
-    drop_layer: Param[int] = 0
-    """Layer at which to drop backbone layers"""
+    n_interaction_layers: Param[Optional[int]] = None
+    """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
     mask_cls_to_doc: Param[bool] = True
     """Whether to mask the [CLS] token from attending to document tokens."""
@@ -304,10 +304,16 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         self.add_module("embeddings", temp_model.embeddings)
         self.add_module(
             "bottom_layers",
-            nn.ModuleList([BertLayer(self.config) for _ in range(self.merge_layer)]),
+            nn.ModuleList(
+                [BertLayer(self.config) for _ in range(self.n_contextualization_layers)]
+            ),
         )
 
-        num_top = (self.drop_layer or len(temp_model.encoder.layer)) - self.merge_layer
+        if self.n_interaction_layers is not None:
+            num_top = self.n_interaction_layers
+        else:
+            num_top = len(temp_model.encoder.layer) - self.n_contextualization_layers
+
         self.add_module(
             "top_layers",
             nn.ModuleList([BertLayer(self.head_config) for _ in range(num_top)]),
@@ -578,17 +584,23 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
             nn.ModuleList(
                 [
                     type(temp_model.model.layers[0])(self.config, i)
-                    for i in range(self.merge_layer)
+                    for i in range(self.n_contextualization_layers)
                 ]
             ),
         )
 
-        num_top = (self.drop_layer or len(temp_model.model.layers)) - self.merge_layer
+        if self.n_interaction_layers is not None:
+            num_top = self.n_interaction_layers
+        else:
+            num_top = len(temp_model.model.layers) - self.n_contextualization_layers
+
         self.add_module(
             "top_layers",
             nn.ModuleList(
                 [
-                    ModernBertCrossAttentionLayer(self.config, self.merge_layer + i)
+                    ModernBertCrossAttentionLayer(
+                        self.config, self.n_contextualization_layers + i
+                    )
                     for i in range(num_top)
                 ]
             ),
@@ -725,8 +737,10 @@ class InitMICEBERTFromHFID(LightweightTask):
 
         # Copy bottom layers
         if hasattr(full_bert, "encoder") and hasattr(full_bert.encoder, "layer"):
-            logger.info(f"Seeding {model.merge_layer + 1} bottom layers from backbone")
-            for i in range(model.merge_layer):
+            logger.info(
+                f"Seeding {model.n_contextualization_layers} bottom layers from backbone"
+            )
+            for i in range(model.n_contextualization_layers):
                 if i < len(full_bert.encoder.layer):
                     model.bottom_layers[i].load_state_dict(
                         full_bert.encoder.layer[i].state_dict()
@@ -743,21 +757,21 @@ class InitMICEBERTFromHFID(LightweightTask):
         model.top_layers = nn.ModuleList()
 
         # Load original top layers to copy weights from
-        if model.drop_layer > 0:
-            assert model.drop_layer >= model.merge_layer, (
-                "drop_layer must be >= merge_layer"
+        start_idx = model.n_contextualization_layers
+        if model.n_interaction_layers is not None:
+            end_idx = start_idx + model.n_interaction_layers
+            assert end_idx <= len(full_bert.encoder.layer), (
+                f"Total layers ({end_idx}) exceeds backbone layers: {len(full_bert.encoder.layer)}"
             )
-            assert model.drop_layer < len(full_bert.encoder.layer), (
-                f"drop_layer {model.drop_layer} exceeds number of layers in the backbone: {len(full_bert.encoder.layer)}"
-            )
-            original_top_layers = full_bert.encoder.layer[
-                model.merge_layer : model.drop_layer
-            ]
+            original_top_layers = full_bert.encoder.layer[start_idx:end_idx]
             logging.info(
-                f"Dropping backbone layers {model.drop_layer}-{len(full_bert.encoder.layer) - 1}"
+                f"Using {model.n_interaction_layers} layers for interaction, dropping remaining backbone layers if any"
             )
         else:
-            original_top_layers = full_bert.encoder.layer[model.merge_layer :]
+            original_top_layers = full_bert.encoder.layer[start_idx:]
+            logging.info(
+                f"Using all remaining {len(original_top_layers)} backbone layers for interaction"
+            )
 
         for i in range(len(original_top_layers)):
             # Instantiate a fresh layer with Cross-Attention enabled
@@ -855,8 +869,10 @@ class InitMICEModernBERTFromHFID(LightweightTask):
             )
 
         if hasattr(full_backbone.model, "layers"):
-            logger.info(f"Seeding {model.merge_layer} bottom layers from backbone")
-            for i in range(model.merge_layer):
+            logger.info(
+                f"Seeding {model.n_contextualization_layers} bottom layers from backbone"
+            )
+            for i in range(model.n_contextualization_layers):
                 if i < len(full_backbone.model.layers):
                     model.bottom_layers[i].load_state_dict(
                         full_backbone.model.layers[i].state_dict()
@@ -871,7 +887,13 @@ class InitMICEModernBERTFromHFID(LightweightTask):
             )
 
         if hasattr(full_backbone.model, "layers"):
-            src_layers = full_backbone.model.layers[model.merge_layer :]
+            start_idx = model.n_contextualization_layers
+            if model.n_interaction_layers is not None:
+                end_idx = start_idx + model.n_interaction_layers
+                src_layers = full_backbone.model.layers[start_idx:end_idx]
+            else:
+                src_layers = full_backbone.model.layers[start_idx:]
+
             logger.info(f"Seeding {len(model.top_layers)} top layers from backbone")
             for i, target_layer in enumerate(model.top_layers):
                 if i < len(src_layers):
@@ -973,8 +995,8 @@ class InitMICEModernBERTFromHFID(LightweightTask):
 
 def mice_scorer(
     hf_id: str,
-    merge_layer: int = 6,
-    drop_layer: int = 0,
+    n_contextualization_layers: int = 6,
+    n_interaction_layers: Optional[int] = None,
     mask_cls_to_doc: bool = True,
     mask_query_to_cls: bool = True,
     freeze_base: bool = False,
@@ -992,8 +1014,8 @@ def mice_scorer(
 
     Args:
         hf_id: Hugging Face checkpoint identifier.
-        merge_layer: Layer index where mid-fusion starts.
-        drop_layer: Layer index at which to stop (dropping subsequent backbone layers).
+        n_contextualization_layers: Number of bottom encoder layers that process query and document independently.
+        n_interaction_layers: Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone.
         mask_cls_to_doc: If True, prevents [CLS] from attending to document tokens.
         mask_query_to_cls: If True, prevents query tokens from attending to [CLS].
         freeze_base: If True, freezes the bottom layers.
@@ -1015,8 +1037,8 @@ def mice_scorer(
         model = ModernBertMiceCrossEncoder.C(
             hf_id=hf_id,
             tokenizer=tokenizer,
-            merge_layer=merge_layer,
-            drop_layer=drop_layer,
+            n_contextualization_layers=n_contextualization_layers,
+            n_interaction_layers=n_interaction_layers,
             mask_cls_to_doc=mask_cls_to_doc,
             mask_query_to_cls=mask_query_to_cls,
             freeze_base=freeze_base,
@@ -1033,8 +1055,8 @@ def mice_scorer(
         model = QwenMiceCrossEncoder.C(
             hf_id=hf_id,
             tokenizer=tokenizer,
-            merge_layer=merge_layer,
-            drop_layer=drop_layer,
+            n_contextualization_layers=n_contextualization_layers,
+            n_interaction_layers=n_interaction_layers,
             mask_cls_to_doc=mask_cls_to_doc,
             mask_query_to_cls=mask_query_to_cls,
             freeze_base=freeze_base,
@@ -1056,8 +1078,8 @@ def mice_scorer(
         model = BertMiceCrossEncoder.C(
             hf_id=hf_id,
             tokenizer=tokenizer,
-            merge_layer=merge_layer,
-            drop_layer=drop_layer,
+            n_contextualization_layers=n_contextualization_layers,
+            n_interaction_layers=n_interaction_layers,
             mask_cls_to_doc=mask_cls_to_doc,
             mask_query_to_cls=mask_query_to_cls,
             freeze_base=freeze_base,

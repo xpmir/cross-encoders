@@ -11,7 +11,9 @@ def test_qwen_full_mice():
     print(f"Testing full MICE model with {model_id}...")
 
     # 1. Create the scorer and its initialization task
-    scorer, init_tasks = mice_scorer(hf_id=model_id, merge_layer=4, max_length=128)
+    scorer, init_tasks = mice_scorer(
+        hf_id=model_id, n_contextualization_layers=4, max_length=128
+    )
 
     # 2. Run the initialization task to load weights
     print("Running initialization task...")

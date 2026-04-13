@@ -163,8 +163,8 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
         # Build the model using the unified scorer factory
         mice_model, scorer_hf_init_tasks = mice_scorer(
             hf_id=cfg.base,
-            merge_layer=cfg.merge_layer,
-            drop_layer=cfg.drop_layer,
+            n_contextualization_layers=cfg.n_contextualization_layers,
+            n_interaction_layers=cfg.n_interaction_layers,
             mask_cls_to_doc=cfg.mask_cls_to_doc,
             mask_query_to_cls=cfg.mask_query_to_cls,
             freeze_base=cfg.freeze_base,
