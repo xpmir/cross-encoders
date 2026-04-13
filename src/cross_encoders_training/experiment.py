@@ -71,7 +71,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     all_weights = []
 
     def run_one_config(
-        helper: LearningExperimentHelper, cfg: CE_FineTuning, grid_search_id: str
+        helper: LearningExperimentHelper,
+        cfg: CE_FineTuning,
+        grid_search_id: str,
+        cfg_tags: dict,
     ):
         """Main process for Cross-encoder training"""
 
@@ -158,8 +161,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
         scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
             hf_id=cfg.base, max_doc_length=cfg.max_doc_len
         )
-        scorer_model.tag("scorer", grid_search_id)
-
+        for k, v in cfg_tags.items():
+            scorer_model.tag(k, v)
         # Run one Training and eval per seed
         for i in range(cfg.nb_repetitions):
             seed = np.random.RandomState(cfg.seed + i).randint((2**32) - 1)
@@ -237,20 +240,48 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                     )
 
     all_configs, all_tags = generate_grid(cfg)
+
+    # Simplify tags keys
+    new_all_tags = []
+    for cfg_tags in all_tags:
+        simple_tags = {}
+        for k, v in cfg_tags.items():
+            simple_key = k.split(".")[-1]
+            if simple_key in simple_tags:
+                simple_tags[k] = v
+            else:
+                simple_tags[simple_key] = v
+        new_all_tags.append(simple_tags)
+    all_tags = new_all_tags
+
     config_map = {}
 
     for config, cfg_tags in zip(all_configs, all_tags):
+        # Update cfg_tags with base if not present
+        if "base" not in cfg_tags:
+            cfg_tags["base"] = config.base
+
         # just run the config
-        tagspath = "_".join(f"{k.split('.')[-1]}={v}" for k, v in cfg_tags.items())
+        tagspath = "_".join(f"{k}={v}" for k, v in cfg_tags.items())
+        cfg_tags["tagspath"] = tagspath
+
         config_map[tagspath] = config
         logging.info(f"Running config with tags {tagspath}")
-        run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
+        run_one_config(
+            helper=helper, cfg=config, grid_search_id=tagspath, cfg_tags=cfg_tags
+        )
 
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
 
     # Constants
-    group_by_tags = [("tag", "first_stage"), ("tag", "scorer")]
+    grid_keys = set()
+    for tags in all_tags:
+        grid_keys.update(tags.keys())
+
+    # Ensure unique tags for grouping
+    tag_names = {"first_stage"} | grid_keys
+    group_by_tags = [("tag", k) for k in sorted(list(tag_names))]
     model_id_tags = group_by_tags + [("tag", "seed")]
 
     # 1. Exctract data
@@ -276,11 +307,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
     save_raw_results(df_with_aggs, helper.xp.resultspath)
 
-    # keep only results with a scorer
-    scorer_only_df = df_with_aggs[
-        df_with_aggs[("tag", "scorer")].notna()
-        & (df_with_aggs[("tag", "scorer")] != "")
-    ]
+    # keep only results with a base tag (all our models have it)
+    scorer_only_df = df_with_aggs[df_with_aggs[("tag", "base")].notna()]
 
     # Read model card template
     template_path = Path(__file__).parent / "CrossEncoderCard.md"
@@ -303,7 +331,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 tag[1]: best_row[tag] for tag in model_id_tags if tag[0] == "tag"
             }
 
-            scorer_tagspath = best_tags["scorer"]
+            scorer_tagspath = best_tags["tagspath"]
             logging.info(f"Best evaluated model is {best_tags}")
 
             # Filter the original dataframe for this specific best model (all datasets)
@@ -360,3 +388,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     )
     with open(helper.xp.resultspath / "results.tex", "w") as f:
         f.write(latex_table)
+
+    logging.info(f"Saved aggregated results to {helper.xp.resultspath / 'results.csv'}")
+    logging.info("Experiment completed successfully.")

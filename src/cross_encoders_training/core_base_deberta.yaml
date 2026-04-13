@@ -17,7 +17,7 @@ max_doc_len: 1024
 normalize_docs_per_batch: true
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=50G)
     batch_size: 256
     k: 1000
 

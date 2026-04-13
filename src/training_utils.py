@@ -321,12 +321,12 @@ def export_model(
 ):
     """Exports all artifacts (weights, logs, readme, config) for a best model."""
     model_tags = {}
-    for s in best_tags["scorer"].split("_"):
+    for s in best_tags["tagspath"].split("_"):
         try:
             k, v = s.split("=")
             model_tags[k] = v
         except ValueError:
-            logger.warning(f"Unexpected tag format '{s}' in scorer tags")
+            logger.warning(f"Unexpected tag format '{s}' in tagspath tags")
     logger.warning(f"got tags {model_tags}")
 
     models_path = resultspath / "models"
