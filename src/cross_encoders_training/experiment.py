@@ -9,6 +9,7 @@ hyperparameter tuning via grid search.
 """
 
 import logging
+import shutil
 from functools import partial
 from pathlib import Path
 import numpy as np
@@ -263,10 +264,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
         # just run the config
         tagspath = "_".join(f"{k}={v}" for k, v in cfg_tags.items())
-        cfg_tags["tagspath"] = tagspath
-
-        config_map[tagspath] = config
-        logging.info(f"Running config with tags {tagspath}")
+        config_map[frozenset(cfg_tags.items())] = config
+        logging.info(
+            f"Running config with tags:\n- {'\n- '.join(f'{k}: {v}' for k, v in cfg_tags.items())}"
+        )
         run_one_config(
             helper=helper, cfg=config, grid_search_id=tagspath, cfg_tags=cfg_tags
         )
@@ -308,7 +309,12 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     save_raw_results(df_with_aggs, helper.xp.resultspath)
 
     # keep only results with a base tag (all our models have it)
-    scorer_only_df = df_with_aggs[df_with_aggs[("tag", "base")].notna()]
+    # We ensure it's not NaN and not an empty string to exclude first-stage only results
+    scorer_only_df = df_with_aggs[
+        df_with_aggs[("tag", "base")].notna()
+        & (df_with_aggs[("tag", "base")].astype(str) != "")
+        & (df_with_aggs[("tag", "base")].astype(str) != "nan")
+    ]
 
     # Read model card template
     template_path = Path(__file__).parent / "CrossEncoderCard.md"
@@ -325,14 +331,23 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
     best_models_list = []
     if not best_models_df.empty:
+        # Check if model folder exists before saving models, delete if so
+        models_path = helper.xp.resultspath / "models"
+        if models_path.exists():
+            shutil.rmtree(models_path)
+            logging.info(f"Deleted existing models directory: {models_path}")
+
         for _, best_row in best_models_df.iterrows():
             # Extract tags for this best model
             best_tags = {
                 tag[1]: best_row[tag] for tag in model_id_tags if tag[0] == "tag"
             }
 
-            scorer_tagspath = best_tags["tagspath"]
             logging.info(f"Best evaluated model is {best_tags}")
+
+            # Reconstruct the grid tags to find the original config
+            best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
+            best_cfg = config_map.get(frozenset(best_grid_tags.items()))
 
             # Filter the original dataframe for this specific best model (all datasets)
             mask = pd.Series(True, index=df_with_aggs.index)
@@ -354,7 +369,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 md_results=md_results,
                 learners=learners,
                 all_weights=all_weights,
-                best_cfg=config_map.get(scorer_tagspath),
+                best_cfg=best_cfg,
                 resultspath=helper.xp.resultspath,
                 card_template_txt=card_template_txt,
                 aggregations=aggregation_hf,

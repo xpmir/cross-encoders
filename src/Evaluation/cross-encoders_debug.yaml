@@ -21,6 +21,9 @@ scorers_hf_id:
 # retrievers_hf_id:
 #   - naver/splade-v3-distilbert
 
+preprocessing:
+  requirements: duration=1h & cpu(cores=16, mem=10G) & cuda(mem=10G)
+
 indexation:
   requirements: duration=8h & cpu(cores=4, mem=10G) & cuda(mem=30G)
   sparse2bmp_requirements: duration=8h & cpu(cores=8)
@@ -34,6 +37,7 @@ retrieval:
 evaluation:
   #just for debugging
   test_max_topics: 100
-  in_domain: false
-  beir13: true
+  all_datasets: true
+  # in_domain: false
+  # beir13: true
   # nanobeir: true

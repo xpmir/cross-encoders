@@ -54,4 +54,10 @@ dev = [
     "notebook>=7.5.4",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
+    "ruff>=0.9.9",
+    "seaborn>=0.13.2",
 ]
+
+[tool.ruff]
+src = ["src"]
+include = ["src/**/*.py"]

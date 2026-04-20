@@ -41,11 +41,14 @@ logger = logging.getLogger(__name__)
 
 
 def get_task_by_tags(tasks: list, tags: dict):
-    """Return the first task in tasks that has all the given tags."""
+    """Return the first task in tasks that has all its tags matching the given tags."""
+
     for task in tasks:
         task_tags = get_tags(task)
-        logger.debug(f"Checking task with tags {task_tags} against {tags}")
-        if all(str(task_tags.get(tag)) == str(value) for tag, value in tags.items()):
+        if not task_tags:
+            continue
+        # Check if all task's tags are present and match in the given tags
+        if all(str(tags.get(tag)) == str(value) for tag, value in task_tags.items()):
             return task
     return None
 
@@ -320,15 +323,6 @@ def export_model(
     aggregations: dict[str, list[str]] = None,
 ):
     """Exports all artifacts (weights, logs, readme, config) for a best model."""
-    model_tags = {}
-    for s in best_tags["tagspath"].split("_"):
-        try:
-            k, v = s.split("=")
-            model_tags[k] = v
-        except ValueError:
-            logger.warning(f"Unexpected tag format '{s}' in tagspath tags")
-    logger.warning(f"got tags {model_tags}")
-
     models_path = resultspath / "models"
     best_model_path = models_path / model_name
     best_model_path.mkdir(parents=True, exist_ok=True)
@@ -350,15 +344,6 @@ def export_model(
                 tb_symlink_path.unlink()
             tb_symlink_path.symlink_to(tb_path)
 
-    # best_model_val = get_task_by_tags(all_weights, best_tags)
-    # if best_model_val:
-    #     weights_path = Path(best_model_val.encoder_path)
-    #     if weights_path.is_dir():
-    #         shutil.copytree(weights_path, best_model_path, dirs_exist_ok=True)
-    #         logger.info(f"HuggingFace model artifacts copied to {best_model_path}")
-    #     else:
-    #         logger.warning(f"Model weights path is not a directory: {weights_path}")
-
     if card_template_txt and best_cfg:
         template = Template(card_template_txt)
         card = template.render(
@@ -368,7 +353,7 @@ def export_model(
             model_id=model_name,
             training_data="MS MARCO Passage",
             dataset="msmarco",
-            loss=model_tags.get("learner.loss"),
+            loss=best_tags.get("learner.loss") or best_tags.get("loss", ""),
             results=md_results.to_markdown(index=False),
         )
         with open(best_model_path / "README.md", "w") as f:

@@ -1,0 +1,28 @@
+id: train_mice_miniLM_X+3
+title: "Mice-MiniLM Training"
+description:
+    Train Mice Models with 3 interactions layers
+
+module: MICE.mice_training
+pre_experiment: pre_experiment
+parent: ./mice_MiniLM_l4.yaml
+
+seed: 12 # To mimick the HF xp
+nb_repetitions: 2
+
+
+base: microsoft/MiniLM-L12-H384-uncased
+n_contextualization_layers: 4
+n_interaction_layers: 3
+
+
+# evaluation: #default = Minified tests
+#     all_datasets: false
+#     in_domain: true
+
+#### Params that are grid searched
+grid_search:
+    n_contextualization_layers:
+        values_range:
+            - 0
+            - 9

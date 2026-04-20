@@ -26,6 +26,7 @@ class TestHFForwardTask(LightweightTask):
         # Initialize the model components (experimaestro way)
         self.scorer.initialize()
 
+        print(self.scorer)
         print("Step 2: Preparing the dataset (one query, two passages)...")
         # Define one query and two different documents to compare scores
         query = "What is the capital of France?"
@@ -93,7 +94,11 @@ def test_hf_cross_scorer(model_id):
 
 if __name__ == "__main__":
     # Use a small BERT model for testing purposes
-    model_ids = ["cross-encoder/ms-marco-MiniLM-L-6-v2", "Qwen/Qwen3-0.6B"]
+    model_ids = [
+        "jhu-clsp/ettin-encoder-32m"
+        # "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        # "Qwen/Qwen3-0.6B"
+    ]
 
     for model_id in model_ids:
         print("\n\n" + "=" * 50)

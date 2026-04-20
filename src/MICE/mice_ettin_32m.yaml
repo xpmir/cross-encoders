@@ -51,7 +51,7 @@ retrieval:
 
 
 n_contextualization_layers: 6
-drop_layer: 9
+n_interaction_layers: 3
 
 
 #### Params that are grid searched

@@ -1,7 +1,10 @@
 """Copied from https://github.com/yzong12138/MVDR_pruning/blob/master/neural/ColBERT.py"""
-import json, os, string
+
+import json
+import os
+import string
 from dataclasses import InitVar, dataclass
-from typing import NamedTuple, Union, Optional, List
+from typing import NamedTuple, Union, Optional, List, Tuple
 
 from huggingface_hub import hf_hub_download
 from experimaestro import Param, LightweightTask
@@ -14,20 +17,18 @@ from transformers.models.distilbert import DistilBertModel
 from transformers.modeling_outputs import BaseModelOutputWithPoolingAndCrossAttentions
 from transformers.utils import cached_file
 
-from xpmir.text.huggingface import HFTokenizer
-from xpm_torch import ModuleInitOptions
-from xpmir.text.huggingface.tokenizers import HFTokenizerAdapter
+from xpm_torch.trainers.context import TrainerContext
+from xpm_torch import ModuleInitMode, ModuleInitOptions
 
+from xpmir.text.huggingface import HFTokenizer
+from xpmir.text.huggingface.tokenizers import HFTokenizerAdapter
 from xpmir.text.huggingface import HFModel
 from xpmir.text.huggingface.encoders import HFTokensEncoder
-from xpmir.utils.utils import easylog, foreach
-from xpm_torch import ModuleInitMode
-from xpmir.learning.context import TrainerContext
-from xpmir.text import TokenizerOptions
-from xpmir.text.encoders import (
-    TokenizedTexts,
-    TokensRepresentationOutput,
-)
+from xpmir.utils.utils import foreach
+from xpmir.text.tokenizers import TokenizedTexts, TokenizerOptions
+from xpmir.text.encoders import TokensRepresentationOutput
+
+
 from xpmir.neural.dual import DualVectorListener
 from xpmir.neural.interaction import InteractionScorer
 from xpmir.neural.interaction.common import (
@@ -36,6 +37,7 @@ from xpmir.neural.interaction.common import (
 )
 
 import logging
+
 logger = logging.getLogger(__name__)
 HFConfigName = Union[str, os.PathLike]
 
@@ -358,14 +360,6 @@ class ColBERTWithProjector(InteractionScorer):
 
 ### Special Tokenizer for ColBERT (why ?? )
 
-from typing import List, Tuple, Union
-import torch
-from experimaestro import Param
-from xpmir.text.huggingface import HFTokenizer
-from xpm_torch import ModuleInitOptions
-from xpmir.text.tokenizers import TokenizedTexts, TokenizerOptions
-from xpmir.text.huggingface.tokenizers import HFTokenizerAdapter
-
 # Follow the work of ColBERTv2, we insert markers
 
 
@@ -501,6 +495,7 @@ class HFTokenizerColBERTDocument(HFTokenizer):
             r.get("attention_mask", None),
             r.get("token_type_ids", None),
         )
+
 
 class HFStringTokenizerColBERT(HFTokenizerAdapter):
     """A class which generate different tokenizer instance for query and
