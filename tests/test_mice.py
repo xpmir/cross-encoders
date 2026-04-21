@@ -101,7 +101,7 @@ def test_mice(model_id, n_contextualization_layers):
         )
 
         # 5. HF Export to disk
-        logging.info(f"Exporting model to HF format at {hf_save_path}")
+        logging.info(f"Exporting model to HF format at {hf_save_path} with loader {loader_config}")
         # TorchHFHub takes a Loader configuration
         hub = TorchHFHub(loader_config)
         hub.save_pretrained(hf_save_path)
@@ -133,9 +133,9 @@ if __name__ == "__main__":
 
     # MiniLM is a good candidate as it is fast and small
     model_ids = [
-        "jhu-clsp/ettin-encoder-32m",
         "cross-encoder/ms-marco-MiniLM-L-6-v2",
-        "Qwen/Qwen3-0.6B",
+        # "jhu-clsp/ettin-encoder-32m",
+        # "Qwen/Qwen3-0.6B",
     ]
     n_contextualization_layers = 3
 

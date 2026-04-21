@@ -4,7 +4,7 @@ description:
     Training for MiniLM-based MICE model.
 
 module: MICE.mice_training
-pre_experiment: pre_experiment
+# pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 2

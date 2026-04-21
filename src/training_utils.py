@@ -35,6 +35,7 @@ from xpmir.letor.distillation.pairwise import (
     MSEDifferenceLoss,
 )
 
+from xpm_torch.huggingface import TorchHFHub
 from configuration import Losses, CE_FineTuning
 
 logger = logging.getLogger(__name__)
@@ -47,8 +48,8 @@ def get_task_by_tags(tasks: list, tags: dict):
         task_tags = get_tags(task)
         if not task_tags:
             continue
-        # Check if all task's tags are present and match in the given tags
-        if all(str(tags.get(tag)) == str(value) for tag, value in task_tags.items()):
+        # Check if all given tags are present and match in the task's tags
+        if all(str(task_tags.get(tag)) == str(value) for tag, value in tags.items()):
             return task
     return None
 
@@ -320,9 +321,22 @@ def export_model(
     best_cfg: CE_FineTuning,
     resultspath: Path,
     card_template_txt: str = None,
-    aggregations: dict[str, list[str]] = None,
 ):
-    """Exports all artifacts (weights, logs, readme, config) for a best model."""
+    """Exports all artifacts (weights, logs, readme, config) for a best model.
+    Also saves the results to a CSV file and generates a README card using a template.
+
+    Args:
+        best_tags: The tags corresponding to the best model configuration.
+        model_name: The name to use for the exported model (e.g., "Mice-lX+Y").
+        csv_results: The results dataframe to save as CSV.
+        md_results: The results dataframe to format in the README.
+        learners: The list of learner tasks to search for the best model's task.
+        all_weights: The list of all weight-saving tasks to find the best model's weights.
+        best_cfg: The configuration of the best model, used for README generation.
+        resultspath: The base path where the model artifacts and results should be saved.
+        card_template_txt: Optional Jinja2 template string for the README card.
+        aggregations: Optional dict of dataset aggregations to include in the README results.
+    """
     models_path = resultspath / "models"
     best_model_path = models_path / model_name
     best_model_path.mkdir(parents=True, exist_ok=True)
@@ -361,3 +375,12 @@ def export_model(
 
         with open(best_model_path / "config.yaml", "w") as f:
             yaml.dump(asdict(best_cfg.learner), f, default_flow_style=False)
+
+    # 4. Export to HF format
+    best_model_loader = get_task_by_tags(all_weights, best_tags)
+    if best_model_loader:
+        logger.info(f"Exporting model to HF format at {best_model_path}")
+        hub = TorchHFHub(best_model_loader)
+        hub.save_pretrained(best_model_path)
+    else:
+        logger.warning(f"Could not find model task for tags {best_tags} in all_weights")

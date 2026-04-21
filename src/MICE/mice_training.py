@@ -51,16 +51,23 @@ logging.basicConfig(level=logging.INFO)
 
 
 # TODO format as Mice-lX+Y
-def get_name_from_tags(model_tags: dict) -> str:
+def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     """Creates the HF id from tags using formatting conventions."""
-    loss = model_tags.get("loss", "")
     base = model_tags.get("base", "")
-    # try to get prettier name
+    base = backbone_names_lower.get(base, base).replace("/", "-")
+
+    n_ctx_layers = model_tags.get(
+        "n_contextualization_layers", cfg.n_contextualization_layers
+    )
+    n_inter_layers = model_tags.get("n_interaction_layers", cfg.n_interaction_layers)
+
+    loss = model_tags.get("loss", "")
     loss = loss_names.get(loss, loss).replace("/", "-")
+    # try to get prettier name
     if len(loss):
         loss = f"-{loss}"
-    base = backbone_names_lower.get(base, base).replace("/", "-")
-    return f"mice-{base}{loss}"
+
+    return f"Mice-l{n_ctx_layers}+{n_inter_layers}-{base}{loss}"
 
 
 @learning_experiment()
@@ -377,7 +384,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                 best_model_df, aggregations=aggregation_hf
             )
 
-            model_name = get_name_from_tags(best_tags)
+            model_name = get_name_from_tags(best_tags, all_configs[0])
             if (helper.xp.resultspath / "models" / model_name).exists():
                 scorer_path = scorer_tagspath.replace("/", "-")
                 logging.warning(
@@ -395,7 +402,6 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                 best_cfg=best_cfg,
                 resultspath=helper.xp.resultspath,
                 card_template_txt=card_template_txt,
-                aggregations=aggregation_hf,
             )
 
         if best_models_list:

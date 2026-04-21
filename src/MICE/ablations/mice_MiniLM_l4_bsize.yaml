@@ -4,7 +4,7 @@ description:
     Base Training for MiniLM-based MICE model.
 
 module: MICE.mice_training
-pre_experiment: pre_experiment
+# pre_experiment: pre_experiment
 parent: ../mice_MiniLM_l4.yaml
 
 

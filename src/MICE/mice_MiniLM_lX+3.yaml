@@ -4,7 +4,7 @@ description:
     Train Mice Models with 3 interactions layers
 
 module: MICE.mice_training
-pre_experiment: pre_experiment
+# pre_experiment: pre_experiment
 parent: ./mice_MiniLM_l4.yaml
 
 seed: 12 # To mimick the HF xp

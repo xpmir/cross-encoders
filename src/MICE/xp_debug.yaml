@@ -5,7 +5,7 @@ description:
     So that only ettin-150m is launched with infoNCE loss
 
 module: MICE.mice_training
-pre_experiment: pre_experiment
+# pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 1

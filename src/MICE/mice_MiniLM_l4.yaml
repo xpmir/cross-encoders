@@ -4,7 +4,7 @@ description:
     Base Training for MiniLM-based MICE model.
 
 module: MICE.mice_training
-pre_experiment: pre_experiment
+# pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 2
@@ -53,6 +53,7 @@ retrieval:
 base: microsoft/MiniLM-L12-H384-uncased
 n_contextualization_layers: 4
 n_interaction_layers: 3
+mask_cls_to_doc: false
 
 #### Params that are grid searched
 grid_search:
