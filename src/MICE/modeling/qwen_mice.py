@@ -389,8 +389,9 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
                 # 3. Cross-Attention Block (CLS only)
                 if x_d is not None and not self.mask_cls_to_doc:
                     residual = x_q
+                    normed_x_q = layer.input_layernorm(x_q)
                     x_q = layer.cross_attn(
-                        layer.input_layernorm(x_q),
+                        normed_x_q,
                         encoder_hidden_states=layer.input_layernorm(x_d),
                         encoder_attention_mask=cross_mask[:, :, 0:1, :],
                     )

@@ -1,6 +1,11 @@
+"""
+Tests for the MICE model.
+run manually with `pytest tests/test_mice.py` or `uv run pytest tests/test_mice.py -v`
+"""
 import torch
 import logging
 import tempfile
+import pytest
 from pathlib import Path
 from MICE.modeling.mice import mice_scorer, MiceCrossEncoder
 from xpmir.letor.records import PointwiseItems
@@ -9,7 +14,7 @@ from xpm_torch.huggingface import TorchHFHub
 
 
 class TestMiceForwardTask(LightweightTask):
-    """Tests Mice Loading, scoring a PointWiseItem, and compare outpus after reloading for checkpointing"""
+    """Tests Mice Loading, scoring a PointWiseItem, and compare outputs after reloading for checkpointing"""
 
     scorer: Param[MiceCrossEncoder]
 
@@ -20,12 +25,9 @@ class TestMiceForwardTask(LightweightTask):
         print(f"Step 1: Instantiating the MICE model (ID: {id(self.scorer)})...")
 
         # Initialize the model components (experimaestro way)
-        # Safe to call multiple times now because it's idempotent in BertMiceCrossEncoder
         self.scorer.initialize()
 
         print("Step 2: Preparing the dataset...")
-        # We use PointwiseItems.from_texts to easily create a small dataset
-        # This matches the query-document pair format expected by the model
         queries = ["What is the capital of France?"]
         documents = ["Paris is the capital and most populous city of France."]
 
@@ -33,12 +35,10 @@ class TestMiceForwardTask(LightweightTask):
         input_records = PointwiseItems.from_texts(topics=queries, documents=documents)
 
         print("Step 3: Running a forward pass...")
-        # Switch to evaluation mode
         self.scorer.eval()
 
         # Run forward pass without gradient computation
         with torch.no_grad():
-            # The model's forward method accepts BaseItems (like PointwiseItems)
             output = self.scorer(input_records)
 
         print(f"Model output (score): {output}")
@@ -47,29 +47,36 @@ class TestMiceForwardTask(LightweightTask):
         assert isinstance(output, torch.Tensor), "Output should be a torch.Tensor"
         assert output.shape == (1,), f"Expected output shape (1,), got {output.shape}"
 
-        print(
-            "\nForward pass successful! MICE model is correctly instantiated and working."
-        )
+        print("\nForward pass successful!")
 
 
-def test_mice(model_id, n_contextualization_layers):
-    """tests mice loading, forward pass saving."""
-    # mice_scorer returns the model and a list of initialization tasks
-    # that need to be executed to load the weights
+@pytest.mark.parametrize("model_id", [
+    "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
+    "jhu-clsp/ettin-encoder-32m",           # ModernBERT
+    "Qwen/Qwen2.5-0.5B-Instruct",           # Qwen
+])
+@pytest.mark.parametrize("mask_cls_to_doc", [True, False])
+@pytest.mark.parametrize("n_contextualization_layers", [3])
+def test_mice(model_id, n_contextualization_layers, mask_cls_to_doc):
+    """Tests MICE loading, forward pass, and weight persistence across a grid of parameters."""
+
+    # Initialize scorer configuration
     scorer_cfg, init_tasks = mice_scorer(
-        hf_id=model_id, n_contextualization_layers=n_contextualization_layers
+        hf_id=model_id,
+        n_contextualization_layers=n_contextualization_layers,
+        mask_cls_to_doc=mask_cls_to_doc
     )
-
-    print(scorer_cfg)
 
     # Create and run the forward pass task
     test_forward_task = TestMiceForwardTask.C(scorer=scorer_cfg).instance()
-    # Run initialization tasks if they exist
+
+    # Run initialization tasks (weight loading)
     for init_task in init_tasks:
         init_task.instance().execute()
+
     test_forward_task.execute()
 
-    # --- Loading / Saving check ---
+    # --- Persistence Verification ---
     model = test_forward_task.scorer
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -77,68 +84,28 @@ def test_mice(model_id, n_contextualization_layers):
         save_path = tmp_path / "model"
         hf_save_path = tmp_path / "hf_model"
 
-        # 2. Save model
-        logging.info(f"Saving model to {save_path}")
+        # 1. Save model weights
         model.save_model(save_path)
 
-        # 3. Reload model using loader_config
-        # We use the config scorer_cfg here instead of the instance model
+        # 2. Reload model using loader_config
         loader_config = scorer_cfg.loader_config(save_path)
         loader = loader_config.instance()
         loader.execute()
         reloaded_model = loader.model
 
-        logging.info(f"Model reloaded: {reloaded_model}")
-
-        # 4. Verify weights
-        # We check the classifier weights as representative
+        # 3. Verify weights are identical
         assert torch.allclose(
             model.classifier.weight, reloaded_model.classifier.weight
-        ), "Classifier weights mismatch!"
+        ), "Classifier weights mismatch after standard reload!"
 
-        logging.info(
-            "SUCCESS: Model saved and reloaded correctly with identical weights."
-        )
-
-        # 5. HF Export to disk
-        logging.info(f"Exporting model to HF format at {hf_save_path} with loader {loader_config}")
-        # TorchHFHub takes a Loader configuration
+        # 4. HF Export/Import Roundtrip
         hub = TorchHFHub(loader_config)
         hub.save_pretrained(hf_save_path)
 
-        # 6. Load as if from HF
-        logging.info(f"Loading model from HF-formatted directory {hf_save_path}")
-
-        # Use pretrained_loader to get the loader instance
-        # (This matches the multi-step logic: loader -> execute -> model)
         hf_loader = TorchHFHub.pretrained_loader(hf_save_path, as_instance=True)
         hf_loader.execute()
         hf_model = hf_loader.model
 
-        logging.info(f"HF Model reloaded: {hf_model}")
-
-        # 7. Verify HF weights
         assert torch.allclose(model.classifier.weight, hf_model.classifier.weight), (
-            "HF Classifier weights mismatch!"
+            "Classifier weights mismatch after HF roundtrip!"
         )
-        logging.info("SUCCESS: HF model saved and reloaded correctly.")
-
-
-if __name__ == "__main__":
-    # os.environ["HF_HUB_OFFLINE"] = "1"
-    # os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
-
-    # Set up logging to see what's happening
-    logging.basicConfig(level=logging.INFO)
-
-    # MiniLM is a good candidate as it is fast and small
-    model_ids = [
-        "cross-encoder/ms-marco-MiniLM-L-6-v2",
-        # "jhu-clsp/ettin-encoder-32m",
-        # "Qwen/Qwen3-0.6B",
-    ]
-    n_contextualization_layers = 3
-
-    for model_id in model_ids:
-        print("\n\n ### TESTING ", model_id)
-        test_mice(model_id, n_contextualization_layers)

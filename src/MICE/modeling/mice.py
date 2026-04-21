@@ -427,13 +427,11 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
                 # 3. Cross-Attention (CLS only)
                 if doc_hidden_states is not None and not self.mask_cls_to_doc:
                     # Slice masks for CLS token
-                    # head_mask=None, past_key_value=None
+                    # BertAttention.forward(hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None, ...)
                     q_hidden = layer.crossattention(
-                        q_hidden,
-                        None,  # attention_mask (not used for cross-attn query usually)
-                        None,  # head_mask
-                        doc_hidden_states,
-                        d_ext_mask[:, :, 0:1, :],
+                        hidden_states=q_hidden,
+                        encoder_hidden_states=doc_hidden_states,
+                        encoder_attention_mask=d_ext_mask[:, :, 0:1, :],
                     )[0]
 
                 # 4. MLP (CLS only)
