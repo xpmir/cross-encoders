@@ -8,11 +8,11 @@ module: MICE.mice_training
 parent: ../mice_MiniLM_l4.yaml
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 2
+nb_repetitions: 3
 
-evaluation: #default = Minified tests
-    all_datasets: false
-    in_domain: true
+# evaluation: #default = Minified tests
+#     all_datasets: false
+#     in_domain: true
 
 ## Mice Model parameters
 base: microsoft/MiniLM-L12-H384-uncased

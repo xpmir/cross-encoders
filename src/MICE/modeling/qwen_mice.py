@@ -366,15 +366,49 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         # Mask for Cross-Attention (Query attending to Doc) shape [batch, 1, seq_len_query, seq_len_doc]
         cross_mask = self.get_cross_attention_mask(query_mask, doc_mask, x_q.dtype)
 
-        for layer in self.top_layers:
-            x_q = layer(
-                x_q,
-                attention_mask=None,
-                encoder_hidden_states=x_d,
-                encoder_attention_mask=cross_mask,
-                position_ids=q_pos,
-                position_embeddings=q_position_embeddings,
-            )[0]
+        num_top = len(self.top_layers)
+        for i, layer in enumerate(self.top_layers):
+            if i == num_top - 1 and self.pooling_method == "cls":
+                # Optimized last layer: Self-Attention on full sequence,
+                # then slice to CLS for Cross-Attention and MLP.
+
+                # 1. Self-Attention Block (Full)
+                residual = x_q
+                normed_x_q = layer.input_layernorm(x_q)
+                attn_out, _ = layer.self_attn(
+                    normed_x_q,
+                    attention_mask=None,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )
+                x_q = residual + attn_out
+
+                # 2. Slice to CLS
+                x_q = x_q[:, 0:1, :]
+
+                # 3. Cross-Attention Block (CLS only)
+                if x_d is not None and not self.mask_cls_to_doc:
+                    residual = x_q
+                    x_q = layer.cross_attn(
+                        layer.input_layernorm(x_q),
+                        encoder_hidden_states=layer.input_layernorm(x_d),
+                        encoder_attention_mask=cross_mask[:, :, 0:1, :],
+                    )
+                    x_q = residual + x_q
+
+                # 4. MLP Block (CLS only)
+                residual = x_q
+                x_q = layer.mlp(layer.post_attention_layernorm(x_q))
+                x_q = residual + x_q
+            else:
+                x_q = layer(
+                    x_q,
+                    attention_mask=None,
+                    encoder_hidden_states=x_d,
+                    encoder_attention_mask=cross_mask,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )[0]
 
         x_q = self.final_norm(x_q)
 
