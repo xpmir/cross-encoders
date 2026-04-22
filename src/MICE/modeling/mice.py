@@ -277,6 +277,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
 class BertMiceCrossEncoder(MiceCrossEncoder):
     """Mid-Fusion Cross Encoder based on BERT Architecture."""
 
+    _version: Constant[int] = field(default=3, overrides=True)
+    """Model version"""
+
     def __initialize__(self):
         super().__initialize__()
         self.head_config.is_decoder = True
@@ -413,42 +416,29 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         num_top = len(self.top_layers)
         for i, layer in enumerate(self.top_layers):
+            # Cross attention First (full sequence) to allow better information flow from document tokens
+            if doc_hidden_states is not None and not self.mask_cls_to_doc:
+                # Slice masks for CLS token
+                # BertAttention.forward(hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None, ...)
+                q_hidden = layer.crossattention(
+                    hidden_states=q_hidden,
+                    encoder_hidden_states=doc_hidden_states,
+                    encoder_attention_mask=d_ext_mask[:, :, 0:1, :],
+                )[0]
+
+            # Then Self-Attention (Full)
+            # BertLayer.attention returns (attention_output, ...)
+            q_hidden = layer.attention(q_hidden, q_ext_mask)[0]
             if i == num_top - 1:
                 # Optimized last layer: Self-Attention on full sequence,
-                # then slice to CLS for Cross-Attention and MLP.
-
-                # 1. Self-Attention (Full)
-                # BertLayer.attention returns (attention_output, ...)
-                q_hidden = layer.attention(q_hidden, q_ext_mask)[0]
-
-                # 2. Slice to CLS
+                # Slice to CLS token for MLP and output
                 q_hidden = q_hidden[:, 0:1, :]
 
-                # 3. Cross-Attention (CLS only)
-                if doc_hidden_states is not None and not self.mask_cls_to_doc:
-                    # Slice masks for CLS token
-                    # BertAttention.forward(hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None, ...)
-                    q_hidden = layer.crossattention(
-                        hidden_states=q_hidden,
-                        encoder_hidden_states=doc_hidden_states,
-                        encoder_attention_mask=d_ext_mask[:, :, 0:1, :],
-                    )[0]
-
-                # 4. MLP (CLS only)
-                # BertLayer.intermediate returns hidden_states
-                # BertLayer.output does residual + norm
-                intermediate_output = layer.intermediate(q_hidden)
-                q_hidden = layer.output(intermediate_output, q_hidden)
-            else:
-                # BertLayer with is_decoder=True accepts:
-                # (hidden_states, attention_mask, encoder_hidden_states, encoder_attention_mask)
-                layer_out = layer(
-                    hidden_states=q_hidden,  # Query (Self-Attn)
-                    attention_mask=q_ext_mask,
-                    encoder_hidden_states=doc_hidden_states,  # Document (Cross-Attn Key/Value)
-                    encoder_attention_mask=d_ext_mask,
-                )
-                q_hidden = layer_out
+            # 4. MLP (CLS only)
+            # BertLayer.intermediate returns hidden_states
+            # BertLayer.output does residual + norm
+            intermediate_output = layer.intermediate(q_hidden)
+            q_hidden = layer.output(intermediate_output, q_hidden)
 
         # 4. Score (Use [CLS] of the Query)
         if self.pooler is not None:
