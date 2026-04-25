@@ -126,6 +126,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
     n_interaction_layers: Param[Optional[int]] = None
     """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
+    cross_attn_first: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to perform cross-attention before self-attention in the top layers."""
+
     mask_cls_to_doc: Param[bool] = True
     """Whether to mask the [CLS] token from attending to document tokens."""
 
@@ -351,6 +354,80 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
             x = layer(x, ext_mask)
         return x
 
+    def forward_inverted_transformer(
+        self, q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask
+    ):
+        """Inverted transformer architecture: Cross-Attention followed by Self-Attention."""
+        num_top = len(self.top_layers)
+        for i, layer in enumerate(self.top_layers):
+            # Cross attention First (full sequence) to allow better information flow from document tokens
+            if doc_hidden_states is not None and not self.mask_cls_to_doc:
+                # BertAttention.forward(hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None, ...)
+                q_hidden = layer.crossattention(
+                    hidden_states=q_hidden,
+                    encoder_hidden_states=doc_hidden_states,
+                    encoder_attention_mask=d_ext_mask,  # Use full mask
+                )[0]
+
+            # Then Self-Attention (Full)
+            # BertLayer.attention returns (attention_output, ...)
+            q_hidden = layer.attention(q_hidden, q_ext_mask)[0]
+
+            if i == num_top - 1:
+                # Optimized last layer: Slice to CLS token for MLP and output
+                q_hidden = q_hidden[:, 0:1, :]
+
+            # 4. MLP (CLS only)
+            # BertLayer.intermediate returns hidden_states
+            # BertLayer.output does residual + norm
+            intermediate_output = layer.intermediate(q_hidden)
+            q_hidden = layer.output(intermediate_output, q_hidden)
+        return q_hidden
+
+    def forward_vanilla_transformer(
+        self, q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask
+    ):
+        """Vanilla transformer architecture: Self-Attention followed by Cross-Attention."""
+        num_top = len(self.top_layers)
+        for i, layer in enumerate(self.top_layers):
+            if i == num_top - 1:
+                # Optimized last layer: Self-Attention on full sequence,
+                # then slice to CLS for Cross-Attention and MLP.
+
+                # 1. Self-Attention (Full)
+                # BertLayer.attention returns (attention_output, ...)
+                q_hidden = layer.attention(q_hidden, q_ext_mask)[0]
+
+                # 2. Slice to CLS
+                q_hidden = q_hidden[:, 0:1, :]
+
+                # 3. Cross-Attention (CLS only)
+                if doc_hidden_states is not None and not self.mask_cls_to_doc:
+                    # Slice masks for CLS token
+                    # BertAttention.forward(hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None, ...)
+                    q_hidden = layer.crossattention(
+                        hidden_states=q_hidden,
+                        encoder_hidden_states=doc_hidden_states,
+                        encoder_attention_mask=d_ext_mask[:, :, 0:1, :],
+                    )[0]
+
+                # 4. MLP (CLS only)
+                # BertLayer.intermediate returns hidden_states
+                # BertLayer.output does residual + norm
+                intermediate_output = layer.intermediate(q_hidden)
+                q_hidden = layer.output(intermediate_output, q_hidden)
+            else:
+                # BertLayer with is_decoder=True accepts:
+                # (hidden_states, attention_mask, encoder_hidden_states, encoder_attention_mask)
+                layer_out = layer(
+                    hidden_states=q_hidden,  # Query (Self-Attn)
+                    attention_mask=q_ext_mask,
+                    encoder_hidden_states=doc_hidden_states,  # Document (Cross-Attn Key/Value)
+                    encoder_attention_mask=d_ext_mask,
+                )
+                q_hidden = layer_out
+        return q_hidden
+
     def forward(
         self,
         inputs: BaseItems,
@@ -414,31 +491,14 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
             q_hidden = self.adapter(q_hidden)
             doc_hidden_states = self.adapter(doc_hidden_states)
 
-        num_top = len(self.top_layers)
-        for i, layer in enumerate(self.top_layers):
-            # Cross attention First (full sequence) to allow better information flow from document tokens
-            if doc_hidden_states is not None and not self.mask_cls_to_doc:
-                # Slice masks for CLS token
-                # BertAttention.forward(hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None, ...)
-                q_hidden = layer.crossattention(
-                    hidden_states=q_hidden,
-                    encoder_hidden_states=doc_hidden_states,
-                    encoder_attention_mask=d_ext_mask[:, :, 0:1, :],
-                )[0]
-
-            # Then Self-Attention (Full)
-            # BertLayer.attention returns (attention_output, ...)
-            q_hidden = layer.attention(q_hidden, q_ext_mask)[0]
-            if i == num_top - 1:
-                # Optimized last layer: Self-Attention on full sequence,
-                # Slice to CLS token for MLP and output
-                q_hidden = q_hidden[:, 0:1, :]
-
-            # 4. MLP (CLS only)
-            # BertLayer.intermediate returns hidden_states
-            # BertLayer.output does residual + norm
-            intermediate_output = layer.intermediate(q_hidden)
-            q_hidden = layer.output(intermediate_output, q_hidden)
+        if self.cross_attn_first:
+            q_hidden = self.forward_inverted_transformer(
+                q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask
+            )
+        else:
+            q_hidden = self.forward_vanilla_transformer(
+                q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask
+            )
 
         # 4. Score (Use [CLS] of the Query)
         if self.pooler is not None:
