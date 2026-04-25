@@ -293,34 +293,6 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     """
 
 
-@configuration()
-class Mice_FineTuning(CE_FineTuning):
-    ## MICE specific configuration
-    n_contextualization_layers: int = 6
-    """Number of bottom encoder layers that process query and document independently"""
-
-    n_interaction_layers: Optional[int] = None
-    """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
-
-    mask_cls_to_doc: bool = True
-    """Whether to mask the [CLS] token from attending to document tokens."""
-
-    mask_query_to_cls: bool = True
-    """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
-
-    freeze_base: bool = False
-    """Whether to freeze the bottom layers during finetuning"""
-
-    random_top_layers: bool = False
-    """Whether to initialize top layers randomly instead of copying from backbone"""
-
-    global_cls_token: bool = False
-    """Whether to add a fresh [CLS] token before the top layers."""
-
-    compress_dim: float = 1.0
-    """Factor by which to divide the hidden dimensions of the top layers"""
-
-
 def set_nested_attr(obj: Any, path: str, value: Any):
     """Sets a nested attribute on an object."""
     keys = path.split(".")

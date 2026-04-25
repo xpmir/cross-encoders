@@ -13,6 +13,7 @@ It leverages shared utilities from `training_utils`, `retrievers`, and
 import logging
 import shutil
 from functools import partial
+from typing import Optional
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -30,11 +31,12 @@ from xpmir.papers.results import PaperResults
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
+from xpmir.papers import configuration
 
 from MICE.modeling.mice import mice_scorer
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
-from configuration import Mice_FineTuning, generate_grid
+from configuration import generate_grid, CE_FineTuning
 from tests import build_tests
 from format import aggregation_hf, dataframe_to_latex, loss_names, backbone_names_lower
 
@@ -48,6 +50,34 @@ from training_utils import (
 )
 
 logging.basicConfig(level=logging.INFO)
+
+
+@configuration()
+class Mice_FineTuning(CE_FineTuning):
+    ## MICE specific configuration
+    n_contextualization_layers: int = 6
+    """Number of bottom encoder layers that process query and document independently"""
+
+    n_interaction_layers: Optional[int] = None
+    """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
+
+    mask_cls_to_doc: bool = True
+    """Whether to mask the [CLS] token from attending to document tokens."""
+
+    mask_query_to_cls: bool = True
+    """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
+
+    freeze_base: bool = False
+    """Whether to freeze the bottom layers during finetuning"""
+
+    random_top_layers: bool = False
+    """Whether to initialize top layers randomly instead of copying from backbone"""
+
+    global_cls_token: bool = False
+    """Whether to add a fresh [CLS] token before the top layers."""
+
+    compress_dim: float = 1.0
+    """Factor by which to divide the hidden dimensions of the top layers"""
 
 
 # TODO format as Mice-lX+Y

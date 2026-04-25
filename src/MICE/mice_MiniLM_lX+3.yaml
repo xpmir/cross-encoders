@@ -1,4 +1,4 @@
-id: train_mice_miniLM_X+3
+id: train_mice_miniLM_X+3_inverted
 title: "Mice-MiniLM Training"
 description:
     Train Mice Models with 3 interactions layers

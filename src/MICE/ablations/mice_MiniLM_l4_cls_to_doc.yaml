@@ -1,4 +1,4 @@
-id: train_mice_miniLM_abl_clstodoc
+id: train_mice_miniLM_abl_clstodoc_reversed
 title: "Mice-MiniLM Training"
 description:
     try All combinations of boolean flags for Mice training

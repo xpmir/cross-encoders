@@ -222,40 +222,55 @@ def identify_best_models(
 
 def add_dataset_aggregations(
     df: pd.DataFrame,
-    group_by_cols: list,
+    group_by_cols: list = None,
     aggregations: dict[str, list[str]] = None,
     add_mean: bool = True,
 ) -> pd.DataFrame:
     """Adds aggregate rows (e.g., mean across datasets) to the results dataframe."""
+
+    # Handle the mean aggregation by recursion
+    if add_mean:
+        unique_datasets = sorted(df["dataset"].unique().tolist())
+        if len(unique_datasets) > 1:
+            aggregations = (aggregations or {}).copy()
+            if "mean" not in aggregations:
+                aggregations["mean"] = unique_datasets
+        return add_dataset_aggregations(df, group_by_cols, aggregations, add_mean=False)
+
+    if not aggregations:
+        return df
+
     new_rows = []
 
-    def get_agg(mask, name):
-        subset = df[mask] if mask is not None else df
-        if group_by_cols:
-            agg = (
-                subset.groupby(group_by_cols, dropna=False)
-                .mean(numeric_only=True)
-                .reset_index()
+    for agg_name, datasets in aggregations.items():
+        present_datasets = df["dataset"].unique()
+        missing = [ds for ds in datasets if ds not in present_datasets]
+        if missing:
+            logger.warning(
+                f"Aggregation {agg_name} skipped because the following datasets are missing globally: {missing}"
             )
+            continue
+
+        mask = df["dataset"].isin(datasets)
+        subset = df[mask]
+
+        if group_by_cols:
+            grouped = subset.groupby(group_by_cols, dropna=False)
+            # Ensure to compute the means if and only if ALL datasets in the aggregation are present
+            # for each specific group (model)
+            counts = grouped["dataset"].nunique()
+            agg = grouped.mean(numeric_only=True)
+            agg = agg[counts == len(datasets)].reset_index()
         else:
-            agg = subset.mean(numeric_only=True).to_frame().T
-        agg["dataset"] = name
-        return agg
-
-    if aggregations:
-        for agg_name, datasets in aggregations.items():
-            present_datasets = df["dataset"].unique()
-            missing = [ds for ds in datasets if ds not in present_datasets]
-            if not missing:
-                mask = df["dataset"].isin(datasets)
-                new_rows.append(get_agg(mask, agg_name))
+            # Global mean
+            if subset["dataset"].nunique() == len(datasets):
+                agg = subset.mean(numeric_only=True).to_frame().T
             else:
-                logger.warning(
-                    f"Aggregation {agg_name} skipped because the following datasets are missing: {missing}"
-                )
+                agg = pd.DataFrame()
 
-    if add_mean and df["dataset"].nunique() > 1:
-        new_rows.append(get_agg(None, "mean"))
+        if not agg.empty:
+            agg["dataset"] = agg_name
+            new_rows.append(agg)
 
     if new_rows:
         new_rows = [row[row.columns.intersection(df.columns)] for row in new_rows]
