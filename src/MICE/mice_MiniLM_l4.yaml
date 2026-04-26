@@ -7,7 +7,7 @@ module: MICE.mice_training
 # pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 3
+nb_repetitions: 2
 
 
 retriever: ""

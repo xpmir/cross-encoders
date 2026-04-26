@@ -129,7 +129,7 @@ class MiceCrossEncoder(AbstractModuleScorer):
     cross_attn_first: Param[bool] = field(default=True, ignore_default=True)
     """Whether to perform cross-attention before self-attention in the top layers."""
 
-    mask_cls_to_doc: Param[bool] = True
+    mask_cls_to_doc: Param[bool] = False
     """Whether to mask the [CLS] token from attending to document tokens."""
 
     mask_query_to_cls: Param[bool] = True
@@ -361,13 +361,12 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         num_top = len(self.top_layers)
         for i, layer in enumerate(self.top_layers):
             # Cross attention First (full sequence) to allow better information flow from document tokens
-            if doc_hidden_states is not None and not self.mask_cls_to_doc:
-                # BertAttention.forward(hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None, ...)
-                q_hidden = layer.crossattention(
-                    hidden_states=q_hidden,
-                    encoder_hidden_states=doc_hidden_states,
-                    encoder_attention_mask=d_ext_mask,  # Use full mask
-                )[0]
+            # BertAttention.forward(hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None, ...)
+            q_hidden = layer.crossattention(
+                hidden_states=q_hidden,
+                encoder_hidden_states=doc_hidden_states,
+                encoder_attention_mask=d_ext_mask,
+            )[0]
 
             # Then Self-Attention (Full)
             # BertLayer.attention returns (attention_output, ...)
@@ -408,7 +407,7 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
                     q_hidden = layer.crossattention(
                         hidden_states=q_hidden,
                         encoder_hidden_states=doc_hidden_states,
-                        encoder_attention_mask=d_ext_mask[:, :, 0:1, :],
+                        encoder_attention_mask=d_ext_mask,
                     )[0]
 
                 # 4. MLP (CLS only)
@@ -473,16 +472,15 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
                 dim=1,
             )
 
-        # Mask for Self-Attention (Query) shape [batch, 1, seq_len_query, seq_len_query]
-        q_ext_mask = self.get_self_attention_mask(query_mask, q_hidden.dtype)
-
         if doc_hidden_states is None:
             # Process Doc through Bottom Layers
             doc_hidden_states = self.forward_bottom(
                 doc_ids, doc_mask
             )  # shape [batch, seq_len_doc, dim]
-            # 2. Prepare Masks for Top Layers
 
+        # 2. Prepare Masks for Top Layers
+        # Mask for Self-Attention (Query) shape [batch, 1, seq_len_query, seq_len_query]
+        q_ext_mask = self.get_self_attention_mask(query_mask, q_hidden.dtype)
         # Mask for Cross-Attention (Query attending to Doc) shape [batch, 1, seq_len_query, seq_len_doc]
         d_ext_mask = self.get_cross_attention_mask(query_mask, doc_mask, q_hidden.dtype)
 

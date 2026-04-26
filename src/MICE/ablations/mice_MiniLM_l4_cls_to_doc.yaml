@@ -7,9 +7,6 @@ module: MICE.mice_training
 # pre_experiment: pre_experiment
 parent: ../mice_MiniLM_l4.yaml
 
-seed: 12 # To mimick the HF xp
-nb_repetitions: 3
-
 # evaluation: #default = Minified tests
 #     all_datasets: false
 #     in_domain: true
