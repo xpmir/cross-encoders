@@ -36,7 +36,7 @@ from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
 from xpmir.text.huggingface.tokenizers import get_default_max_len
 
-from format import dataframe_to_latex, aggregation_hf
+from format import dataframe_to_latex, aggregations
 from tests import build_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from retrievers import splade_retriever, bm25_retriever
@@ -208,17 +208,23 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     # Identify available metric columns and convert to numeric
     all_metric_cols = [col for col in df.columns if col[0] == "metric"]
     df[all_metric_cols] = df[all_metric_cols].apply(pd.to_numeric, downcast="float")
+
+    # Flatten MultiIndex columns and remove duplicates (e.g., 'dataset' might be both a tag and a column)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[1] if col[1] else col[0] for col in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]
+
     cols_to_drop = [col for col in df.columns if "index_doc" in str(col).lower()]
     df = df.drop(columns=cols_to_drop, errors="ignore")
 
     tag_names = ["first_stage", "scorer", "scorer_type"]  # tags to group by
-    group_by_tags = [("tag", k) for k in sorted(list(tag_names))]
+    group_by_tags = sorted(list(tag_names))
 
     # Add aggregations
     df = add_dataset_aggregations(
         df,
         group_by_cols=group_by_tags,
-        aggregations=aggregation_hf,
+        aggregations=aggregations,
         add_mean=True,
     )
     logging.info(f"Final DataFrame:\n{df}")

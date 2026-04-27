@@ -1,7 +1,8 @@
-id: train_mice_miniLM_X+3_inverted
+id: train_mice_miniLM_lX+3
 title: "Mice-MiniLM Training"
 description:
-    Train Mice Models with 3 interactions layers
+    Grid search the necessary number of contextualization layers
+    For Mice models with 3 interactions layers
 
 module: MICE.mice_training
 # pre_experiment: pre_experiment

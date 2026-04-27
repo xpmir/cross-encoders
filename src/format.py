@@ -42,7 +42,16 @@ backbone_names_lower = {
 
 aggregations = {
     "In Domain": ["msmarco_dev", "trec2019", "trec2020"],
-    "BEIR13 (Semi OOD)": [
+    "minified": [
+        "msmarco_dev",
+        "trec2019",
+        "trec2020",
+        "scifact",
+        "touche",
+        "fiqa",
+        "nfcorpus",
+    ],
+    "BEIR13": [
         "arguana",
         "climate_fever",
         "dbpedia",
@@ -70,7 +79,7 @@ aggregations = {
 ## Aggregations used in the HF Card (keep short)
 aggregation_hf = {
     "Mean In Domain": aggregations["In Domain"],
-    "BEIR 13": aggregations["BEIR13 (Semi OOD)"],
+    "BEIR 13": aggregations["BEIR13"],
     "LoTTE (OOD)": aggregations["OOD"],
     "Nano BEIR": aggregations["Nano BEIR"],
 }
@@ -212,7 +221,9 @@ def dataframe_to_latex(
             if metric_col in s and "var" in s and ndcg_var_col is None:
                 ndcg_var_col = col
 
-    # Collect values: rows = models, cols = datasets
+    # Final fallback: just look for the metric name itself if no mean/var columns found
+    if ndcg_mean_col is None:
+        ndcg_mean_col = find_col_by_value(metric_col)
     table: dict = {}
     table_values: dict = {}  # numeric mean values for averaging
     table_meta: dict = {}  # store first_stage/scorer for each model label

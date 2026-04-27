@@ -40,6 +40,12 @@ class Losses(str, Enum):
     infoNCE_RankDistiLLM = "infoNCE_RankDistiLLM"
     """InfoNCE using the negatives sampled by Schlatt et al. 2025 with ColBERTv2"""
 
+    BCE_RankDistiLLM = "bce_RankDistiLLM"
+    """Binary Cross Entropy loss with ColBERTv2 negatives"""
+
+    hingeLoss_RankDistiLLM = "hingeLoss_RankDistiLLM"
+    """Hinge loss with ColBERTv2 negatives"""
+
     marginMSE = "marginMSE"
     """Margin Mean Squared Error loss from hofstatter et al. 2020"""
 

@@ -1,16 +1,14 @@
-id: train_mice_miniLM_l4
-title: "Mice-MiniLM Training"
+id: baseline_MiniLM_CE
+title: "Training MiniLM Cross-Encoder"
 description:
-    Base Training for MiniLM-based MICE model.
+    This model is trained with the same hyperparams as 'train_mice_miniLM_l4'
+    Serving as a baseline
 
-module: MICE.mice_training
+module: cross_encoders_training.experiment
 # pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 3
-
-
-retriever: ""
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -46,17 +44,7 @@ retrieval:
     k: 1000
     batch_size: 128
 
-# evaluation: #default = Minified tests
-#     all_datasets: false
-#     in_domain: true
+# evaluation:
+#     all_datasets: true
 
 base: microsoft/MiniLM-L12-H384-uncased
-n_contextualization_layers: 4
-n_interaction_layers: 3
-mask_cls_to_doc: false
-
-#### Params that are grid searched
-grid_search:
-    learner.loss:
-        values_list:
-            - marginMSE

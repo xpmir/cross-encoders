@@ -38,7 +38,7 @@ from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
 from configuration import generate_grid, CE_FineTuning
 from tests import build_tests
-from format import aggregation_hf, dataframe_to_latex, loss_names, backbone_names_lower
+from format import aggregations, dataframe_to_latex, loss_names, backbone_names_lower
 
 from training_utils import (
     build_trainer,
@@ -351,7 +351,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
     df_with_aggs = add_dataset_aggregations(
         df,
         group_by_cols=model_id_tags,
-        aggregations=aggregation_hf,
+        aggregations=aggregations,
         add_mean=True,  # will add 'mean' dataset at the end
     )
 
@@ -411,7 +411,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
 
             # Format and Export artifacts
             csv_results, md_results = format_model_results(
-                best_model_df, aggregations=aggregation_hf
+                best_model_df, aggregations=aggregations
             )
 
             model_name = get_name_from_tags(best_tags, all_configs[0])
