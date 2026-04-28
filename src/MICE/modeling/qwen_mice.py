@@ -300,8 +300,130 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         self.dropout_layer = nn.Dropout(getattr(self.config, "classifier_dropout", 0.1))
         self.classifier = nn.Linear(self.config.hidden_size, 1)
 
+    def forward_vanilla_transformer(
+        self, x_q, x_d, cross_mask, q_pos, q_position_embeddings
+    ):
+        """Vanilla transformer architecture: Self-Attention followed by Cross-Attention."""
+        num_top = len(self.top_layers)
+        for i, layer in enumerate(self.top_layers):
+            if i == num_top - 1 and self.pooling_method == "cls":
+                # Optimized last layer: Self-Attention on full sequence,
+                # then slice to CLS for Cross-Attention and MLP.
+
+                # 1. Self-Attention Block (Full)
+                residual = x_q
+                normed_x_q = layer.input_layernorm(x_q)
+                attn_out, _ = layer.self_attn(
+                    normed_x_q,
+                    attention_mask=None,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )
+                x_q = residual + attn_out
+
+                # 2. Slice to CLS
+                x_q = x_q[:, 0:1, :]
+
+                # 3. Cross-Attention Block (CLS only)
+                if x_d is not None and not self.mask_cls_to_doc:
+                    residual = x_q
+                    normed_x_q = layer.input_layernorm(x_q)
+                    x_q = layer.cross_attn(
+                        normed_x_q,
+                        encoder_hidden_states=layer.input_layernorm(x_d),
+                        encoder_attention_mask=cross_mask[:, :, 0:1, :],
+                    )
+                    x_q = residual + x_q
+
+                # 4. MLP Block (CLS only)
+                residual = x_q
+                x_q = layer.mlp(layer.post_attention_layernorm(x_q))
+                x_q = residual + x_q
+            else:
+                x_q = layer(
+                    x_q,
+                    attention_mask=None,
+                    encoder_hidden_states=x_d,
+                    encoder_attention_mask=cross_mask,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )[0]
+        return x_q
+
+    def forward_inverted_transformer(
+        self, x_q, x_d, cross_mask, q_pos, q_position_embeddings
+    ):
+        """Inverted transformer architecture: Cross-Attention followed by Self-Attention."""
+        num_top = len(self.top_layers)
+        for i, layer in enumerate(self.top_layers):
+            if i == num_top - 1 and self.pooling_method == "cls":
+                # Optimized last layer: Cross-Attention on full sequence,
+                # then Self-Attention, then slice to CLS for MLP.
+
+                # 1. Cross-Attention Block (Full)
+                if x_d is not None:
+                    residual = x_q
+                    normed_x_q = layer.input_layernorm(x_q)
+                    x_q = layer.cross_attn(
+                        normed_x_q,
+                        encoder_hidden_states=layer.input_layernorm(x_d),
+                        encoder_attention_mask=cross_mask,
+                    )
+                    x_q = residual + x_q
+
+                # 2. Self-Attention Block (Full)
+                residual = x_q
+                normed_x_q = layer.input_layernorm(x_q)
+                attn_out, _ = layer.self_attn(
+                    normed_x_q,
+                    attention_mask=None,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )
+                x_q = residual + attn_out
+
+                # 3. Slice to CLS
+                x_q = x_q[:, 0:1, :]
+
+                # 4. MLP Block (CLS only)
+                residual = x_q
+                x_q = layer.mlp(layer.post_attention_layernorm(x_q))
+                x_q = residual + x_q
+            else:
+                # Inverted logic: Cross-attn followed by Self-attn
+                # 1. Cross-Attention Block
+                if x_d is not None:
+                    residual = x_q
+                    normed_x_q = layer.input_layernorm(x_q)
+                    x_q = layer.cross_attn(
+                        normed_x_q,
+                        encoder_hidden_states=layer.input_layernorm(x_d),
+                        encoder_attention_mask=cross_mask,
+                    )
+                    x_q = residual + x_q
+
+                # 2. Self-Attention Block
+                residual = x_q
+                normed_x_q = layer.input_layernorm(x_q)
+                attn_out, _ = layer.self_attn(
+                    normed_x_q,
+                    attention_mask=None,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )
+                x_q = residual + attn_out
+
+                # 3. MLP Block
+                residual = x_q
+                hidden_states = layer.post_attention_layernorm(x_q)
+                hidden_states = layer.mlp(hidden_states)
+                x_q = residual + hidden_states
+        return x_q
+
     def forward(
-        self, inputs: BaseItems, tokenized: Optional[MICETokenizedTexts] = None
+        self,
+        inputs: BaseItems,
+        tokenized: Optional[MICETokenizedTexts] = None,
     ):
         if tokenized is None:
             tokenized = self.batch_tokenize(inputs)
@@ -366,50 +488,14 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         # Mask for Cross-Attention (Query attending to Doc) shape [batch, 1, seq_len_query, seq_len_doc]
         cross_mask = self.get_cross_attention_mask(query_mask, doc_mask, x_q.dtype)
 
-        num_top = len(self.top_layers)
-        for i, layer in enumerate(self.top_layers):
-            if i == num_top - 1 and self.pooling_method == "cls":
-                # Optimized last layer: Self-Attention on full sequence,
-                # then slice to CLS for Cross-Attention and MLP.
-
-                # 1. Self-Attention Block (Full)
-                residual = x_q
-                normed_x_q = layer.input_layernorm(x_q)
-                attn_out, _ = layer.self_attn(
-                    normed_x_q,
-                    attention_mask=None,
-                    position_ids=q_pos,
-                    position_embeddings=q_position_embeddings,
-                )
-                x_q = residual + attn_out
-
-                # 2. Slice to CLS
-                x_q = x_q[:, 0:1, :]
-
-                # 3. Cross-Attention Block (CLS only)
-                if x_d is not None and not self.mask_cls_to_doc:
-                    residual = x_q
-                    normed_x_q = layer.input_layernorm(x_q)
-                    x_q = layer.cross_attn(
-                        normed_x_q,
-                        encoder_hidden_states=layer.input_layernorm(x_d),
-                        encoder_attention_mask=cross_mask[:, :, 0:1, :],
-                    )
-                    x_q = residual + x_q
-
-                # 4. MLP Block (CLS only)
-                residual = x_q
-                x_q = layer.mlp(layer.post_attention_layernorm(x_q))
-                x_q = residual + x_q
-            else:
-                x_q = layer(
-                    x_q,
-                    attention_mask=None,
-                    encoder_hidden_states=x_d,
-                    encoder_attention_mask=cross_mask,
-                    position_ids=q_pos,
-                    position_embeddings=q_position_embeddings,
-                )[0]
+        if self.cross_attn_first:
+            x_q = self.forward_inverted_transformer(
+                x_q, x_d, cross_mask, q_pos, q_position_embeddings
+            )
+        else:
+            x_q = self.forward_vanilla_transformer(
+                x_q, x_d, cross_mask, q_pos, q_position_embeddings
+            )
 
         x_q = self.final_norm(x_q)
 

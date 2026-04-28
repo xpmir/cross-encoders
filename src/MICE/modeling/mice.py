@@ -692,6 +692,81 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 torch.randn(1, 1, self.config.hidden_size) * 0.02
             )
 
+    def forward_vanilla_transformer(self, x_q, x_d, q_self, cross_mask, q_pos_embeds):
+        """Vanilla transformer architecture: Self-Attention followed by Cross-Attention."""
+        pm = self.pooling_method or getattr(self.config, "classifier_pooling", "cls")
+        num_top = len(self.top_layers)
+        for i, layer in enumerate(self.top_layers):
+            if i == num_top - 1 and pm == "cls":
+                # Optimized last layer: Self-Attention on full sequence,
+                # then slice to CLS for Cross-Attention and MLP.
+
+                # 1. Self-attn residual (Full)
+                attn_out = layer.attn(
+                    layer.attn_norm(x_q),
+                    attention_mask=q_self,
+                    position_embeddings=q_pos_embeds[layer.attention_type],
+                )[0]
+                x_q = x_q + attn_out
+
+                # 2. Slice to CLS
+                x_q = x_q[:, 0:1, :]
+
+                # 3. Cross-attn residual (CLS only)
+                if not self.mask_cls_to_doc:
+                    cross_out = layer.crossattention(
+                        query=layer.attn_norm(x_q),
+                        key=layer.attn_norm(x_d),
+                        value=layer.attn_norm(x_d),
+                        attention_mask=cross_mask,
+                    )[0]
+                    x_q = x_q + cross_out
+
+                # 4. MLP residual (CLS only)
+                x_q = x_q + layer.mlp(layer.mlp_norm(x_q))
+            else:
+                x_q = layer(
+                    x_q,
+                    attention_mask=q_self,
+                    encoder_hidden_states=x_d,
+                    encoder_attention_mask=cross_mask,
+                    position_embeddings=q_pos_embeds[layer.attention_type],
+                )
+        return x_q
+
+    def forward_inverted_transformer(self, x_q, x_d, q_self, cross_mask, q_pos_embeds):
+        """Inverted transformer architecture: Cross-Attention followed by Self-Attention."""
+
+        pm = self.pooling_method or getattr(self.config, "classifier_pooling", "cls")
+        num_top = len(self.top_layers)
+
+        for i, layer in enumerate(self.top_layers):
+            # 1. Cross-attn residual (Full)
+            cross_out = layer.crossattention(
+                query=layer.attn_norm(x_q),
+                key=layer.attn_norm(x_d),
+                value=layer.attn_norm(x_d),
+                attention_mask=cross_mask,
+            )[0]
+            x_q = x_q + cross_out
+
+            # 2. Self-attn residual (Full)
+            attn_out = layer.attn(
+                layer.attn_norm(x_q),
+                attention_mask=q_self,
+                position_embeddings=q_pos_embeds[layer.attention_type],
+            )[0]
+            x_q = x_q + attn_out
+
+            if i == num_top - 1 and pm == "cls":
+                # 3. Slice to CLS only to save compute in MLP and output
+                x_q = x_q[:, 0:1, :]
+
+            # 4. MLP residual (CLS only)
+            x_q = x_q + layer.mlp(layer.mlp_norm(x_q))
+
+        return x_q
+
     def forward(
         self, inputs: BaseItems, tokenized: Optional[MICETokenizedTexts] = None
     ):
@@ -763,44 +838,14 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         q_self = self.get_self_attention_mask(query_mask, x_q.dtype)
         cross_mask = self.get_cross_attention_mask(query_mask, doc_mask, x_q.dtype)
 
-        pm = self.pooling_method or getattr(self.config, "classifier_pooling", "cls")
-        num_top = len(self.top_layers)
-        for i, layer in enumerate(self.top_layers):
-            if i == num_top - 1 and pm == "cls":
-                # Optimized last layer: Self-Attention on full sequence,
-                # then slice to CLS for Cross-Attention and MLP.
-
-                # 1. Self-attn residual (Full)
-                attn_out = layer.attn(
-                    layer.attn_norm(x_q),
-                    attention_mask=q_self,
-                    position_embeddings=q_pos_embeds[layer.attention_type],
-                )[0]
-                x_q = x_q + attn_out
-
-                # 2. Slice to CLS
-                x_q = x_q[:, 0:1, :]
-
-                # 3. Cross-attn residual (CLS only)
-                if x_d is not None and not self.mask_cls_to_doc:
-                    cross_out = layer.crossattention(
-                        query=layer.attn_norm(x_q),
-                        key=layer.attn_norm(x_d),
-                        value=layer.attn_norm(x_d),
-                        attention_mask=cross_mask[:, :, 0:1, :],
-                    )[0]
-                    x_q = x_q + cross_out
-
-                # 4. MLP residual (CLS only)
-                x_q = x_q + layer.mlp(layer.mlp_norm(x_q))
-            else:
-                x_q = layer(
-                    x_q,
-                    attention_mask=q_self,
-                    encoder_hidden_states=x_d,
-                    encoder_attention_mask=cross_mask,
-                    position_embeddings=q_pos_embeds[layer.attention_type],
-                )
+        if self.cross_attn_first:
+            x_q = self.forward_inverted_transformer(
+                x_q, x_d, q_self, cross_mask, q_pos_embeds
+            )
+        else:
+            x_q = self.forward_vanilla_transformer(
+                x_q, x_d, q_self, cross_mask, q_pos_embeds
+            )
 
         x_q = self.final_norm(x_q)
         pooled = self.pooling_function(x_q)
@@ -1105,6 +1150,7 @@ def mice_scorer(
     n_interaction_layers: Optional[int] = None,
     mask_cls_to_doc: bool = True,
     mask_query_to_cls: bool = True,
+    cross_attn_first: bool = True,
     freeze_base: bool = False,
     random_top_layers: bool = False,
     compress_dim: float = 1.0,
@@ -1124,6 +1170,7 @@ def mice_scorer(
         n_interaction_layers: Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone.
         mask_cls_to_doc: If True, prevents [CLS] from attending to document tokens.
         mask_query_to_cls: If True, prevents query tokens from attending to [CLS].
+        cross_attn_first: Whether to perform cross-attention before self-attention in the top layers.
         freeze_base: If True, freezes the bottom layers.
         random_top_layers: If True, initializes top layers randomly.
         compress_dim: Dimensionality compression factor for top layers.
@@ -1147,6 +1194,7 @@ def mice_scorer(
             n_interaction_layers=n_interaction_layers,
             mask_cls_to_doc=mask_cls_to_doc,
             mask_query_to_cls=mask_query_to_cls,
+            cross_attn_first=cross_attn_first,
             freeze_base=freeze_base,
             random_top_layers=random_top_layers,
             compress_dim=compress_dim,
@@ -1165,6 +1213,7 @@ def mice_scorer(
             n_interaction_layers=n_interaction_layers,
             mask_cls_to_doc=mask_cls_to_doc,
             mask_query_to_cls=mask_query_to_cls,
+            cross_attn_first=cross_attn_first,
             freeze_base=freeze_base,
             random_top_layers=random_top_layers,
             compress_dim=compress_dim,
@@ -1188,6 +1237,7 @@ def mice_scorer(
             n_interaction_layers=n_interaction_layers,
             mask_cls_to_doc=mask_cls_to_doc,
             mask_query_to_cls=mask_query_to_cls,
+            cross_attn_first=cross_attn_first,
             freeze_base=freeze_base,
             random_top_layers=random_top_layers,
             compress_dim=compress_dim,

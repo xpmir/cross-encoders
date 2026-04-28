@@ -61,6 +61,9 @@ class Mice_FineTuning(CE_FineTuning):
     n_interaction_layers: Optional[int] = None
     """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
+    cross_attn_first: bool = True
+    """Whether to perform cross-attention before self-attention in the top layers."""
+
     mask_cls_to_doc: bool = True
     """Whether to mask the [CLS] token from attending to document tokens."""
 
@@ -90,6 +93,8 @@ def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
         "n_contextualization_layers", cfg.n_contextualization_layers
     )
     n_inter_layers = model_tags.get("n_interaction_layers", cfg.n_interaction_layers)
+    cross_attn_first = model_tags.get("cross_attn_first", cfg.cross_attn_first)
+    vanilla = "-vanilla" if not cross_attn_first else ""
 
     loss = model_tags.get("loss", "")
     loss = loss_names.get(loss, loss).replace("/", "-")
@@ -97,7 +102,7 @@ def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"Mice-l{n_ctx_layers}+{n_inter_layers}-{base}{loss}"
+    return f"Mice-l{n_ctx_layers}+{n_inter_layers}{vanilla}-{base}{loss}"
 
 
 @learning_experiment()
@@ -205,6 +210,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             n_interaction_layers=cfg.n_interaction_layers,
             mask_cls_to_doc=cfg.mask_cls_to_doc,
             mask_query_to_cls=cfg.mask_query_to_cls,
+            cross_attn_first=cfg.cross_attn_first,
             freeze_base=cfg.freeze_base,
             random_top_layers=cfg.random_top_layers,
             compress_dim=cfg.compress_dim,

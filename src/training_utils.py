@@ -29,7 +29,6 @@ from xpmir.letor.distillation.listwise import (
     DistillRankNetLoss,
     DistillationListwiseTrainer,
     ListwiseSoftmaxCrossEntropy,
-    ListwiseBCE,
     ListwiseHingeLoss,
 )
 from xpmir.letor.distillation.pairwise import (
@@ -120,8 +119,12 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             lossfn=MSEDifferenceLoss.C(),
         )
 
-    ### Listwise losses ###
-    elif loss_member is Losses.infoNCE_RankDistiLLM:
+    ### Listwise losses with ColBERT negatives ###
+    elif loss_member in (
+        Losses.BCE_RankDistiLLM,
+        Losses.hingeLoss_RankDistiLLM,
+        Losses.infoNCE_RankDistiLLM,
+    ):
         passages_per_query = 8
         batch_size = cfg.learner.optimization.batch_size
 
@@ -135,29 +138,10 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
                 f"Not normalizing docs per batch, {passages_per_query} docs x {batch_size} = {batch_size * passages_per_query} docs per batch"
             )
 
-        return DistillationListwiseTrainer.C(
-            sampler=msmarco_colbertv2_annotated(passages_per_query=passages_per_query),
-            lossfn=ListwiseSoftmaxCrossEntropy.C(),
-            batch_size=batch_size,
-        )
-
-    ### BCE and Hinge loss with ColBERT negatives ###
-    elif loss_member in (Losses.BCE_RankDistiLLM, Losses.hingeLoss_RankDistiLLM):
-        passages_per_query = 8
-        batch_size = cfg.learner.optimization.batch_size
-
-        if cfg.normalize_docs_per_batch:
-            batch_size = batch_size // passages_per_query
-            logger.warning(
-                f"normalized batch size to {batch_size} to get {batch_size * passages_per_query} docs per batch"
-            )
-        else:
-            logger.warning(
-                f"Not normalizing docs per batch, {passages_per_query} docs x {batch_size} = {batch_size * passages_per_query} docs per batch"
-            )
-
-        if loss_member is Losses.BCE_RankDistiLLM:
-            loss_fn = ListwiseBCE.C()
+        if loss_member is Losses.infoNCE_RankDistiLLM:
+            loss_fn = ListwiseSoftmaxCrossEntropy.C()
+        if loss_member is Losses.hingeLoss_RankDistiLLM:
+            loss_fn = ListwiseHingeLoss.C()
         else:
             loss_fn = ListwiseHingeLoss.C()
 
