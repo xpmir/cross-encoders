@@ -227,6 +227,13 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         aggregations=aggregations,
         add_mean=True,
     )
+
+    # Reorder columns: tags first, metrics after
+    tag_cols = ["dataset"] + group_by_tags
+    tag_cols = [c for c in tag_cols if c in df.columns]
+    metric_cols = [c for c in df.columns if c not in tag_cols]
+    df = df[tag_cols + metric_cols]
+
     logging.info(f"Final DataFrame:\n{df}")
 
     # save results

@@ -275,16 +275,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
 
-    # Constants
-    grid_keys = set()
-    for tags in all_tags:
-        grid_keys.update(tags.keys())
-
-    # Ensure unique tags for grouping
-    tag_names = {"first_stage"} | grid_keys
-    group_by_tags = [("tag", k) for k in sorted(list(tag_names))]
-    model_id_tags = group_by_tags + [("tag", "seed")]
-
     # 1. Exctract data
     df = tests.to_dataframe()
 
@@ -294,9 +284,27 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
     logging.info(f"Evaluated models: \n- {'\n- '.join(tests.per_model.keys())}")
 
-    # Convert to numeric
+    # Identify available metric columns and convert to numeric
     metric_cols = [col for col in df.columns if col[0] == "metric"]
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
+
+    # Flatten MultiIndex columns and remove duplicates
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[1] if col[1] else col[0] for col in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]
+
+    # Drop useless columns
+    cols_to_drop = [col for col in df.columns if "index_doc" in str(col).lower()]
+    df = df.drop(columns=cols_to_drop, errors="ignore")
+
+    # Identify grid search keys
+    grid_keys = set()
+    for tags in all_tags:
+        grid_keys.update(tags.keys())
+
+    # Tags to group by
+    group_by_tags = sorted(list({"first_stage"} | grid_keys))
+    model_id_tags = sorted(group_by_tags + ["seed"])
 
     # Add both specific aggregations (ID, BEIR, etc.) and the global mean
     df_with_aggs = add_dataset_aggregations(
@@ -311,9 +319,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     # keep only results with a base tag (all our models have it)
     # We ensure it's not NaN and not an empty string to exclude first-stage only results
     scorer_only_df = df_with_aggs[
-        df_with_aggs[("tag", "base")].notna()
-        & (df_with_aggs[("tag", "base")].astype(str) != "")
-        & (df_with_aggs[("tag", "base")].astype(str) != "nan")
+        df_with_aggs["base"].notna()
+        & (df_with_aggs["base"].astype(str) != "")
+        & (df_with_aggs["base"].astype(str) != "nan")
     ]
 
     # Read model card template
@@ -339,9 +347,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
         for _, best_row in best_models_df.iterrows():
             # Extract tags for this best model
-            best_tags = {
-                tag[1]: best_row[tag] for tag in model_id_tags if tag[0] == "tag"
-            }
+            best_tags = {tag: best_row[tag] for tag in model_id_tags}
 
             logging.info(f"Best evaluated model is {best_tags}")
 
@@ -372,7 +378,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 best_cfg=best_cfg,
                 resultspath=helper.xp.resultspath,
                 card_template_txt=card_template_txt,
-                aggregations=aggregation_hf,
             )
 
         if best_models_list:
@@ -383,12 +388,24 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             )
 
     # Final aggregation and LaTeX table generation
+    metric_names = [col[1] for col in metric_cols]
     df_grouped = (
-        df_with_aggs.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
+        df_with_aggs.groupby(["dataset"] + group_by_tags, dropna=False)[metric_names]
         .agg(["mean", "var"])
         .reset_index()
     )
-    df_grouped = df_grouped.sort_index(axis=1)
+
+    # Reorder columns: tags first, metrics after
+    tag_cols_expected = ["dataset"] + group_by_tags
+    tag_cols = []
+    for col in tag_cols_expected:
+        if (col, "") in df_grouped.columns:
+            tag_cols.append((col, ""))
+        elif col in df_grouped.columns:
+            tag_cols.append(col)
+
+    metric_cols_grouped = [c for c in df_grouped.columns if c not in tag_cols]
+    df_grouped = df_grouped[tag_cols + metric_cols_grouped]
 
     logging.info(df_grouped)
 

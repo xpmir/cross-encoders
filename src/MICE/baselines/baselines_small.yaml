@@ -1,8 +1,8 @@
-id: baseline_MiniLM_CE
-title: "Training MiniLM Cross-Encoder"
+id: baseline_small_CE
+title: "Training small Cross-Encoder"
 description:
-    This model is trained with the same hyperparams as 'train_mice_miniLM_l4'
-    Serving as a baseline
+    Models are trained with the same hyperparams as 'train_mice_miniLM_l4'
+    Serving as a baseline for assessing their performance.
 
 module: cross_encoders_training.experiment
 # pre_experiment: pre_experiment
@@ -40,11 +40,16 @@ learner:
     requirements: duration=12h & cpu(cores=16) & cuda(mem=80G)
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=16G) * 2
     k: 1000
-    batch_size: 128
+    batch_size: 64
 
-# evaluation:
-#     all_datasets: true
+evaluation:
+    all_datasets: true
 
-base: microsoft/MiniLM-L12-H384-uncased
+
+grid_search:
+    base:
+        values_list:
+            - microsoft/MiniLM-L12-H384-uncased
+            - jhu-clsp/ettin-encoder-68m

@@ -13,12 +13,11 @@ learner:
         precision: bf16-mixed
 
 max_doc_len: 1024
-
 normalize_docs_per_batch: true
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
-    batch_size: 50
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
+    batch_size: 64
     k: 1000
 
 evaluation:
@@ -38,9 +37,11 @@ grid_search:
 
     learner.loss:
         values_list:
-            - bce
+            # - bce
+            # - distillRankNET
+            # - ADR_MSE
+            # - marginMSE
             - hingeLoss
-            - marginMSE
             - infoNCE_RankDistiLLM
-            - distillRankNET
-            - ADR_MSE
+            - hingeLoss_RankDistiLLM
+            - bce_RankDistiLLM

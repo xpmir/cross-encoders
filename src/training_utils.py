@@ -29,6 +29,8 @@ from xpmir.letor.distillation.listwise import (
     DistillRankNetLoss,
     DistillationListwiseTrainer,
     ListwiseSoftmaxCrossEntropy,
+    ListwiseBCE,
+    ListwiseHingeLoss,
 )
 from xpmir.letor.distillation.pairwise import (
     DistillationPairwiseTrainer,
@@ -139,6 +141,32 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             batch_size=batch_size,
         )
 
+    ### BCE and Hinge loss with ColBERT negatives ###
+    elif loss_member in (Losses.BCE_RankDistiLLM, Losses.hingeLoss_RankDistiLLM):
+        passages_per_query = 8
+        batch_size = cfg.learner.optimization.batch_size
+
+        if cfg.normalize_docs_per_batch:
+            batch_size = batch_size // passages_per_query
+            logger.warning(
+                f"normalized batch size to {batch_size} to get {batch_size * passages_per_query} docs per batch"
+            )
+        else:
+            logger.warning(
+                f"Not normalizing docs per batch, {passages_per_query} docs x {batch_size} = {batch_size * passages_per_query} docs per batch"
+            )
+
+        if loss_member is Losses.BCE_RankDistiLLM:
+            loss_fn = ListwiseBCE.C()
+        else:
+            loss_fn = ListwiseHingeLoss.C()
+
+        return DistillationListwiseTrainer.C(
+            sampler=msmarco_colbertv2_annotated(passages_per_query=passages_per_query),
+            lossfn=loss_fn,
+            batch_size=batch_size,
+        )
+
     ### Listwise distillation losses ###
     elif loss_member is Losses.distillRankNET:
         logger.warning(
@@ -209,7 +237,14 @@ def identify_best_models(
         logger.warning(f"Dataset {dataset} not found in results for model selection")
         return pd.DataFrame()
 
-    metric_col = [("metric", metric)]
+    if ("metric", metric) in df.columns:
+        metric_col = [("metric", metric)]
+    elif metric in df.columns:
+        metric_col = [metric]
+    else:
+        logger.warning(f"Metric {metric} not found in columns")
+        return pd.DataFrame()
+
     best_models_indices = subset.groupby(group_by_tags, dropna=False)[
         metric_col
     ].idxmax()

@@ -74,6 +74,9 @@ grid_search:
             # - bce
             # - hingeLoss
             # - marginMSE
-            # - infoNCE_RankDistiLLM
-            - distillRankNET
-            - ADR_MSE
+            # - distillRankNET
+            # - ADR_MSE
+            - hingeLoss_RankDistiLLM
+            - bce_RankDistiLLM
+            - hingeLoss
+            - infoNCE_RankDistiLLM
