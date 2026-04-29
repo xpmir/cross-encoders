@@ -4,7 +4,7 @@ description:
     Base Training for Ettin-17m-based MICE model.
 
 module: MICE.mice_training
-pre_experiment: pre_experiment
+# pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 1
@@ -37,7 +37,7 @@ learner:
     checkpoint_interval: 100
     validation_interval: 50
     validation_top_k: 100
-    validation: nanobeir
+    validation: nanobeir11
     requirements: duration=12h & cpu(cores=16) & cuda(mem=80G)
 
 retrieval:
@@ -49,17 +49,13 @@ retrieval:
 #     all_datasets: false
 #     in_domain: true
 
-
-merge_layer: 3
-drop_layer: 6
+base: jhu-clsp/ettin-encoder-17m
+n_contextualization_layers: 3
+n_interaction_layers: 3
 
 
 #### Params that are grid searched
 grid_search:
-
-    base:
-        values_list:
-            - jhu-clsp/ettin-encoder-17m
 
     learner.optimization.batch_size:
         values_list:

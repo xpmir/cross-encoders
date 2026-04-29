@@ -1,16 +1,14 @@
-id: train_mice_miniLM_ablations
+id: train_mice_miniLM_abl_topk
 title: "Mice-MiniLM Training"
 description:
     Base Training for MiniLM-based MICE model.
 
 module: MICE.mice_training
-pre_experiment: pre_experiment
+# pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 2
 
-
-retriever: ""
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -50,8 +48,8 @@ retrieval:
 #     in_domain: true
 
 
-merge_layer: 4
-drop_layer: 7
+n_contextualization_layers: 4
+n_interaction_layers: 3
 
 #### Params that are grid searched
 grid_search:

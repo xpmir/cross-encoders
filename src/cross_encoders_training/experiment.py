@@ -9,6 +9,7 @@ hyperparameter tuning via grid search.
 """
 
 import logging
+import shutil
 from functools import partial
 from pathlib import Path
 import numpy as np
@@ -27,6 +28,7 @@ from xpmir.neural.huggingface import hf_cross_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
+from xpmir.text.huggingface.tokenizers import get_default_max_len
 
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
@@ -71,7 +73,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     all_weights = []
 
     def run_one_config(
-        helper: LearningExperimentHelper, cfg: CE_FineTuning, grid_search_id: str
+        helper: LearningExperimentHelper,
+        cfg: CE_FineTuning,
+        grid_search_id: str,
+        cfg_tags: dict,
     ):
         """Main process for Cross-encoder training"""
 
@@ -154,12 +159,22 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
         ### TRAINING CROSS ENCODER
 
         ce_trainer: LossTrainer = build_trainer(cfg)
-        # Build the model
-        scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
-            hf_id=cfg.base, max_doc_length=cfg.max_doc_len
-        )
-        scorer_model.tag("scorer", grid_search_id)
 
+        # Build the model
+
+        default_max_len = get_default_max_len(cfg.base)
+        if cfg.max_length and default_max_len > cfg.max_length:
+            max_len = cfg.max_length
+        else:
+            max_len = None
+            logging.warning(
+                f"No max_len provided or default max_len {default_max_len} is not greater than provided max_len {cfg.max_length}. Using default max_len {default_max_len} for scorer {cfg.base}"
+            )
+        scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
+            hf_id=cfg.base, max_doc_length=max_len
+        )
+        for k, v in cfg_tags.items():
+            scorer_model.tag(k, v)
         # Run one Training and eval per seed
         for i in range(cfg.nb_repetitions):
             seed = np.random.RandomState(cfg.seed + i).randint((2**32) - 1)
@@ -237,21 +252,39 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                     )
 
     all_configs, all_tags = generate_grid(cfg)
+
+    # Simplify tags keys
+    new_all_tags = []
+    for cfg_tags in all_tags:
+        simple_tags = {}
+        for k, v in cfg_tags.items():
+            simple_key = k.split(".")[-1]
+            if simple_key in simple_tags:
+                simple_tags[k] = v
+            else:
+                simple_tags[simple_key] = v
+        new_all_tags.append(simple_tags)
+    all_tags = new_all_tags
+
     config_map = {}
 
     for config, cfg_tags in zip(all_configs, all_tags):
+        # Update cfg_tags with base if not present
+        if "base" not in cfg_tags:
+            cfg_tags["base"] = config.base
+
         # just run the config
-        tagspath = "_".join(f"{k.split('.')[-1]}={v}" for k, v in cfg_tags.items())
-        config_map[tagspath] = config
-        logging.info(f"Running config with tags {tagspath}")
-        run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
+        tagspath = "_".join(f"{k}={v}" for k, v in cfg_tags.items())
+        config_map[frozenset(cfg_tags.items())] = config
+        logging.info(
+            f"Running config with tags:\n- {'\n- '.join(f'{k}: {v}' for k, v in cfg_tags.items())}"
+        )
+        run_one_config(
+            helper=helper, cfg=config, grid_search_id=tagspath, cfg_tags=cfg_tags
+        )
 
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
-
-    # Constants
-    group_by_tags = [("tag", "first_stage"), ("tag", "scorer")]
-    model_id_tags = group_by_tags + [("tag", "seed")]
 
     # 1. Exctract data
     df = tests.to_dataframe()
@@ -262,9 +295,27 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
     logging.info(f"Evaluated models: \n- {'\n- '.join(tests.per_model.keys())}")
 
-    # Convert to numeric
+    # Identify available metric columns and convert to numeric
     metric_cols = [col for col in df.columns if col[0] == "metric"]
     df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
+
+    # Flatten MultiIndex columns and remove duplicates
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[1] if col[1] else col[0] for col in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]
+
+    # Drop useless columns
+    cols_to_drop = [col for col in df.columns if "index_doc" in str(col).lower()]
+    df = df.drop(columns=cols_to_drop, errors="ignore")
+
+    # Identify grid search keys
+    grid_keys = set()
+    for tags in all_tags:
+        grid_keys.update(tags.keys())
+
+    # Tags to group by
+    group_by_tags = sorted(list({"first_stage"} | grid_keys))
+    model_id_tags = sorted(group_by_tags + ["seed"])
 
     # Add both specific aggregations (ID, BEIR, etc.) and the global mean
     df_with_aggs = add_dataset_aggregations(
@@ -276,10 +327,12 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
     save_raw_results(df_with_aggs, helper.xp.resultspath)
 
-    # keep only results with a scorer
+    # keep only results with a base tag (all our models have it)
+    # We ensure it's not NaN and not an empty string to exclude first-stage only results
     scorer_only_df = df_with_aggs[
-        df_with_aggs[("tag", "scorer")].notna()
-        & (df_with_aggs[("tag", "scorer")] != "")
+        df_with_aggs["base"].notna()
+        & (df_with_aggs["base"].astype(str) != "")
+        & (df_with_aggs["base"].astype(str) != "nan")
     ]
 
     # Read model card template
@@ -297,14 +350,21 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
     best_models_list = []
     if not best_models_df.empty:
+        # Check if model folder exists before saving models, delete if so
+        models_path = helper.xp.resultspath / "models"
+        if models_path.exists():
+            shutil.rmtree(models_path)
+            logging.info(f"Deleted existing models directory: {models_path}")
+
         for _, best_row in best_models_df.iterrows():
             # Extract tags for this best model
-            best_tags = {
-                tag[1]: best_row[tag] for tag in model_id_tags if tag[0] == "tag"
-            }
+            best_tags = {tag: best_row[tag] for tag in model_id_tags}
 
-            scorer_tagspath = best_tags["scorer"]
             logging.info(f"Best evaluated model is {best_tags}")
+
+            # Reconstruct the grid tags to find the original config
+            best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
+            best_cfg = config_map.get(frozenset(best_grid_tags.items()))
 
             # Filter the original dataframe for this specific best model (all datasets)
             mask = pd.Series(True, index=df_with_aggs.index)
@@ -326,10 +386,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 md_results=md_results,
                 learners=learners,
                 all_weights=all_weights,
-                best_cfg=config_map.get(scorer_tagspath),
+                best_cfg=best_cfg,
                 resultspath=helper.xp.resultspath,
                 card_template_txt=card_template_txt,
-                aggregations=aggregation_hf,
             )
 
         if best_models_list:
@@ -340,12 +399,24 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             )
 
     # Final aggregation and LaTeX table generation
+    metric_names = [col[1] for col in metric_cols]
     df_grouped = (
-        df_with_aggs.groupby(["dataset"] + group_by_tags, dropna=False)[metric_cols]
+        df_with_aggs.groupby(["dataset"] + group_by_tags, dropna=False)[metric_names]
         .agg(["mean", "var"])
         .reset_index()
     )
-    df_grouped = df_grouped.sort_index(axis=1)
+
+    # Reorder columns: tags first, metrics after
+    tag_cols_expected = ["dataset"] + group_by_tags
+    tag_cols = []
+    for col in tag_cols_expected:
+        if (col, "") in df_grouped.columns:
+            tag_cols.append((col, ""))
+        elif col in df_grouped.columns:
+            tag_cols.append(col)
+
+    metric_cols_grouped = [c for c in df_grouped.columns if c not in tag_cols]
+    df_grouped = df_grouped[tag_cols + metric_cols_grouped]
 
     logging.info(df_grouped)
 
@@ -360,3 +431,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     )
     with open(helper.xp.resultspath / "results.tex", "w") as f:
         f.write(latex_table)
+
+    logging.info(f"Saved aggregated results to {helper.xp.resultspath / 'results.csv'}")
+    logging.info("Experiment completed successfully.")

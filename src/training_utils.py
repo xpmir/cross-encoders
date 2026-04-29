@@ -29,22 +29,28 @@ from xpmir.letor.distillation.listwise import (
     DistillRankNetLoss,
     DistillationListwiseTrainer,
     ListwiseSoftmaxCrossEntropy,
+    ListwiseHingeLoss,
+    ListwiseBCE,
 )
 from xpmir.letor.distillation.pairwise import (
     DistillationPairwiseTrainer,
     MSEDifferenceLoss,
 )
 
+from xpm_torch.huggingface import TorchHFHub
 from configuration import Losses, CE_FineTuning
 
 logger = logging.getLogger(__name__)
 
 
 def get_task_by_tags(tasks: list, tags: dict):
-    """Return the first task in tasks that has all the given tags."""
+    """Return the first task in tasks that has all its tags matching the given tags."""
+
     for task in tasks:
         task_tags = get_tags(task)
-        logger.debug(f"Checking task with tags {task_tags} against {tags}")
+        if not task_tags:
+            continue
+        # Check if all given tags are present and match in the task's tags
         if all(str(task_tags.get(tag)) == str(value) for tag, value in tags.items()):
             return task
     return None
@@ -114,8 +120,12 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             lossfn=MSEDifferenceLoss.C(),
         )
 
-    ### Listwise losses ###
-    elif loss_member is Losses.infoNCE_RankDistiLLM:
+    ### Listwise losses with ColBERT negatives ###
+    elif loss_member in (
+        Losses.BCE_RankDistiLLM,
+        Losses.hingeLoss_RankDistiLLM,
+        Losses.infoNCE_RankDistiLLM,
+    ):
         passages_per_query = 8
         batch_size = cfg.learner.optimization.batch_size
 
@@ -129,9 +139,16 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
                 f"Not normalizing docs per batch, {passages_per_query} docs x {batch_size} = {batch_size * passages_per_query} docs per batch"
             )
 
+        if loss_member is Losses.infoNCE_RankDistiLLM:
+            loss_fn = ListwiseSoftmaxCrossEntropy.C()
+        elif loss_member is Losses.hingeLoss_RankDistiLLM:
+            loss_fn = ListwiseHingeLoss.C()
+        else:
+            loss_fn = ListwiseBCE.C()
+
         return DistillationListwiseTrainer.C(
             sampler=msmarco_colbertv2_annotated(passages_per_query=passages_per_query),
-            lossfn=ListwiseSoftmaxCrossEntropy.C(),
+            lossfn=loss_fn,
             batch_size=batch_size,
         )
 
@@ -205,7 +222,14 @@ def identify_best_models(
         logger.warning(f"Dataset {dataset} not found in results for model selection")
         return pd.DataFrame()
 
-    metric_col = [("metric", metric)]
+    if ("metric", metric) in df.columns:
+        metric_col = [("metric", metric)]
+    elif metric in df.columns:
+        metric_col = [metric]
+    else:
+        logger.warning(f"Metric {metric} not found in columns")
+        return pd.DataFrame()
+
     best_models_indices = subset.groupby(group_by_tags, dropna=False)[
         metric_col
     ].idxmax()
@@ -218,40 +242,55 @@ def identify_best_models(
 
 def add_dataset_aggregations(
     df: pd.DataFrame,
-    group_by_cols: list,
+    group_by_cols: list = None,
     aggregations: dict[str, list[str]] = None,
     add_mean: bool = True,
 ) -> pd.DataFrame:
     """Adds aggregate rows (e.g., mean across datasets) to the results dataframe."""
+
+    # Handle the mean aggregation by recursion
+    if add_mean:
+        unique_datasets = sorted(df["dataset"].unique().tolist())
+        if len(unique_datasets) > 1:
+            aggregations = (aggregations or {}).copy()
+            if "mean" not in aggregations:
+                aggregations["mean"] = unique_datasets
+        return add_dataset_aggregations(df, group_by_cols, aggregations, add_mean=False)
+
+    if not aggregations:
+        return df
+
     new_rows = []
 
-    def get_agg(mask, name):
-        subset = df[mask] if mask is not None else df
-        if group_by_cols:
-            agg = (
-                subset.groupby(group_by_cols, dropna=False)
-                .mean(numeric_only=True)
-                .reset_index()
+    for agg_name, datasets in aggregations.items():
+        present_datasets = df["dataset"].unique()
+        missing = [ds for ds in datasets if ds not in present_datasets]
+        if missing:
+            logger.warning(
+                f"Aggregation {agg_name} skipped because the following datasets are missing globally: {missing}"
             )
+            continue
+
+        mask = df["dataset"].isin(datasets)
+        subset = df[mask]
+
+        if group_by_cols:
+            grouped = subset.groupby(group_by_cols, dropna=False)
+            # Ensure to compute the means if and only if ALL datasets in the aggregation are present
+            # for each specific group (model)
+            counts = grouped["dataset"].nunique()
+            agg = grouped.mean(numeric_only=True)
+            agg = agg[counts == len(datasets)].reset_index()
         else:
-            agg = subset.mean(numeric_only=True).to_frame().T
-        agg["dataset"] = name
-        return agg
-
-    if aggregations:
-        for agg_name, datasets in aggregations.items():
-            present_datasets = df["dataset"].unique()
-            missing = [ds for ds in datasets if ds not in present_datasets]
-            if not missing:
-                mask = df["dataset"].isin(datasets)
-                new_rows.append(get_agg(mask, agg_name))
+            # Global mean
+            if subset["dataset"].nunique() == len(datasets):
+                agg = subset.mean(numeric_only=True).to_frame().T
             else:
-                logger.warning(
-                    f"Aggregation {agg_name} skipped because the following datasets are missing: {missing}"
-                )
+                agg = pd.DataFrame()
 
-    if add_mean and df["dataset"].nunique() > 1:
-        new_rows.append(get_agg(None, "mean"))
+        if not agg.empty:
+            agg["dataset"] = agg_name
+            new_rows.append(agg)
 
     if new_rows:
         new_rows = [row[row.columns.intersection(df.columns)] for row in new_rows]
@@ -275,7 +314,7 @@ def format_model_results(
                 flat_cols.append("_".join(str(x) for x in col if x))
         model_df.columns = flat_cols
 
-    metrics_to_show = ["RR@10", "nDCG@10"]
+    metrics_to_show = ["Success@5", "RR@10", "nDCG@10"]
     cols_to_keep = [c for c in ["dataset"] + metrics_to_show if c in model_df.columns]
 
     if not cols_to_keep:
@@ -317,18 +356,22 @@ def export_model(
     best_cfg: CE_FineTuning,
     resultspath: Path,
     card_template_txt: str = None,
-    aggregations: dict[str, list[str]] = None,
 ):
-    """Exports all artifacts (weights, logs, readme, config) for a best model."""
-    model_tags = {}
-    for s in best_tags["scorer"].split("_"):
-        try:
-            k, v = s.split("=")
-            model_tags[k] = v
-        except ValueError:
-            logger.warning(f"Unexpected tag format '{s}' in scorer tags")
-    logger.warning(f"got tags {model_tags}")
+    """Exports all artifacts (weights, logs, readme, config) for a best model.
+    Also saves the results to a CSV file and generates a README card using a template.
 
+    Args:
+        best_tags: The tags corresponding to the best model configuration.
+        model_name: The name to use for the exported model (e.g., "Mice-lX+Y").
+        csv_results: The results dataframe to save as CSV.
+        md_results: The results dataframe to format in the README.
+        learners: The list of learner tasks to search for the best model's task.
+        all_weights: The list of all weight-saving tasks to find the best model's weights.
+        best_cfg: The configuration of the best model, used for README generation.
+        resultspath: The base path where the model artifacts and results should be saved.
+        card_template_txt: Optional Jinja2 template string for the README card.
+        aggregations: Optional dict of dataset aggregations to include in the README results.
+    """
     models_path = resultspath / "models"
     best_model_path = models_path / model_name
     best_model_path.mkdir(parents=True, exist_ok=True)
@@ -350,15 +393,6 @@ def export_model(
                 tb_symlink_path.unlink()
             tb_symlink_path.symlink_to(tb_path)
 
-    # best_model_val = get_task_by_tags(all_weights, best_tags)
-    # if best_model_val:
-    #     weights_path = Path(best_model_val.encoder_path)
-    #     if weights_path.is_dir():
-    #         shutil.copytree(weights_path, best_model_path, dirs_exist_ok=True)
-    #         logger.info(f"HuggingFace model artifacts copied to {best_model_path}")
-    #     else:
-    #         logger.warning(f"Model weights path is not a directory: {weights_path}")
-
     if card_template_txt and best_cfg:
         template = Template(card_template_txt)
         card = template.render(
@@ -368,7 +402,7 @@ def export_model(
             model_id=model_name,
             training_data="MS MARCO Passage",
             dataset="msmarco",
-            loss=model_tags.get("learner.loss"),
+            loss=best_tags.get("learner.loss") or best_tags.get("loss", ""),
             results=md_results.to_markdown(index=False),
         )
         with open(best_model_path / "README.md", "w") as f:
@@ -376,3 +410,12 @@ def export_model(
 
         with open(best_model_path / "config.yaml", "w") as f:
             yaml.dump(asdict(best_cfg.learner), f, default_flow_style=False)
+
+    # 4. Export to HF format
+    best_model_loader = get_task_by_tags(all_weights, best_tags)
+    if best_model_loader:
+        logger.info(f"Exporting model to HF format at {best_model_path}")
+        hub = TorchHFHub(best_model_loader)
+        hub.save_pretrained(best_model_path)
+    else:
+        logger.warning(f"Could not find model task for tags {best_tags} in all_weights")

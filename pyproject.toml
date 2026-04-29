@@ -19,6 +19,9 @@ dependencies = [
     "xpm-torch",
     "torch",
     "accelerate>=1.13.0",
+    "tiktoken>=0.12.0",
+    "sentencepiece>=0.2.1",
+    "sentence-transformers>=5.4.1",
 ]
 
 [tool.setuptools]
@@ -52,4 +55,13 @@ dev = [
     "notebook>=7.5.4",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
+    "pytest-dependency>=0.6.0",
+    "pytest-order>=1.0.0",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.9.9",
+    "seaborn>=0.13.2",
 ]
+
+[tool.ruff]
+src = ["src"]
+include = ["src/**/*.py"]

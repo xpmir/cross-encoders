@@ -12,19 +12,19 @@ learner:
     fabric:
         precision: bf16-mixed
 
-max_doc_len: 1024
-
+max_length: 1024
 normalize_docs_per_batch: true
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
-    batch_size: 256
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
+    batch_size: 64
     k: 1000
 
 evaluation:
     all_datasets: false
     in_domain: true
     beir13: true
+    robust04: true
     lotte_search: true
     # nanobeir: true
 
@@ -37,9 +37,11 @@ grid_search:
 
     learner.loss:
         values_list:
-            - bce
-            # - hingeLoss
-            # - marginMSE
-            # - infoNCE_RankDistiLLM
+            # - bce
             # - distillRankNET
             # - ADR_MSE
+            - marginMSE
+            - hingeLoss
+            - infoNCE_RankDistiLLM
+            - hingeLoss_RankDistiLLM
+            - bce_RankDistiLLM

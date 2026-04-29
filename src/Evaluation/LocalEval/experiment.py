@@ -36,7 +36,7 @@ class LocalEvalsConfig(NeuralIRExperiment):
     base: str = ""
     """Identifier for the base model"""
 
-    max_doc_len: Optional[int] = None
+    max_length: Optional[int] = None
     """max len for scorer, default to 0 = max len of the model"""
 
     models: List[str] = []

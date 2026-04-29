@@ -11,7 +11,9 @@ It leverages shared utilities from `training_utils`, `retrievers`, and
 """
 
 import logging
+import shutil
 from functools import partial
+from typing import Optional
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -28,14 +30,16 @@ from xpm_torch.optim import GradientLogHook, GradientClippingHook
 from xpmir.papers.results import PaperResults
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
+from xpmir.text.huggingface.tokenizers import get_default_max_len
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
+from xpmir.papers import configuration
 
 from MICE.modeling.mice import mice_scorer
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
-from configuration import Mice_FineTuning, generate_grid
+from configuration import generate_grid, CE_FineTuning
 from tests import build_tests
-from format import aggregation_hf, dataframe_to_latex, loss_names, backbone_names_lower
+from format import aggregations, dataframe_to_latex, loss_names, backbone_names_lower
 
 from training_utils import (
     build_trainer,
@@ -49,17 +53,56 @@ from training_utils import (
 logging.basicConfig(level=logging.INFO)
 
 
-# TODO format as Mice-lX+Y
-def get_name_from_tags(model_tags: dict) -> str:
+@configuration()
+class Mice_FineTuning(CE_FineTuning):
+    ## MICE specific configuration
+    n_contextualization_layers: int = 6
+    """Number of bottom encoder layers that process query and document independently"""
+
+    n_interaction_layers: Optional[int] = None
+    """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
+
+    cross_attn_first: bool = True
+    """Whether to perform cross-attention before self-attention in the top layers."""
+
+    mask_cls_to_doc: bool = True
+    """Whether to mask the [CLS] token from attending to document tokens."""
+
+    mask_query_to_cls: bool = True
+    """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
+
+    freeze_base: bool = False
+    """Whether to freeze the bottom layers during finetuning"""
+
+    random_top_layers: bool = False
+    """Whether to initialize top layers randomly instead of copying from backbone"""
+
+    global_cls_token: bool = False
+    """Whether to add a fresh [CLS] token before the top layers."""
+
+    compress_dim: float = 1.0
+    """Factor by which to divide the hidden dimensions of the top layers"""
+
+
+def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     """Creates the HF id from tags using formatting conventions."""
-    loss = model_tags.get("loss", "")
     base = model_tags.get("base", "")
-    # try to get prettier name
+    base = backbone_names_lower.get(base, base).replace("/", "-")
+
+    n_ctx_layers = model_tags.get(
+        "n_contextualization_layers", cfg.n_contextualization_layers
+    )
+    n_inter_layers = model_tags.get("n_interaction_layers", cfg.n_interaction_layers)
+    cross_attn_first = model_tags.get("cross_attn_first", cfg.cross_attn_first)
+    vanilla = "-vanilla" if not cross_attn_first else ""
+
+    loss = model_tags.get("loss", "")
     loss = loss_names.get(loss, loss).replace("/", "-")
+    # try to get prettier name
     if len(loss):
         loss = f"-{loss}"
-    base = backbone_names_lower.get(base, base).replace("/", "-")
-    return f"mice-{base}{loss}"
+
+    return f"Mice-l{n_ctx_layers}+{n_inter_layers}{vanilla}-{base}{loss}"
 
 
 @learning_experiment()
@@ -76,7 +119,10 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
     all_weights = []
 
     def run_one_config(
-        helper: LearningExperimentHelper, cfg: Mice_FineTuning, grid_search_id: str
+        helper: LearningExperimentHelper,
+        cfg: Mice_FineTuning,
+        grid_search_id: str,
+        cfg_tags: dict,
     ):
         """Main process for Cross-encoder training"""
 
@@ -157,19 +203,31 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
 
         ce_trainer: LossTrainer = build_trainer(cfg)
 
+        default_max_len = get_default_max_len(cfg.base)
+        if cfg.max_length and default_max_len > cfg.max_length:
+            max_len = cfg.max_length
+        else:
+            max_len = None
+            logging.warning(
+                f"No max_len provided or default max_len {default_max_len} is not greater than provided max_len {cfg.max_length}. Using default max_len {default_max_len} for scorer {cfg.base}"
+            )
         # Build the model using the unified scorer factory
         mice_model, scorer_hf_init_tasks = mice_scorer(
             hf_id=cfg.base,
-            merge_layer=cfg.merge_layer,
-            drop_layer=cfg.drop_layer,
+            n_contextualization_layers=cfg.n_contextualization_layers,
+            n_interaction_layers=cfg.n_interaction_layers,
             mask_cls_to_doc=cfg.mask_cls_to_doc,
             mask_query_to_cls=cfg.mask_query_to_cls,
+            cross_attn_first=cfg.cross_attn_first,
             freeze_base=cfg.freeze_base,
             random_top_layers=cfg.random_top_layers,
             compress_dim=cfg.compress_dim,
+            global_cls_token=cfg.global_cls_token,
             pooling_method=cfg.pooling_method,
+            max_length=max_len,
         )
-        mice_model.tag("scorer", grid_search_id)
+        for k, v in cfg_tags.items():
+            mice_model.tag(k, v)
 
         # Run one Training and eval per seed
         for i in range(cfg.nb_repetitions):
@@ -228,10 +286,12 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                     load_model = (
                         outputs.listeners[tracked_validation.id][metric_name]
                         .tag("validation", name)
-                        .tag("scorer", grid_search_id)
                         .tag("seed", seed)
                         .tag("first_stage", retriever_tag)
                     )
+                    for k, v in cfg_tags.items():
+                        load_model.tag(k, v)
+
                     all_weights.append(load_model)
                     tests.evaluate_retriever(
                         partial(
@@ -246,20 +306,47 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                     )
 
     all_configs, all_tags = generate_grid(cfg)
+
+    # Simplify tags keys
+    new_all_tags = []
+    for cfg_tags in all_tags:
+        simple_tags = {}
+        for k, v in cfg_tags.items():
+            simple_key = k.split(".")[-1]
+            if simple_key in simple_tags:
+                simple_tags[k] = v
+            else:
+                simple_tags[simple_key] = v
+        new_all_tags.append(simple_tags)
+    all_tags = new_all_tags
+
     config_map = {}
 
     for config, cfg_tags in zip(all_configs, all_tags):
+        # Update cfg_tags with base if not present
+        if "base" not in cfg_tags:
+            cfg_tags["base"] = config.base
         # just run the config
-        tagspath = "_".join(f"{k.split('.')[-1]}={v}" for k, v in cfg_tags.items())
-        config_map[tagspath] = config
-        logging.info(f"Running config with tags {tagspath}")
-        run_one_config(helper=helper, cfg=config, grid_search_id=tagspath)
+        tagspath = "_".join(f"{k}={v}" for k, v in cfg_tags.items())
+        config_map[frozenset(cfg_tags.items())] = config
+        logging.info(
+            f"Running config with tags:\n- {'\n- '.join(f'{k}: {v}' for k, v in cfg_tags.items())}"
+        )
+        run_one_config(
+            helper=helper, cfg=config, grid_search_id=tagspath, cfg_tags=cfg_tags
+        )
 
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
 
     # Constants
-    group_by_tags = [("tag", "first_stage"), ("tag", "scorer")]
+    grid_keys = set()
+    for tags in all_tags:
+        grid_keys.update(tags.keys())
+
+    # Ensure unique tags for grouping
+    tag_names = {"first_stage"} | grid_keys
+    group_by_tags = [("tag", k) for k in sorted(list(tag_names))]
     model_id_tags = group_by_tags + [("tag", "seed")]
 
     # 1. Exctract data
@@ -279,16 +366,18 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
     df_with_aggs = add_dataset_aggregations(
         df,
         group_by_cols=model_id_tags,
-        aggregations=aggregation_hf,
+        aggregations=aggregations,
         add_mean=True,  # will add 'mean' dataset at the end
     )
 
     save_raw_results(df_with_aggs, helper.xp.resultspath)
 
-    # keep only results with a scorer
+    # keep only results with a base tag (all our models have it)
+    # We ensure it's not NaN and not an empty string to exclude first-stage only results
     scorer_only_df = df_with_aggs[
-        df_with_aggs[("tag", "scorer")].notna()
-        & (df_with_aggs[("tag", "scorer")] != "")
+        df_with_aggs[("tag", "base")].notna()
+        & (df_with_aggs[("tag", "base")].astype(str) != "")
+        & (df_with_aggs[("tag", "base")].astype(str) != "nan")
     ]
 
     # Read model card template
@@ -306,14 +395,26 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
 
     best_models_list = []
     if not best_models_df.empty:
+        # Check if model folder exists before saving models, delete if so
+        models_path = helper.xp.resultspath / "models"
+        if models_path.exists():
+            shutil.rmtree(models_path)
+            logging.info(f"Deleted existing models directory: {models_path}")
+
         for _, best_row in best_models_df.iterrows():
             # Extract tags for this best model
             best_tags = {
                 tag[1]: best_row[tag] for tag in model_id_tags if tag[0] == "tag"
             }
 
-            scorer_tagspath = best_tags["scorer"]
             logging.info(f"Best evaluated model is {best_tags}")
+
+            # Reconstruct the grid tags to find the original config
+            best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
+            best_cfg = config_map.get(frozenset(best_grid_tags.items()))
+            scorer_tagspath = "_".join(
+                f"{k}={v}" for k, v in sorted(best_grid_tags.items())
+            )
 
             # Filter the original dataframe for this specific best model (all datasets)
             mask = pd.Series(True, index=df_with_aggs.index)
@@ -325,20 +426,27 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
 
             # Format and Export artifacts
             csv_results, md_results = format_model_results(
-                best_model_df, aggregations=aggregation_hf
+                best_model_df, aggregations=aggregations
             )
+
+            model_name = get_name_from_tags(best_tags, all_configs[0])
+            if (helper.xp.resultspath / "models" / model_name).exists():
+                scorer_path = scorer_tagspath.replace("/", "-")
+                logging.warning(
+                    f"Model directory for {model_name} already exists. using {scorer_path} as model name instead to avoid overwriting."
+                )
+                model_name = scorer_path
 
             export_model(
                 best_tags=best_tags,
-                model_name=get_name_from_tags(best_tags),
+                model_name=model_name,
                 csv_results=csv_results,
                 md_results=md_results,
                 learners=learners,
                 all_weights=all_weights,
-                best_cfg=config_map.get(scorer_tagspath),
+                best_cfg=best_cfg,
                 resultspath=helper.xp.resultspath,
                 card_template_txt=card_template_txt,
-                aggregations=aggregation_hf,
             )
 
         if best_models_list:
@@ -366,3 +474,5 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
     )
     with open(helper.xp.resultspath / "results.tex", "w") as f:
         f.write(latex_table)
+    logging.info(f"Saved aggregated results to {helper.xp.resultspath / 'results.csv'}")
+    logging.info("Experiment completed successfully.")

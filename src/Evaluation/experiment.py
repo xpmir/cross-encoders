@@ -14,11 +14,11 @@ The experiment workflow includes:
    generating standardized outputs (CSV, LaTeX tables).
 
 Usage:
-    This module is designed to be invoked via experimaestro.
+    This module is designed to be invoked via experimaestro:
     `uv run experimaestro run-experiment src/Evaluation/cross-encoders.yaml`
 """
 
-from typing import List
+from typing import List, Optional
 from attrs import Factory
 from functools import partial
 import pandas as pd
@@ -31,13 +31,16 @@ from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 from xpmir.experiments.helpers import NeuralIRExperiment
 from xpmir.neural.huggingface import hf_cross_scorer
+from xpmir.neural.sentence_transformers import st_cross_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
+from xpmir.text.huggingface.tokenizers import get_default_max_len
 
-from format import dataframe_to_latex
+from format import dataframe_to_latex, aggregations
 from tests import build_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from retrievers import splade_retriever, bm25_retriever
+from training_utils import add_dataset_aggregations
 
 import logging
 
@@ -51,6 +54,10 @@ class BaselinesConfig(NeuralIRExperiment):
     preprocessing: Preprocessing = Factory(Preprocessing)
 
     scorers_hf_id: List[str] = []
+    scorers_st_id: List[str] = []
+
+    max_length: Optional[int] = None
+    """Maximum document length for cross-encoders"""
 
     retrievers_hf_id: List[str] = []
 
@@ -130,21 +137,48 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         logging.info(
             f"First stage only evaluation done for {retriever_name} on datasets {list(run_retriever_factory.runs.keys())}"
         )
-        logging.info(f"Evaluating model-based retrievers {cfg.scorers_hf_id}")
+        logging.info(
+            f"Evaluating model-based retrievers {cfg.scorers_hf_id} {cfg.scorers_st_id}"
+        )
 
         # Eval With cross-encoder
         if cfg.retrievers_only:
-            if len(cfg.scorers_hf_id) > 0:
+            if len(cfg.scorers_hf_id) > 0 or len(cfg.scorers_st_id) > 0:
                 logging.warning(
                     "Scorers specified in config but retrievers_only is True. Skipping cross-encoder evaluation."
                 )
             continue
 
-        for scorer_hf_id in cfg.scorers_hf_id:
+        all_scorers = [(id, "hf") for id in cfg.scorers_hf_id] + [
+            (id, "st") for id in cfg.scorers_st_id
+        ]
+
+        for scorer_id, scorer_type in all_scorers:
             # Build the cross encoder
-            prepare_hf_model(scorer_hf_id)
-            scorer, ce_init_tasks = hf_cross_scorer(hf_id=scorer_hf_id)
-            scorer.tag("scorer", scorer_hf_id)
+            prepare_hf_model(scorer_id)
+
+            # Logic for max_length: use get_default_max_len for model id,
+            # and pass it to constructor only if default is higher than the one given
+            default_max_len = get_default_max_len(scorer_id)
+            if cfg.max_length and default_max_len > cfg.max_length:
+                max_len = cfg.max_length
+            else:
+                max_len = None
+                logging.warning(
+                    f"No max_len provided or default max_len {default_max_len} is not greater than provided max_len {cfg.max_length}. Using default max_len {default_max_len} for scorer {scorer_id}"
+                )
+
+            if scorer_type == "hf":
+                scorer, ce_init_tasks = hf_cross_scorer(
+                    hf_id=scorer_id, max_doc_length=max_len
+                )
+            else:
+                scorer, ce_init_tasks = st_cross_scorer(
+                    model_id=scorer_id, max_length=max_len
+                )
+
+            scorer.tag("scorer", scorer_id)
+            scorer.tag("scorer_type", scorer_type)
 
             # Build the two stage retriever with the run_retriever
             two_stage_retriever_factory = partial(
@@ -171,34 +205,48 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         logging.info("No results found, Ending experiment")
         return
 
-    measures = ["RR@10", "nDCG@10"] if not cfg.retrievers_only else ["R@1000"]
-    metric_cols = [("metric", measure) for measure in measures]
-    df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
-    df_grouped = (
-        df.groupby(
-            (
-                ["dataset", ("tag", "first_stage"), ("tag", "scorer")]
-                if ("tag", "scorer") in df.columns
-                else ["dataset", ("tag", "first_stage")]
-            ),
-            dropna=False,
-        )[metric_cols]
-        .agg(["mean", "var"])
-        .reset_index()
+    # Identify available metric columns and convert to numeric
+    all_metric_cols = [col for col in df.columns if col[0] == "metric"]
+    df[all_metric_cols] = df[all_metric_cols].apply(pd.to_numeric, downcast="float")
+
+    # Flatten MultiIndex columns and remove duplicates (e.g., 'dataset' might be both a tag and a column)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[1] if col[1] else col[0] for col in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]
+
+    cols_to_drop = [col for col in df.columns if "index_doc" in str(col).lower()]
+    df = df.drop(columns=cols_to_drop, errors="ignore")
+
+    tag_names = ["first_stage", "scorer", "scorer_type"]  # tags to group by
+    group_by_tags = sorted(list(tag_names))
+
+    # Add aggregations
+    df = add_dataset_aggregations(
+        df,
+        group_by_cols=group_by_tags,
+        aggregations=aggregations,
+        add_mean=True,
     )
-    logging.info(df_grouped)
+
+    # Reorder columns: tags first, metrics after
+    tag_cols = ["dataset"] + group_by_tags
+    tag_cols = [c for c in tag_cols if c in df.columns]
+    metric_cols = [c for c in df.columns if c not in tag_cols]
+    df = df[tag_cols + metric_cols]
+
+    logging.info(f"Final DataFrame:\n{df}")
 
     # save results
     if not helper.xp.resultspath.exists():
         helper.xp.resultspath.mkdir(parents=True, exist_ok=True)
 
     output_file = helper.xp.resultspath / "results.csv"
-    df_grouped.to_csv(output_file, index=False)
+    df.to_csv(output_file, index=False)
     logging.info(f"Results saved to {output_file}")
 
     # Generate and save LaTeX table
     latex_table = dataframe_to_latex(
-        df_grouped,
+        df,
         caption="Evaluation Results",
         label="tab:eval_results",
         sig_df=None,

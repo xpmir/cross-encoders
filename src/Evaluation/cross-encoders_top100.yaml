@@ -7,17 +7,24 @@ pre_experiment: ../pre_experiment.py
 
 gpu: true
 
+max_length: 1024
 scorers_hf_id:
   - cross-encoder/ms-marco-MiniLM-L12-v2
-  - xpmir/cross-encoder-bert-base-infoNCE
   - naver/trecdl22-crossencoder-debertav3
-  # - xpmir/cross-encoder-MiniLM-L12-MarginMSE
-  # - Qwen/Qwen3-Reranker-0.6B
+  - xpmir/cross-encoder-MiniLM-L12-MarginMSE
+  - xpmir/cross-encoder-bert-base-infoNCE
   # - tomaarsen/ms-marco-ettin-150m-reranker
   # - cross-encoder/ms-marco-MiniLM-L6-v2
   # - tomaarsen/ms-marco-ettin-68m-reranker
   # - tomaarsen/ms-marco-ettin-32m-reranker
   # - tomaarsen/ms-marco-ettin-17m-reranker
+
+
+scorers_st_id:
+  - Qwen/Qwen3-Reranker-0.6B
+  - cross-encoder/ms-marco-MiniLM-L12-v2
+  - mixedbread-ai/mxbai-rerank-base-v2
+  # - mixedbread-ai/mxbai-rerank-large-v2
 
 retrievers_hf_id:
   - naver/splade-v3-distilbert
@@ -28,8 +35,8 @@ indexation:
   batch_size: 128
 
 retrieval:
-  requirements: duration=10h & cpu(cores=4, mem=10G) & cuda(mem=20G)
-  batch_size: 128
+  requirements: duration=19h & cpu(cores=4, mem=10G) & cuda(mem=20G) * 2
+  batch_size: 64
   k: 100
 
 evaluation:

@@ -21,17 +21,16 @@ retrievers_hf_id:
   - naver/splade-v3-distilbert
 
 indexation:
-  requirements: duration=8h & cpu(cores=4, mem=10G) & cuda(mem=30G)
+  requirements: duration=8h & cpu(cores=4, mem=10G) & cuda(mem=30G) * 2
   sparse2bmp_requirements: duration=8h & cpu(cores=8)
   batch_size: 256
 
 retrieval:
-  requirements: duration=10h & cpu(cores=4, mem=10G) & cuda(mem=20G)
+  requirements: duration=10h & cpu(cores=8, mem=10G) & cuda(mem=20G) * 2
   batch_size: 128
   k: 1000
 
-evaluation:
-  #just for debugging
-  test_max_topics: 100
-  # nanobeir: true
-  in_domain: true
+# evaluation:
+#   #just for debugging
+#   # nanobeir: true
+#   in_domain: true

@@ -23,7 +23,7 @@ class DummyBatch:
     def queries(self):
         """Deprecated: use topics"""
         return self.topics
-    
+
     @classmethod
     def build(cls, batch_size: int, query: str, document: str) -> "DummyBatch":
         def make_item(text: str) -> dict:
@@ -61,7 +61,7 @@ def benchmark_model(
 
         if hasattr(model_cls, "from_kwargs"):
             model = model_cls.from_kwargs(
-                hf_id=model_name, 
+                hf_id=model_name,
                 **model_kwargs,
             )
             if hasattr(model, "initialize"):
@@ -73,16 +73,16 @@ def benchmark_model(
                 **model_kwargs,
             ).instance()
 
-        
+
         # Verify weights before moving to device (or after, just need to be careful with cpu/cuda)
         if verify_weights_fn:
             verify_weights_fn(model, model_name, name)
-        
+
 
         if not cuda_available:
             print("[warn] CUDA not available, running on CPU may be slow.")
             # We continue even if CPU, but warn.
-            
+
         model.to(device)
         model.eval()
 
@@ -92,7 +92,7 @@ def benchmark_model(
 
         num_params = sum(p.numel() for p in model.parameters())
         logger.info(f"{name} Parameters: {num_params:,}")
-        
+
         # Try to detect attention implementation
         attn_impl = "N/A"
         try:
@@ -125,8 +125,8 @@ def benchmark_model(
                     if torch.cuda.is_available():
                         torch.cuda.synchronize()
 
-            # Reset again after warmup to measure pure inference peak if desired, 
-            # or keep it to include warmup's peak. 
+            # Reset again after warmup to measure pure inference peak if desired,
+            # or keep it to include warmup's peak.
             # Usually, peak is stable after warmup.
             if torch.cuda.is_available():
                 torch.cuda.reset_peak_memory_stats()

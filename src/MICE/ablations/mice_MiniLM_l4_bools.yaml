@@ -1,0 +1,47 @@
+id: train_mice_miniLM_bools
+title: "Mice-MiniLM Training"
+description:
+    try All combinations of boolean flags for Mice training
+
+module: MICE.mice_training
+# pre_experiment: pre_experiment
+parent: ../mice_MiniLM_l4.yaml
+
+seed: 12 # To mimick the HF xp
+nb_repetitions: 2
+
+evaluation: #default = Minified tests
+    all_datasets: false
+    in_domain: true
+
+
+n_contextualization_layers: 4
+n_interaction_layers: 3
+global_cls_token: false
+
+#### Params that are grid searched
+grid_search:
+
+    base:
+        values_list:
+            - microsoft/MiniLM-L12-H384-uncased
+
+    global_cls_token:
+        values_list:
+            - true
+            - false
+
+    mask_cls_to_doc:
+        values_list:
+            - true
+            - false
+
+    mask_query_to_cls:
+        values_list:
+            - true
+            - false
+
+
+    learner.loss:
+        values_list:
+            - marginMSE

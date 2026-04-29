@@ -185,7 +185,7 @@ def Robust04_test(
 ) -> EvaluationsCollection:
     """Robust04 dataset"""
     logger.info("Preparing Robust04 dataset...")
-    robust04 = prepare_dataset("gov.nist.trec.adhoc.robust.2004")
+    robust04 = prepare_dataset("gov.nist.trec.adhoc.robust.2004.withstore")
     robust04 = get_fold(robust04, test_topic_nb, launcher=launcher)
 
     return EvaluationsCollection(
@@ -367,7 +367,7 @@ def build_tests(
                 all_evals[name] = evals
 
     # 2. In-domain (MSMarco + TREC DL)
-    if cfg.in_domain:
+    if cfg.in_domain or cfg.all_datasets:
         v1_dev = prepare_collection("com.microsoft.msmarco.passage.dev.small")
         dl19 = prepare_dataset("com.microsoft.msmarco.passage.trec2019.judged")
         dl20 = prepare_dataset("com.microsoft.msmarco.passage.trec2020.judged")

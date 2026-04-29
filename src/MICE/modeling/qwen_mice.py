@@ -257,24 +257,35 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
             nn.ModuleList(
                 [
                     type(temp_model.model.layers[0])(self.config, i)
-                    for i in range(self.merge_layer)
+                    for i in range(self.n_contextualization_layers)
                 ]
             ),
         )
 
         # Top layers: augmented with cross-attention
-        num_top = (self.drop_layer or len(temp_model.model.layers)) - self.merge_layer
+        if self.n_interaction_layers is not None:
+            num_top = self.n_interaction_layers
+        else:
+            num_top = len(temp_model.model.layers) - self.n_contextualization_layers
+
         self.add_module(
             "top_layers",
             nn.ModuleList(
                 [
-                    QwenCrossAttentionLayer(self.config, self.merge_layer + i)
+                    QwenCrossAttentionLayer(
+                        self.config, self.n_contextualization_layers + i
+                    )
                     for i in range(num_top)
                 ]
             ),
         )
 
         self.add_module("final_norm", temp_model.model.norm)
+
+        if self.global_cls_token:
+            self.global_cls = nn.Parameter(
+                torch.randn(1, 1, self.config.hidden_size) * 0.02
+            )
 
         # Rotary embeddings for the whole model
         if hasattr(self.config, "model_type") and self.config.model_type == "qwen3":
@@ -289,8 +300,130 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         self.dropout_layer = nn.Dropout(getattr(self.config, "classifier_dropout", 0.1))
         self.classifier = nn.Linear(self.config.hidden_size, 1)
 
+    def forward_vanilla_transformer(
+        self, x_q, x_d, cross_mask, q_pos, q_position_embeddings
+    ):
+        """Vanilla transformer architecture: Self-Attention followed by Cross-Attention."""
+        num_top = len(self.top_layers)
+        for i, layer in enumerate(self.top_layers):
+            if i == num_top - 1 and self.pooling_method == "cls":
+                # Optimized last layer: Self-Attention on full sequence,
+                # then slice to CLS for Cross-Attention and MLP.
+
+                # 1. Self-Attention Block (Full)
+                residual = x_q
+                normed_x_q = layer.input_layernorm(x_q)
+                attn_out, _ = layer.self_attn(
+                    normed_x_q,
+                    attention_mask=None,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )
+                x_q = residual + attn_out
+
+                # 2. Slice to CLS
+                x_q = x_q[:, 0:1, :]
+
+                # 3. Cross-Attention Block (CLS only)
+                if x_d is not None and not self.mask_cls_to_doc:
+                    residual = x_q
+                    normed_x_q = layer.input_layernorm(x_q)
+                    x_q = layer.cross_attn(
+                        normed_x_q,
+                        encoder_hidden_states=layer.input_layernorm(x_d),
+                        encoder_attention_mask=cross_mask[:, :, 0:1, :],
+                    )
+                    x_q = residual + x_q
+
+                # 4. MLP Block (CLS only)
+                residual = x_q
+                x_q = layer.mlp(layer.post_attention_layernorm(x_q))
+                x_q = residual + x_q
+            else:
+                x_q = layer(
+                    x_q,
+                    attention_mask=None,
+                    encoder_hidden_states=x_d,
+                    encoder_attention_mask=cross_mask,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )[0]
+        return x_q
+
+    def forward_inverted_transformer(
+        self, x_q, x_d, cross_mask, q_pos, q_position_embeddings
+    ):
+        """Inverted transformer architecture: Cross-Attention followed by Self-Attention."""
+        num_top = len(self.top_layers)
+        for i, layer in enumerate(self.top_layers):
+            if i == num_top - 1 and self.pooling_method == "cls":
+                # Optimized last layer: Cross-Attention on full sequence,
+                # then Self-Attention, then slice to CLS for MLP.
+
+                # 1. Cross-Attention Block (Full)
+                if x_d is not None:
+                    residual = x_q
+                    normed_x_q = layer.input_layernorm(x_q)
+                    x_q = layer.cross_attn(
+                        normed_x_q,
+                        encoder_hidden_states=layer.input_layernorm(x_d),
+                        encoder_attention_mask=cross_mask,
+                    )
+                    x_q = residual + x_q
+
+                # 2. Self-Attention Block (Full)
+                residual = x_q
+                normed_x_q = layer.input_layernorm(x_q)
+                attn_out, _ = layer.self_attn(
+                    normed_x_q,
+                    attention_mask=None,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )
+                x_q = residual + attn_out
+
+                # 3. Slice to CLS
+                x_q = x_q[:, 0:1, :]
+
+                # 4. MLP Block (CLS only)
+                residual = x_q
+                x_q = layer.mlp(layer.post_attention_layernorm(x_q))
+                x_q = residual + x_q
+            else:
+                # Inverted logic: Cross-attn followed by Self-attn
+                # 1. Cross-Attention Block
+                if x_d is not None:
+                    residual = x_q
+                    normed_x_q = layer.input_layernorm(x_q)
+                    x_q = layer.cross_attn(
+                        normed_x_q,
+                        encoder_hidden_states=layer.input_layernorm(x_d),
+                        encoder_attention_mask=cross_mask,
+                    )
+                    x_q = residual + x_q
+
+                # 2. Self-Attention Block
+                residual = x_q
+                normed_x_q = layer.input_layernorm(x_q)
+                attn_out, _ = layer.self_attn(
+                    normed_x_q,
+                    attention_mask=None,
+                    position_ids=q_pos,
+                    position_embeddings=q_position_embeddings,
+                )
+                x_q = residual + attn_out
+
+                # 3. MLP Block
+                residual = x_q
+                hidden_states = layer.post_attention_layernorm(x_q)
+                hidden_states = layer.mlp(hidden_states)
+                x_q = residual + hidden_states
+        return x_q
+
     def forward(
-        self, inputs: BaseItems, tokenized: Optional[MICETokenizedTexts] = None
+        self,
+        inputs: BaseItems,
+        tokenized: Optional[MICETokenizedTexts] = None,
     ):
         if tokenized is None:
             tokenized = self.batch_tokenize(inputs)
@@ -333,19 +466,36 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
                 position_embeddings=d_position_embeddings,
             )
 
+        if self.global_cls_token:
+            cls_token = self.global_cls.expand(x_q.shape[0], -1, -1)
+            x_q = torch.cat([cls_token, x_q], dim=1)
+            query_mask = torch.cat(
+                [
+                    torch.ones(
+                        (query_mask.shape[0], 1),
+                        dtype=query_mask.dtype,
+                        device=query_mask.device,
+                    ),
+                    query_mask,
+                ],
+                dim=1,
+            )
+            # Recompute pos embeds for top layers
+            q_pos = _get_pos_ids(query_mask)
+            q_position_embeddings = self.rotary_emb(x_q, q_pos)
+
         # Top
         # Mask for Cross-Attention (Query attending to Doc) shape [batch, 1, seq_len_query, seq_len_doc]
         cross_mask = self.get_cross_attention_mask(query_mask, doc_mask, x_q.dtype)
 
-        for layer in self.top_layers:
-            x_q = layer(
-                x_q,
-                attention_mask=None,
-                encoder_hidden_states=x_d,
-                encoder_attention_mask=cross_mask,
-                position_ids=q_pos,
-                position_embeddings=q_position_embeddings,
-            )[0]
+        if self.cross_attn_first:
+            x_q = self.forward_inverted_transformer(
+                x_q, x_d, cross_mask, q_pos, q_position_embeddings
+            )
+        else:
+            x_q = self.forward_vanilla_transformer(
+                x_q, x_d, cross_mask, q_pos, q_position_embeddings
+            )
 
         x_q = self.final_norm(x_q)
 
@@ -387,8 +537,10 @@ class InitMICEQwenFromHFID(LightweightTask):
 
         # Bottom layers
         if hasattr(full_backbone.model, "layers"):
-            logger.info(f"Seeding {model.merge_layer} bottom layers from backbone")
-            for i in range(model.merge_layer):
+            logger.info(
+                f"Seeding {model.n_contextualization_layers} bottom layers from backbone"
+            )
+            for i in range(model.n_contextualization_layers):
                 if i < len(full_backbone.model.layers):
                     model.bottom_layers[i].load_state_dict(
                         full_backbone.model.layers[i].state_dict()
@@ -404,7 +556,13 @@ class InitMICEQwenFromHFID(LightweightTask):
 
         # Top layers
         if hasattr(full_backbone.model, "layers"):
-            src_layers = full_backbone.model.layers[model.merge_layer :]
+            start_idx = model.n_contextualization_layers
+            if model.n_interaction_layers is not None:
+                end_idx = start_idx + model.n_interaction_layers
+                src_layers = full_backbone.model.layers[start_idx:end_idx]
+            else:
+                src_layers = full_backbone.model.layers[start_idx:]
+
             logger.info(f"Seeding {len(model.top_layers)} top layers from backbone")
             for i, target_layer in enumerate(model.top_layers):
                 if i < len(src_layers):
@@ -426,6 +584,27 @@ class InitMICEQwenFromHFID(LightweightTask):
             logger.warning(
                 f"Backbone {hf_id} has no 'norm' attribute; skipping final_norm seeding"
             )
+
+        if model.global_cls_token:
+            # Qwen might not have a CLS token; try BOS or EOS
+            cls_token_id = (
+                model.tokenizer.tokenizer.cls_token_id
+                or model.tokenizer.tokenizer.bos_token_id
+                or model.tokenizer.tokenizer.eos_token_id
+            )
+            if cls_token_id is not None:
+                logger.info(
+                    f"Seeding global_cls with token ID {cls_token_id} embedding"
+                )
+                with torch.no_grad():
+                    cls_embedding = full_backbone.model.embed_tokens.weight[
+                        cls_token_id
+                    ]
+                    model.global_cls.data.copy_(cls_embedding.view(1, 1, -1))
+            else:
+                logger.warning(
+                    "global_cls is True but no CLS/BOS/EOS token found in tokenizer; skipping seeding"
+                )
 
     def _copy_qwen_weights(self, src, target):
         """Copies weights and seeds cross-attention"""

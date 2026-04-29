@@ -40,6 +40,12 @@ class Losses(str, Enum):
     infoNCE_RankDistiLLM = "infoNCE_RankDistiLLM"
     """InfoNCE using the negatives sampled by Schlatt et al. 2025 with ColBERTv2"""
 
+    BCE_RankDistiLLM = "bce_RankDistiLLM"
+    """Binary Cross Entropy loss with ColBERTv2 negatives"""
+
+    hingeLoss_RankDistiLLM = "hingeLoss_RankDistiLLM"
+    """Hinge loss with ColBERTv2 negatives"""
+
     marginMSE = "marginMSE"
     """Margin Mean Squared Error loss from hofstatter et al. 2020"""
 
@@ -68,6 +74,9 @@ class Validation(str, Enum):
 
     NanoBEIR = "nanobeir"
     """A small subset of BEIR datasets designed specifically for validation"""
+
+    NanoBEIR11 = "nanobeir11"
+    """NanoBEIR excluding argana and touche-2020 as done in [Sentence-Transformers](https://www.sbert.net/docs/package_reference/cross_encoder/evaluation.html#crossencodernanobeirevaluator)"""
 
     ALL = "all"
     """ Both Nano MSMARCO and NanoBEIR validations"""
@@ -265,7 +274,7 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     base: str = ""
     """Identifier for the base model"""
 
-    max_doc_len: Optional[int] = None
+    max_length: Optional[int] = None
     """max len for scorer, default to 0 = max len of the model"""
 
     pooling_method: str = PoolingMethod.CLS.value
@@ -290,31 +299,6 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     """
 
 
-@configuration()
-class Mice_FineTuning(CE_FineTuning):
-    ## MICE specific configuration
-    merge_layer: int = 6
-    """Mid-fusion index: encoder layers are split into bottom (independent) and top (cross-attention)"""
-
-    drop_layer: int = 0
-    """Layer at which to drop backbone layers"""
-
-    mask_cls_to_doc: bool = True
-    """Whether to mask the [CLS] token from attending to document tokens."""
-
-    mask_query_to_cls: bool = True
-    """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
-
-    freeze_base: bool = False
-    """Whether to freeze the bottom layers during finetuning"""
-
-    random_top_layers: bool = False
-    """Whether to initialize top layers randomly instead of copying from backbone"""
-
-    compress_dim: float = 1.0
-    """Factor by which to divide the hidden dimensions of the top layers"""
-
-
 def set_nested_attr(obj: Any, path: str, value: Any):
     """Sets a nested attribute on an object."""
     keys = path.split(".")
@@ -327,18 +311,30 @@ def set_nested_attr(obj: Any, path: str, value: Any):
 def get_nested_attr_type(obj: Any, path: str) -> Type:
     """
     Traverses a nested object to find the type hint of the final attribute.
+    Raises ValueError if the path is invalid.
     """
     keys = path.split(".")
     current_obj = obj
-    for key in keys[:-1]:
-        # In case of intermediate GenericParams, we can't traverse further
+    for i, key in enumerate(keys[:-1]):
         if not hasattr(current_obj, key):
-            return Any
+            raise ValueError(
+                f"Invalid grid search path '{path}': "
+                f"'{key}' not found in {type(current_obj).__name__} "
+                f"(at level {'.'.join(keys[:i]) if i > 0 else 'root'})"
+            )
         current_obj = getattr(current_obj, key)
+
+    last_key = keys[-1]
+    if not hasattr(current_obj, last_key):
+        raise ValueError(
+            f"Invalid grid search path '{path}': "
+            f"'{last_key}' not found in {type(current_obj).__name__} "
+            f"(at level {'.'.join(keys[:-1]) if len(keys) > 1 else 'root'})"
+        )
 
     try:
         type_hints = get_type_hints(type(current_obj))
-        return type_hints.get(keys[-1], Any)
+        return type_hints.get(last_key, Any)
     except Exception:
         return Any
 
@@ -375,6 +371,8 @@ def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
 
     value_options = []
     for path in param_paths:
+        # get target type for this parameter from the config class using the path
+        # raises an error if the attribute is invalid
         target_type = get_nested_attr_type(cfg, path)
 
         # This converter is defined locally to have access to the target_type
