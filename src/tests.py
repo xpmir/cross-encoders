@@ -367,7 +367,7 @@ def build_tests(
                 all_evals[name] = evals
 
     # 2. In-domain (MSMarco + TREC DL)
-    if cfg.in_domain:
+    if cfg.in_domain or cfg.all_datasets:
         v1_dev = prepare_collection("com.microsoft.msmarco.passage.dev.small")
         dl19 = prepare_dataset("com.microsoft.msmarco.passage.trec2019.judged")
         dl20 = prepare_dataset("com.microsoft.msmarco.passage.trec2020.judged")

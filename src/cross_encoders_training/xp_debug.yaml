@@ -12,7 +12,7 @@ seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
 base: "microsoft/MiniLM-L12-H384-uncased"
-max_doc_len: 1024
+max_length: 1024
 
 # microsoft/MiniLM-L12-H384-uncased # jhu-clsp/ettin-encoder-32m  microsoft/MiniLM-L12-H384-uncased
 

@@ -28,6 +28,7 @@ from xpmir.neural.huggingface import hf_cross_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
+from xpmir.text.huggingface.tokenizers import get_default_max_len
 
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
@@ -158,9 +159,19 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
         ### TRAINING CROSS ENCODER
 
         ce_trainer: LossTrainer = build_trainer(cfg)
+
         # Build the model
+
+        default_max_len = get_default_max_len(cfg.base)
+        if cfg.max_length and default_max_len > cfg.max_length:
+            max_len = cfg.max_length
+        else:
+            max_len = None
+            logging.warning(
+                f"No max_len provided or default max_len {default_max_len} is not greater than provided max_len {cfg.max_length}. Using default max_len {default_max_len} for scorer {cfg.base}"
+            )
         scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
-            hf_id=cfg.base, max_doc_length=cfg.max_doc_len
+            hf_id=cfg.base, max_doc_length=max_len
         )
         for k, v in cfg_tags.items():
             scorer_model.tag(k, v)

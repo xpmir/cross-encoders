@@ -1,8 +1,9 @@
-id: core_base_deberta
-parent: core_base # load configuration from core base.
-title: "Training Deberta Reranker"
+id: colbertNeg_base
+title: "Training Cross encoders with Colbert Negatives"
 description:
-    Example configuration for training an ettin-150m model with two different losses.
+    Compare three losses using the same sampling of ColBert Negatives
+
+parent: ../core_base # load configuration from core base.
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 3
@@ -11,9 +12,6 @@ nb_repetitions: 3
 learner:
     fabric:
         precision: bf16-mixed
-
-max_length: 1024
-normalize_docs_per_batch: true
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
@@ -28,20 +26,19 @@ evaluation:
     lotte_search: true
     # nanobeir: true
 
+# max_len deberta is 512
+max_length: 1024
+normalize_docs_per_batch: true
 
 #### Params that are grid searched
 grid_search:
     base:
         values_list:
-            - microsoft/deberta-v3-base
+            # - microsoft/deberta-v3-base
+            - jhu-clsp/ettin-encoder-150m
 
     learner.loss:
         values_list:
-            # - bce
-            # - distillRankNET
-            # - ADR_MSE
-            - marginMSE
-            - hingeLoss
             - infoNCE_RankDistiLLM
             - hingeLoss_RankDistiLLM
             - bce_RankDistiLLM

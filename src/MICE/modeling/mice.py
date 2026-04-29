@@ -407,7 +407,7 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
                     q_hidden = layer.crossattention(
                         hidden_states=q_hidden,
                         encoder_hidden_states=doc_hidden_states,
-                        encoder_attention_mask=d_ext_mask,
+                        encoder_attention_mask=d_ext_mask[:, :, 0:1, :],
                     )[0]
 
                 # 4. MLP (CLS only)
@@ -718,7 +718,7 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                         query=layer.attn_norm(x_q),
                         key=layer.attn_norm(x_d),
                         value=layer.attn_norm(x_d),
-                        attention_mask=cross_mask,
+                        attention_mask=cross_mask[:, :, 0:1, :],
                     )[0]
                     x_q = x_q + cross_out
 

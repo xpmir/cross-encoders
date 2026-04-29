@@ -30,6 +30,7 @@ from xpm_torch.optim import GradientLogHook, GradientClippingHook
 from xpmir.papers.results import PaperResults
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
+from xpmir.text.huggingface.tokenizers import get_default_max_len
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 
@@ -83,7 +84,6 @@ class Mice_FineTuning(CE_FineTuning):
     """Factor by which to divide the hidden dimensions of the top layers"""
 
 
-# TODO format as Mice-lX+Y
 def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     """Creates the HF id from tags using formatting conventions."""
     base = model_tags.get("base", "")
@@ -203,6 +203,14 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
 
         ce_trainer: LossTrainer = build_trainer(cfg)
 
+        default_max_len = get_default_max_len(cfg.base)
+        if cfg.max_length and default_max_len > cfg.max_length:
+            max_len = cfg.max_length
+        else:
+            max_len = None
+            logging.warning(
+                f"No max_len provided or default max_len {default_max_len} is not greater than provided max_len {cfg.max_length}. Using default max_len {default_max_len} for scorer {cfg.base}"
+            )
         # Build the model using the unified scorer factory
         mice_model, scorer_hf_init_tasks = mice_scorer(
             hf_id=cfg.base,
@@ -216,6 +224,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             compress_dim=cfg.compress_dim,
             global_cls_token=cfg.global_cls_token,
             pooling_method=cfg.pooling_method,
+            max_length=max_len,
         )
         for k, v in cfg_tags.items():
             mice_model.tag(k, v)

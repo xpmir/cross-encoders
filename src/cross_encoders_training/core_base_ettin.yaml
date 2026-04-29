@@ -13,7 +13,7 @@ learner:
     fabric:
         precision: bf16-mixed
 
-max_doc_len: 1024
+max_length: 1024
 
 normalize_docs_per_batch: true
 

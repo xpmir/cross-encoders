@@ -1,0 +1,30 @@
+id: train_mice_miniLM_lX+3
+title: "Mice-MiniLM Training"
+description:
+    Grid search the necessary number of contextualization layers
+    For Mice models with 3 interactions layers
+
+module: MICE.mice_training
+# pre_experiment: pre_experiment
+parent: ./mice_MiniLM_l4.yaml
+
+seed: 12 # To mimick the HF xp
+nb_repetitions: 2
+
+
+base: jhu-clsp/ettin-encoder-68m # ettin-68 has 19 layers
+max_length: 1024
+n_contextualization_layers: 8
+n_interaction_layers: 3
+mask_cls_to_doc: false
+
+# evaluation: #default = Minified tests
+#     all_datasets: false
+#     in_domain: true
+
+#### Params that are grid searched
+grid_search:
+    n_contextualization_layers:
+        values_range:
+            - 0
+            - 18

@@ -30,6 +30,7 @@ from xpmir.letor.distillation.listwise import (
     DistillationListwiseTrainer,
     ListwiseSoftmaxCrossEntropy,
     ListwiseHingeLoss,
+    ListwiseBCE,
 )
 from xpmir.letor.distillation.pairwise import (
     DistillationPairwiseTrainer,
@@ -140,10 +141,10 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
 
         if loss_member is Losses.infoNCE_RankDistiLLM:
             loss_fn = ListwiseSoftmaxCrossEntropy.C()
-        if loss_member is Losses.hingeLoss_RankDistiLLM:
+        elif loss_member is Losses.hingeLoss_RankDistiLLM:
             loss_fn = ListwiseHingeLoss.C()
         else:
-            loss_fn = ListwiseHingeLoss.C()
+            loss_fn = ListwiseBCE.C()
 
         return DistillationListwiseTrainer.C(
             sampler=msmarco_colbertv2_annotated(passages_per_query=passages_per_query),

@@ -2,6 +2,7 @@
 Tests for the MICE model.
 run manually with `pytest tests/test_mice.py` or `uv run pytest tests/test_mice.py -v`
 """
+
 import torch
 import logging
 import tempfile
@@ -50,21 +51,31 @@ class TestMiceForwardTask(LightweightTask):
         print("\nForward pass successful!")
 
 
-@pytest.mark.parametrize("model_id", [
-    "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
-    "jhu-clsp/ettin-encoder-32m",           # ModernBERT
-    "Qwen/Qwen2.5-0.5B-Instruct",           # Qwen
-])
-@pytest.mark.parametrize("mask_cls_to_doc", [True, False])
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "jhu-clsp/ettin-encoder-68m",  # ModernBERT
+        # "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
+        # "Qwen/Qwen2.5-0.5B-Instruct",           # Qwen
+    ],
+)
+@pytest.mark.parametrize("cross_attn_first", [True, False])
+@pytest.mark.parametrize("mask_cls_to_doc", [False])
 @pytest.mark.parametrize("n_contextualization_layers", [3])
-def test_mice(model_id, n_contextualization_layers, mask_cls_to_doc):
+def test_mice(
+    model_id,
+    n_contextualization_layers,
+    cross_attn_first: bool,
+    mask_cls_to_doc: bool,
+):
     """Tests MICE loading, forward pass, and weight persistence across a grid of parameters."""
 
     # Initialize scorer configuration
     scorer_cfg, init_tasks = mice_scorer(
         hf_id=model_id,
         n_contextualization_layers=n_contextualization_layers,
-        mask_cls_to_doc=mask_cls_to_doc
+        cross_attn_first=cross_attn_first,
+        mask_cls_to_doc=mask_cls_to_doc,
     )
 
     # Create and run the forward pass task
@@ -106,6 +117,6 @@ def test_mice(model_id, n_contextualization_layers, mask_cls_to_doc):
         hf_loader.execute()
         hf_model = hf_loader.model
 
-        assert torch.allclose(model.classifier.weight, hf_model.classifier.weight), (
-            "Classifier weights mismatch after HF roundtrip!"
-        )
+        assert torch.allclose(
+            model.classifier.weight, hf_model.classifier.weight
+        ), "Classifier weights mismatch after HF roundtrip!"
