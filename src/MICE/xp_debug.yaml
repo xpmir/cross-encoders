@@ -27,7 +27,7 @@ learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 64
-        max_epochs: 100 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        max_epochs: 50 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
         lr: 1e-5
@@ -36,8 +36,8 @@ learner:
         precision: bf16-mixed
     # sample_max: 2_000_000
     max_grad_norm: 1.0
-    checkpoint_interval: 100
-    validation_interval: 50
+    checkpoint_interval: 25
+    validation_interval: 25
     validation_top_k: 100
     validation: nanobeir11
     loss: marginMSE
@@ -70,5 +70,6 @@ grid_search:
 
     base:
         values_list:
-            - jhu-clsp/ettin-encoder-32m
+            - microsoft/MiniLM-L12-H384-uncased
+            # - jhu-clsp/ettin-encoder-32m
             # - microsoft/MiniLM-L12-H384-uncased

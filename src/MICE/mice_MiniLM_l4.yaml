@@ -44,7 +44,7 @@ learner:
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
     k: 1000
-    batch_size: 128
+    batch_size: 64
 
 # evaluation: #default = Minified tests
 #     all_datasets: false
