@@ -34,7 +34,7 @@ normalize_docs_per_batch: true
 grid_search:
     base:
         values_list:
-            # - microsoft/deberta-v3-base
+            - microsoft/deberta-v3-base
             - jhu-clsp/ettin-encoder-150m
 
     learner.loss:

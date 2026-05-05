@@ -13,7 +13,6 @@ loss_names = {
     "distillRankNET": "DistillRankNET",
     "infoNCE_RankDistiLLM_norm_size=True": "InfoNCE",
     "ADR_MSE": "ADR-MSE",
-    "ADR": "ADR-MSE",
 }
 
 backbone_names = {
@@ -66,7 +65,7 @@ aggregations = {
         "touche",
         "trec_covid",
     ],
-    "OOD": [
+    "Lotte-S": [
         "lotte_lifestyle",
         "lotte_recreation",
         "lotte_science",
@@ -80,7 +79,7 @@ aggregations = {
 aggregation_hf = {
     "Mean In Domain": aggregations["In Domain"],
     "BEIR 13": aggregations["BEIR13"],
-    "LoTTE (OOD)": aggregations["OOD"],
+    "LoTTE (OOD)": aggregations["Lotte-S"],
     "Nano BEIR": aggregations["Nano BEIR"],
 }
 
