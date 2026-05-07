@@ -62,6 +62,9 @@ class Mice_FineTuning(CE_FineTuning):
     n_interaction_layers: Optional[int] = None
     """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
+    bound_bottom_layers: Optional[bool] = True
+    """whether to bound bottom query and document encoding layers"""
+
     cross_attn_first: bool = True
     """Whether to perform cross-attention before self-attention in the top layers."""
 
@@ -82,6 +85,9 @@ class Mice_FineTuning(CE_FineTuning):
 
     compress_dim: float = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
+
+    save_runs: bool = False
+    """Whether to save the evaluation runs in the best model folders"""
 
 
 def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
@@ -216,6 +222,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             hf_id=cfg.base,
             n_contextualization_layers=cfg.n_contextualization_layers,
             n_interaction_layers=cfg.n_interaction_layers,
+            bound_bottom_layers=cfg.bound_bottom_layers,
             mask_cls_to_doc=cfg.mask_cls_to_doc,
             mask_query_to_cls=cfg.mask_query_to_cls,
             cross_attn_first=cfg.cross_attn_first,
@@ -303,6 +310,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                         launcher_evaluate,
                         model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
                         init_tasks=[load_model],
+                        with_run=cfg.save_runs,
                     )
 
     all_configs, all_tags = generate_grid(cfg)
@@ -437,6 +445,8 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                 )
                 model_name = scorer_path
 
+            # Collect evaluation results for the best model
+
             export_model(
                 best_tags=best_tags,
                 model_name=model_name,
@@ -447,6 +457,8 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                 best_cfg=best_cfg,
                 resultspath=helper.xp.resultspath,
                 card_template_txt=card_template_txt,
+                save_runs=cfg.save_runs,
+                tests=tests,
             )
 
         if best_models_list:

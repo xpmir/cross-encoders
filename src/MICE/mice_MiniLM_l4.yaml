@@ -42,21 +42,16 @@ learner:
     requirements: duration=12h & cpu(cores=16) & cuda(mem=80G)
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
     k: 1000
     batch_size: 64
 
-# evaluation: #default = Minified tests
-#     all_datasets: false
-#     in_domain: true
+evaluation: #default = Minified tests
+    all_datasets: false
+    in_domain: true
+    beir13: true
 
 base: microsoft/MiniLM-L12-H384-uncased
 n_contextualization_layers: 4
 n_interaction_layers: 3
 mask_cls_to_doc: false
-
-#### Params that are grid searched
-grid_search:
-    learner.loss:
-        values_list:
-            - marginMSE

@@ -2,6 +2,7 @@
 
 import logging
 import yaml
+import shutil
 from pathlib import Path
 from attrs import asdict
 import numpy as np
@@ -14,6 +15,7 @@ from experimaestro.launcherfinder import find_launcher
 from xpm_torch.trainers import LossTrainer
 from xpmir.letor.trainers.batchwise import BatchwiseTrainer
 from xpmir.letor.trainers.pairwise import PairwiseTrainer
+from xpmir.evaluation import EvaluationsCollection
 from xpm_torch.losses.batchwise import SoftmaxCrossEntropy
 from xpm_torch.losses.pairwise import HingeLoss, PointwiseCrossEntropyLoss
 
@@ -356,6 +358,8 @@ def export_model(
     best_cfg: CE_FineTuning,
     resultspath: Path,
     card_template_txt: str = None,
+    save_runs: bool = False,
+    tests: EvaluationsCollection = None,
 ):
     """Exports all artifacts (weights, logs, readme, config) for a best model.
     Also saves the results to a CSV file and generates a README card using a template.
@@ -370,7 +374,8 @@ def export_model(
         best_cfg: The configuration of the best model, used for README generation.
         resultspath: The base path where the model artifacts and results should be saved.
         card_template_txt: Optional Jinja2 template string for the README card.
-        aggregations: Optional dict of dataset aggregations to include in the README results.
+        save_runs: Whether to save the evaluation runs in the best model folders.
+        tests: Optional EvaluationsCollection containing the evals
     """
     models_path = resultspath / "models"
     best_model_path = models_path / model_name
@@ -379,7 +384,10 @@ def export_model(
     csv_results.to_csv(best_model_path / "results.csv", index=False)
     logger.info(f"Model results saved to {best_model_path / 'results.csv'}")
 
-    best_model_learner = get_task_by_tags(learners, best_tags)
+    learner_tags = {
+        k: v for k, v in best_tags.items() if k not in ["validation", "metric"]
+    }
+    best_model_learner = get_task_by_tags(learners, learner_tags)
     if best_model_learner:
         symlink_path = best_model_path / "job_logs"
         if symlink_path.exists():
@@ -419,3 +427,36 @@ def export_model(
         hub.save_pretrained(best_model_path)
     else:
         logger.warning(f"Could not find model task for tags {best_tags} in all_weights")
+
+    def get_runs_per_tags(model_tags: dict):
+        runs = {}
+        for dataset, evals in tests.collection.items():
+            for eval_tags, evaluate in evals.per_tags.items():
+                # Check if all given tags are present and match in the task's tags
+                if all(
+                    str(eval_tags.get(tag)) == str(value)
+                    for tag, value in model_tags.items()
+                ):
+                    job_path = Path(evaluate.results).parent
+                    run_path = job_path / "run.txt"
+                    if run_path.exists():
+                        runs[dataset] = run_path
+                    else:
+                        logger.warning(
+                            f"Didn't found run.txt in {job_path} for {dataset}"
+                        )
+        return runs
+
+    # 5. Export runs
+    if save_runs:
+        if not tests:
+            logger.error("save_runs is True but no tests provided, skipping...")
+        runs = get_runs_per_tags(learner_tags)
+        if not runs:
+            logging.warning(f"not runs retrieved for model with tags {learner_tags}")
+            return
+        runs_dir = best_model_path / "runs"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        for dataset, runpath in runs.items():
+            shutil.copy(runpath, runs_dir / f"run_{dataset}.txt")
+        logger.info(f"Copied {len(list(runs.keys()))} runs to {runs_dir}")

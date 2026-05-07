@@ -54,6 +54,7 @@ evaluation:
     in_domain: true
     # lotte_search: true
 
+save_runs: true
 #MICE params
 n_contextualization_layers: 4
 n_interaction_layers: 3
