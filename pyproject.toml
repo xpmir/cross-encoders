@@ -22,6 +22,7 @@ dependencies = [
     "tiktoken>=0.12.0",
     "sentencepiece>=0.2.1",
     "sentence-transformers>=5.4.1",
+    "fast-plaid"
 ]
 
 [tool.setuptools]
@@ -48,6 +49,7 @@ experimaestro = { path = "experimaestro-python", editable = true }
 experimaestro-ir = { path = "experimaestro-ir", editable = true }
 datamaestro-ir = { path = "datamaestro-ir", editable = true }
 ir-datasets = { git = "https://github.com/bpiwowar/ir_datasets.git" }
+fast-plaid = {git = "https://github.com/lightonai/fast-plaid" }
 
 [dependency-groups]
 dev = [

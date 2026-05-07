@@ -253,6 +253,42 @@ class xpm_torch_Learner:
 
 
 @configuration()
+class PlaidConfiguration:
+    """
+    Configuration for PLAID integration in MICE retrieval pipeline.
+    """
+    use_plaid: bool = False
+    """Whether to use PLAID for retrieval"""
+    
+    ### Indexation params ###
+    batch_size: int = 32
+    """Batch size when encoding documents for PLAID"""
+
+    dim: int = 128
+    """Per-token embedding dimension for PLAID index"""
+
+    n_bits: int = 2
+    """Number of bits for residual quantization in PLAID"""
+
+    kmeans_niters: int = 4
+    """Number of K-means iterations for PLAID clustering"""
+
+    n_samples_kmeans: int = 0
+    """Number of token samples used to train the centroids (0 = fast-plaid
+    default)."""
+
+    compress_only: bool = False
+    """Whether to build a compress-only index (no IVF search)"""
+
+    ### Retrieval params ###
+    n_ivf_probe: int = 8
+    """Number of IVF clusters to probe in PLAID (lower = faster, less accurate)"""
+
+    n_full_scores: int = 0
+    """Number of candidates for which fast-plaid computes full scores
+    (0 = fast-plaid default)."""
+
+@configuration()
 class CE_FineTuning(RerankerMSMarcoV1Configuration):
     nb_repetitions: int = field(default=1)
     """Number of repetitions of the training process"""
@@ -264,7 +300,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
 
     preprocessing: Preprocessing = Factory(Preprocessing)
 
-    evaluation: Evaluation = Factory(Evaluation)
+    evaluation: Evaluation = Factory(Evaluation) 
+
+    plaid: PlaidConfiguration = Factory(PlaidConfiguration)
 
     ## Retriever Model
     retriever: str = ""
