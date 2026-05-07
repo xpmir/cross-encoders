@@ -1,5 +1,5 @@
-from abc import abstractmethod
 from typing import List, Tuple, Optional, NamedTuple
+from datamaestro_ir.data.base import IDTextRecord
 import torch
 import torch.nn as nn
 import logging
@@ -12,9 +12,7 @@ from xpmir.rankers import AbstractModuleScorer
 from xpm_torch.utils import to_device
 from xpm_torch.module import SimpleModuleLoader
 
-from xpmir.text.encoders import TextEncoder, TextEncoderBase, TokenizedTextEncoder
-from xpmir.text.encoders import TokenizedTextEncoder
-from xpmir.text.huggingface.encoders import SentenceTransformerTextEncoder
+from xpmir.text.encoders import EncoderOutput, TextEncoderBase, TokensRepresentationOutput
 from xpmir.text.huggingface.tokenizers import HFTokenizer
 from xpmir.text.tokenizers import TokenizerOptions
 
@@ -76,14 +74,11 @@ class MICEQueryDocTokenizer(HFTokenizer):
         self,
         input_records: BaseItems,
         options: Optional[TokenizerOptions] = None,
+        doc_only: bool = False,
     ) -> MICETokenizedTexts:
         # Determine per-side token limits
         q_max = self.max_query_length
         d_max = self.max_doc_length
-
-        ix_qs, ix_ds = input_records.pairs()
-        queries = [input_records.unique_topics[i]["text_item"].text for i in ix_qs]
-        docs = [input_records.unique_documents[i]["text_item"].text for i in ix_ds]
 
         def _encode(texts: List[str], max_tokens: int):
             r = self.tokenizer(
@@ -102,11 +97,25 @@ class MICEQueryDocTokenizer(HFTokenizer):
                 mask=r.get("attention_mask", None),
                 token_type_ids=r.get("token_type_ids", None),
             )
+        
+        if not doc_only:
+            ix_qs, ix_ds = input_records.pairs()
+            queries = [input_records.unique_topics[i]["text_item"].text for i in ix_qs]
+            docs = [input_records.unique_documents[i]["text_item"].text for i in ix_ds]
+            tokenized_texts = MICETokenizedTexts(
+                tokenized_q=_encode(queries, q_max),
+                tokenized_docs=_encode(docs, d_max),
+            )
+        else:
+            ### WARNING: Assumes the input is composed oa a list of document record, 
+            # not an instance from BaseItems
+            docs = [doc["text_item"].text for doc in input_records]
+            tokenized_texts = MICETokenizedTexts(
+                tokenized_q=None,
+                tokenized_docs=_encode(docs, d_max),
+            ).tokenized_docs # Returns only the docs in that case, to be compatible later on
 
-        return MICETokenizedTexts(
-            tokenized_q=_encode(queries, q_max),
-            tokenized_docs=_encode(docs, d_max),
-        )
+        return tokenized_texts
 
 
 class MiceCrossEncoder(AbstractModuleScorer):
@@ -203,11 +212,23 @@ class MiceCrossEncoder(AbstractModuleScorer):
                 self.config, "_attn_implementation", "eager"
             )
 
+    @property
+    def dimension(self):
+        return self.config.hidden_size
+
+    @property
+    def max_doc_len(self):
+        return self.tokenizer.max_doc_length
+    
+    @property
+    def max_query_len(self):
+        return self.tokenizer.max_query_length
+
     def batch_tokenize(
-        self, input_records: BaseItems, options=None
+        self, input_records: BaseItems, options=None, doc_only: bool = False
     ) -> MICETokenizedTexts:
         """Transform the text to tokens by using the tokenizer"""
-        return self.tokenizer.tokenize(input_records, options=options)
+        return self.tokenizer.tokenize(input_records, options=options, doc_only=doc_only)
 
     def get_tokenizer_fn(self):
         return self.batch_tokenize
@@ -374,8 +395,7 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
         
         return MiceDocumentEncoder.C(
-            hf_id=self.hf_id, 
-            n_contextualization_layers=self.n_contextualization_layers,
+            model=self
         )
 
     def encode_queries(self, input_ids, attention_mask):
@@ -909,31 +929,43 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
 class MiceDocumentEncoder(TextEncoderBase):
     """Overrides TokenizedTextEncoder to load the bottom layers from MICE and 
     instantiate a document encoder from them"""
-    hf_id: Param[str]
+    model: Param[MiceCrossEncoder]
 
-    n_contextualization_layers: Param[int]
-    
-    ### Attributes ###
-    embeddings: nn.Module
-
-    layers: nn.ModuleList
     
     def __initialize__(self) -> None:
         super().__initialize__()
-        config = AutoConfig.from_pretrained(self.hf_id)
-        config.num_hidden_layers = self.n_contextualization_layers
-        model = AutoModel.from_config(config)
+        self.model.initialize()  
+        
 
-        self.embeddings = model.embeddings
-        self.layers = model.encoder.layer
-        self.dim = config.hidden_size
+    @property
+    def dimension(self):
+        return self.model.dimension
+
+    def document_token_embeddings(
+        self, records: List[IDTextRecord]
+    ) -> List[torch.Tensor]:
+        """Encode a batch of documents and return the list of per-token
+        embeddings, one tensor ``(num_tokens, dim)`` per document. Padding
+        positions are filtered out.
+        """
+        output = self.encode_documents(records)
+        
+        return [output[i] for i in range(output.shape[0])]
 
 
-    def forward(self, input_ids):
-        x = self.embeddings(input_ids)
-        for layer in self.layers:
-            x = layer(x)
-        return x
+    def encode_documents(
+        self, records: List[IDTextRecord]
+    ) -> TokensRepresentationOutput:
+        options = TokenizerOptions(max_length=self.model.max_doc_len)
+        output = self(records, options=options)
+        return output
+
+    def forward(self, inputs: List[IDTextRecord], *args, options: Optional[TokenizerOptions] = None)-> EncoderOutput:
+        assert len(args) == 0, "Unhandled extra arguments"
+        tokenized = self.model.batch_tokenize(
+            inputs, options=options, doc_only=True
+        )
+        return self.model.encode_documents(tokenized.ids, tokenized.mask)
 
 class InitMICEBERTFromHFID(LightweightTask):
     """Worker-node task to load weights into MICE BERT model"""
