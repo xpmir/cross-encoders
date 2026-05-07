@@ -62,6 +62,9 @@ class Mice_FineTuning(CE_FineTuning):
     n_interaction_layers: Optional[int] = None
     """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
+    bound_bottom_layers: Optional[bool] = True
+    """whether to bound bottom query and document encoding layers"""
+
     cross_attn_first: bool = True
     """Whether to perform cross-attention before self-attention in the top layers."""
 
@@ -219,6 +222,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             hf_id=cfg.base,
             n_contextualization_layers=cfg.n_contextualization_layers,
             n_interaction_layers=cfg.n_interaction_layers,
+            bound_bottom_layers=cfg.bound_bottom_layers,
             mask_cls_to_doc=cfg.mask_cls_to_doc,
             mask_query_to_cls=cfg.mask_query_to_cls,
             cross_attn_first=cfg.cross_attn_first,
