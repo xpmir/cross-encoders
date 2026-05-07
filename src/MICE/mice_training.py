@@ -302,20 +302,6 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                         for k, v in cfg_tags.items():
                             load_model.tag(k, v)
 
-<<<<<<< HEAD
-                    all_weights.append(load_model)
-                    tests.evaluate_retriever(
-                        partial(
-                            scorer_retriever,
-                            scorer=mice_model,
-                            retrievers=test_run_retriever_factory,
-                            batch_size=cfg.retrieval.batch_size,
-                        ),
-                        launcher_evaluate,
-                        model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                        init_tasks=[load_model],
-                        with_run=cfg.save_runs,
-=======
                         all_weights.append(load_model)
                         tests.evaluate_retriever(
                             partial(
@@ -331,7 +317,6 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                 else:
                     logging.info(
                         f"Running PLAID-style evaluation from validation: {name}"
->>>>>>> dd94f2ea590930d3dfd8203d7c35b573670e43e0
                     )
                     for metric_name in tracked_validation.monitored():
                         load_model = (
