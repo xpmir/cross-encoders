@@ -54,19 +54,21 @@ class TestMiceForwardTask(LightweightTask):
 @pytest.mark.parametrize(
     "model_id",
     [
-        "jhu-clsp/ettin-encoder-68m",  # ModernBERT
-        # "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
+        # "jhu-clsp/ettin-encoder-17m",  # ModernBERT
         # "Qwen/Qwen2.5-0.5B-Instruct",           # Qwen
     ],
 )
 @pytest.mark.parametrize("cross_attn_first", [True, False])
 @pytest.mark.parametrize("mask_cls_to_doc", [False])
-@pytest.mark.parametrize("n_contextualization_layers", [3])
+@pytest.mark.parametrize("n_contextualization_layers", [2])
+@pytest.mark.parametrize("bound_bottom_layers", [True, False])
 def test_mice(
     model_id,
     n_contextualization_layers,
     cross_attn_first: bool,
     mask_cls_to_doc: bool,
+    bound_bottom_layers,
 ):
     """Tests MICE loading, forward pass, and weight persistence across a grid of parameters."""
 
@@ -75,6 +77,7 @@ def test_mice(
         hf_id=model_id,
         n_contextualization_layers=n_contextualization_layers,
         cross_attn_first=cross_attn_first,
+        bound_bottom_layers=bound_bottom_layers,
         mask_cls_to_doc=mask_cls_to_doc,
     )
 

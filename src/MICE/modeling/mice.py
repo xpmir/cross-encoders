@@ -130,6 +130,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
     n_interaction_layers: Param[Optional[int]] = None
     """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
+    bound_bottom_layers: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to use the same set of parameters for Query/Doc encoder"""
+
     cross_attn_first: Param[bool] = field(default=True, ignore_default=True)
     """Whether to perform cross-attention before self-attention in the top layers."""
 
@@ -316,12 +319,29 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         # Note: We use the config to build the structure. Weights copied later by InitTask.
         temp_model = AutoModel.from_config(self.config)
         self.add_module("embeddings", temp_model.embeddings)
-        self.add_module(
-            "bottom_layers",
-            nn.ModuleList(
-                [BertLayer(self.config) for _ in range(self.n_contextualization_layers)]
-            ),
-        )
+
+        # Build Bottom layers, either bound or distinct
+        if self.bound_bottom_layers:
+            self.add_module(
+                "bottom_layers",
+                nn.ModuleList(
+                    [
+                        BertLayer(self.config)
+                        for _ in range(self.n_contextualization_layers)
+                    ]
+                ),
+            )
+        else:
+            for name in ["document_bottom_layers", "query_bottom_layers"]:
+                self.add_module(
+                    name,
+                    nn.ModuleList(
+                        [
+                            BertLayer(self.config)
+                            for _ in range(self.n_contextualization_layers)
+                        ]
+                    ),
+                )
 
         if self.n_interaction_layers is not None:
             num_top = self.n_interaction_layers
@@ -358,15 +378,32 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
             n_contextualization_layers=self.n_contextualization_layers,
         )
 
-    def forward_bottom(self, input_ids, attention_mask):
+    def encode_queries(self, input_ids, attention_mask):
         """Compute bottom layers (independent encoding)"""
         x = self.embeddings(input_ids)
         # Standard BERT extended mask logic
         ext_mask = self.get_extended_attention_mask(attention_mask, x.dtype)
-        # Compute position ids and pass them to ModernBertEncoderLayer which expects them
-        batch, seq_len = input_ids.size()
+        if self.bound_bottom_layers:
+            query_bottom_layers = self.bottom_layers
+        else:
+            query_bottom_layers = self.query_bottom_layers
 
-        for layer in self.bottom_layers:
+        for layer in query_bottom_layers:
+            x = layer(x, ext_mask)
+        return x
+
+    def encode_documents(self, input_ids, attention_mask):
+        """Compute bottom layers (independent encoding)"""
+        x = self.embeddings(input_ids)
+        # Standard BERT extended mask logic
+        ext_mask = self.get_extended_attention_mask(attention_mask, x.dtype)
+
+        if self.bound_bottom_layers:
+            document_bottom_layers = self.bottom_layers
+        else:
+            document_bottom_layers = self.document_bottom_layers
+
+        for layer in document_bottom_layers:
             x = layer(x, ext_mask)
         return x
 
@@ -471,7 +508,7 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         doc_mask = tokenized_docs.mask
 
         # 1. Process Query through Bottom Layers
-        q_hidden = self.forward_bottom(query_ids, query_mask)
+        q_hidden = self.encode_queries(query_ids, query_mask)
 
         if self.global_cls_token:
             cls_token = self.global_cls.expand(q_hidden.shape[0], -1, -1)
@@ -490,7 +527,7 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         if doc_hidden_states is None:
             # Process Doc through Bottom Layers
-            doc_hidden_states = self.forward_bottom(
+            doc_hidden_states = self.encode_documents(
                 doc_ids, doc_mask
             )  # shape [batch, seq_len_doc, dim]
 
@@ -569,11 +606,12 @@ class ModernBertCrossAttention(nn.Module):
             .transpose(1, 2)
         )
 
-        attention_interface = eager_attention_forward
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[
                 self.config._attn_implementation
             ]
+        else:
+            attention_interface = eager_attention_forward
 
         attn_output, attn_weights = attention_interface(
             self,
@@ -936,15 +974,25 @@ class InitMICEBERTFromHFID(LightweightTask):
             logger.info(
                 f"Seeding {model.n_contextualization_layers} bottom layers from backbone"
             )
-            for i in range(model.n_contextualization_layers):
-                if i < len(full_bert.encoder.layer):
-                    model.bottom_layers[i].load_state_dict(
-                        full_bert.encoder.layer[i].state_dict()
-                    )
-                else:
-                    logger.warning(
-                        f"Backbone has only {len(full_bert.encoder.layer)} layers; cannot seed bottom layer {i}"
-                    )
+            if model.bound_bottom_layers:
+                contextualization_module_names = ["bottom_layers"]
+            else:
+                contextualization_module_names = [
+                    "document_bottom_layers",
+                    "query_bottom_layers",
+                ]
+
+            for cntx_module_name in contextualization_module_names:
+                contextualization_module = getattr(model, cntx_module_name)
+                for i in range(model.n_contextualization_layers):
+                    if i < len(full_bert.encoder.layer):
+                        contextualization_module[i].load_state_dict(
+                            full_bert.encoder.layer[i].state_dict()
+                        )
+                    else:
+                        logger.warning(
+                            f"Backbone has only {len(full_bert.encoder.layer)} layers; cannot seed bottom layer {i}"
+                        )
         else:
             logger.warning(
                 f"Backbone {hf_id} has no encoder layers; skipping bottom layer seeding"
@@ -1193,6 +1241,7 @@ def mice_scorer(
     hf_id: str,
     n_contextualization_layers: int = 6,
     n_interaction_layers: Optional[int] = None,
+    bound_bottom_layers: bool = True,
     mask_cls_to_doc: bool = True,
     mask_query_to_cls: bool = True,
     cross_attn_first: bool = True,
@@ -1213,6 +1262,7 @@ def mice_scorer(
         hf_id: Hugging Face checkpoint identifier.
         n_contextualization_layers: Number of bottom encoder layers that process query and document independently.
         n_interaction_layers: Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone.
+        bound_bottom_layers: whether to bound bottom query and document encoding layers
         mask_cls_to_doc: If True, prevents [CLS] from attending to document tokens.
         mask_query_to_cls: If True, prevents query tokens from attending to [CLS].
         cross_attn_first: Whether to perform cross-attention before self-attention in the top layers.
@@ -1237,6 +1287,7 @@ def mice_scorer(
             tokenizer=tokenizer,
             n_contextualization_layers=n_contextualization_layers,
             n_interaction_layers=n_interaction_layers,
+            bound_bottom_layers=bound_bottom_layers,
             mask_cls_to_doc=mask_cls_to_doc,
             mask_query_to_cls=mask_query_to_cls,
             cross_attn_first=cross_attn_first,
@@ -1256,6 +1307,7 @@ def mice_scorer(
             tokenizer=tokenizer,
             n_contextualization_layers=n_contextualization_layers,
             n_interaction_layers=n_interaction_layers,
+            bound_bottom_layers=bound_bottom_layers,
             mask_cls_to_doc=mask_cls_to_doc,
             mask_query_to_cls=mask_query_to_cls,
             cross_attn_first=cross_attn_first,
@@ -1280,6 +1332,7 @@ def mice_scorer(
             tokenizer=tokenizer,
             n_contextualization_layers=n_contextualization_layers,
             n_interaction_layers=n_interaction_layers,
+            bound_bottom_layers=bound_bottom_layers,
             mask_cls_to_doc=mask_cls_to_doc,
             mask_query_to_cls=mask_query_to_cls,
             cross_attn_first=cross_attn_first,
