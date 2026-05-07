@@ -15,6 +15,7 @@ import shutil
 from functools import partial
 from typing import Optional
 from pathlib import Path
+from MICE.modeling.plaid_mice import InitEncoderFromMice
 import numpy as np
 import pandas as pd
 
@@ -27,6 +28,7 @@ from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 
+from xpmir.index.plaid import PlaidIndexBuilder, PlaidRetriever
 from xpmir.papers.results import PaperResults
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
@@ -282,28 +284,74 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             # Evaluate each model on test collections
             for name, tracked_validation in tracked_validations.items():
                 logging.info(f"evaluating from validation: {name}")
-                for metric_name in tracked_validation.monitored():
-                    load_model = (
-                        outputs.listeners[tracked_validation.id][metric_name]
-                        .tag("validation", name)
-                        .tag("seed", seed)
-                        .tag("first_stage", retriever_tag)
-                    )
-                    for k, v in cfg_tags.items():
-                        load_model.tag(k, v)
+                if not cfg.plaid.use_plaid:
+                    for metric_name in tracked_validation.monitored():
+                        load_model = (
+                            outputs.listeners[tracked_validation.id][metric_name]
+                            .tag("validation", name)
+                            .tag("seed", seed)
+                            .tag("first_stage", retriever_tag)
+                        )
+                        for k, v in cfg_tags.items():
+                            load_model.tag(k, v)
 
-                    all_weights.append(load_model)
-                    tests.evaluate_retriever(
-                        partial(
-                            scorer_retriever,
-                            scorer=mice_model,
-                            retrievers=test_run_retriever_factory,
-                            batch_size=cfg.retrieval.batch_size,
-                        ),
-                        launcher_evaluate,
-                        model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                        init_tasks=[load_model],
+                        all_weights.append(load_model)
+                        tests.evaluate_retriever(
+                            partial(
+                                scorer_retriever,
+                                scorer=mice_model,
+                                retrievers=test_run_retriever_factory,
+                                batch_size=cfg.retrieval.batch_size,
+                            ),
+                            launcher_evaluate,
+                            model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
+                            init_tasks=[load_model],
+                        )
+                else:
+                    logging.info(
+                        f"Running PLAID-style evaluation from validation: {name}"
                     )
+                    for metric_name in tracked_validation.monitored():
+                        load_model = (
+                            outputs.listeners[tracked_validation.id][metric_name]
+                            .tag("validation", name)
+                            .tag("seed", seed)
+                            .tag("first_stage", retriever_tag)
+                        )
+                        for k, v in cfg_tags.items():
+                            load_model.tag(k, v)
+                        
+                        # 1) Build the index and retriever for this model
+                        for dataset, documents in test_run_retriever_factory.documents.items():
+                            logging.info(f"Building PLAID index for dataset {dataset}")
+                            plaid_index = PlaidIndexBuilder.C(
+                                documents=documents.tag("dataset", dataset),
+                                encoder=mice_model.get_document_encoder(),
+                                batch_size=cfg.plaid.batch_size,
+                                n_bits=cfg.plaid.n_bits,
+                                kmeans_niters=cfg.plaid.kmeans_niters,
+                                n_samples_kmeans=cfg.plaid.n_samples_kmeans,
+                                compress_only=cfg.plaid.compress_only,
+                                
+                            ).submit(launcher=launcher_index, init_tasks=[InitEncoderFromMice.C(loader=load_model) ])
+
+                            # plaid_retriever = PlaidRetriever.C(
+                            #     store=documents.tag("dataset", dataset),
+                            #     index=plaid_index,
+                            #     encoder=mice_model,
+                            #     topk=cfg.retrieval.k,
+                            #     n_ivf_probe=cfg.plaid.n_ivf_probe,
+                            #     n_full_scores=cfg.plaid.n_full_scores,
+                            # )
+
+                            # 2) Run tests
+                            # all_weights.append(load_model)
+                            # tests.evaluate_retriever(
+                            #     plaid_retriever,
+                            #     launcher_evaluate,
+                            #     model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
+                            #     init_tasks=[load_model],
+                            # )
 
     all_configs, all_tags = generate_grid(cfg)
 

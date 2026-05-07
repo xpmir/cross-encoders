@@ -1,3 +1,4 @@
+from abc import abstractmethod
 from typing import List, Tuple, Optional, NamedTuple
 import torch
 import torch.nn as nn
@@ -11,6 +12,9 @@ from xpmir.rankers import AbstractModuleScorer
 from xpm_torch.utils import to_device
 from xpm_torch.module import SimpleModuleLoader
 
+from xpmir.text.encoders import TextEncoder, TextEncoderBase, TokenizedTextEncoder
+from xpmir.text.encoders import TokenizedTextEncoder
+from xpmir.text.huggingface.encoders import SentenceTransformerTextEncoder
 from xpmir.text.huggingface.tokenizers import HFTokenizer
 from xpmir.text.tokenizers import TokenizerOptions
 
@@ -241,6 +245,10 @@ class MiceCrossEncoder(AbstractModuleScorer):
         attn_mask.masked_fill_(~valid_pairs[:, None, :, :], torch.finfo(dtype).min)
         return attn_mask
 
+    def get_document_encoder(self)->TextEncoderBase:
+        """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
+        raise NotImplementedError()
+
     def save_model(self, path: Path):
         """Save the model and tokenizer in standard pretrained format."""
         from safetensors.torch import save_file
@@ -341,6 +349,14 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
             self.global_cls = nn.Parameter(
                 torch.randn(1, 1, self.head_config.hidden_size) * 0.02
             )
+
+    def get_document_encoder(self)->TextEncoderBase:
+        """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
+        
+        return MiceDocumentEncoder.C(
+            hf_id=self.hf_id, 
+            n_contextualization_layers=self.n_contextualization_layers,
+        )
 
     def forward_bottom(self, input_ids, attention_mask):
         """Compute bottom layers (independent encoding)"""
@@ -851,6 +867,35 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         pooled = self.pooling_function(x_q)
         return self.classifier(self.dropout_layer(self.head(pooled))).squeeze(-1)
 
+
+class MiceDocumentEncoder(TextEncoderBase):
+    """Overrides TokenizedTextEncoder to load the bottom layers from MICE and 
+    instantiate a document encoder from them"""
+    hf_id: Param[str]
+
+    n_contextualization_layers: Param[int]
+    
+    ### Attributes ###
+    embeddings: nn.Module
+
+    layers: nn.ModuleList
+    
+    def __initialize__(self) -> None:
+        super().__initialize__()
+        config = AutoConfig.from_pretrained(self.hf_id)
+        config.num_hidden_layers = self.n_contextualization_layers
+        model = AutoModel.from_config(config)
+
+        self.embeddings = model.embeddings
+        self.layers = model.encoder.layer
+        self.dim = config.hidden_size
+
+
+    def forward(self, input_ids):
+        x = self.embeddings(input_ids)
+        for layer in self.layers:
+            x = layer(x)
+        return x
 
 class InitMICEBERTFromHFID(LightweightTask):
     """Worker-node task to load weights into MICE BERT model"""
