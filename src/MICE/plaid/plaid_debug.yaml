@@ -15,7 +15,7 @@ preprocessing:
 
 indexation:
     batch_size: 128
-    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
+    requirements: duration=8h & cpu(cores=5) & cuda(mem=80G)
 
 validation:
     # Use 500 topics for validation
@@ -50,7 +50,16 @@ retrieval:
 evaluation:
     test_max_topics: 100
     all_datasets: false
-    in_domain: true
+    in_domain: false
+    datasets: 
+        - arguana
+        - fiqa
+        - nfcorpus
+        - quora
+        - scidocs
+        - scifact
+        - trec_covid
+        - touche
     # lotte_search: true
 
 #MICE params
@@ -61,3 +70,7 @@ base: microsoft/MiniLM-L12-H384-uncased
 
 plaid:
     use_plaid: true
+    batch_size: 25_000
+    n_bits: 4
+    kmeans_niters: 4
+
