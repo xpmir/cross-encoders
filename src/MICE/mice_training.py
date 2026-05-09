@@ -15,7 +15,6 @@ import shutil
 from functools import partial
 from typing import Optional
 from pathlib import Path
-from MICE.modeling.plaid_mice import InitEncoderFromMice
 import numpy as np
 import pandas as pd
 
@@ -344,23 +343,23 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                                 
                             ).submit(launcher=launcher_index, init_tasks=[load_model])
 
-                            # plaid_retriever = PlaidRetriever.C(
-                            #     store=documents.tag("dataset", dataset),
-                            #     index=plaid_index,
-                            #     encoder=mice_model,
-                            #     topk=cfg.retrieval.k,
-                            #     n_ivf_probe=cfg.plaid.n_ivf_probe,
-                            #     n_full_scores=cfg.plaid.n_full_scores,
-                            # )
+                            plaid_retriever = PlaidRetriever.C(
+                                store=documents.tag("dataset", dataset),
+                                index=plaid_index,
+                                encoder=mice_model,
+                                topk=cfg.retrieval.k,
+                                n_ivf_probe=cfg.plaid.n_ivf_probe,
+                                n_full_scores=cfg.plaid.n_full_scores,
+                            )
 
                             # 2) Run tests
-                            # all_weights.append(load_model)
-                            # tests.evaluate_retriever(
-                            #     plaid_retriever,
-                            #     launcher_evaluate,
-                            #     model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                            #     init_tasks=[load_model],
-                            # )
+                            all_weights.append(load_model)
+                            tests.evaluate_retriever(
+                                plaid_retriever,
+                                launcher_evaluate,
+                                model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
+                                init_tasks=[load_model],
+                            )
 
     all_configs, all_tags = generate_grid(cfg)
 

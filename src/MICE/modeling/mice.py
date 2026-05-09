@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import List, Tuple, Optional, NamedTuple
 from datamaestro_ir.data.base import IDTextRecord
 import torch
@@ -53,7 +54,11 @@ class MICETokenizedTexts(NamedTuple):
     tokenized_docs: TokenizedTexts
     """tokenized Documents"""
 
-
+class QueryDocInput(Enum):
+    """Enum to specify whether the input is a query or a document, for tokenization purposes."""
+    QUERY = "query"
+    DOCUMENT = "document"
+    PAIRS = "pairs" # Both query and document are present in the input records, and should be tokenized together (default)
 class MICEQueryDocTokenizer(HFTokenizer):
     """Specific tokenizer for MICE that handles query and document independently"""
 
@@ -74,7 +79,7 @@ class MICEQueryDocTokenizer(HFTokenizer):
         self,
         input_records: BaseItems,
         options: Optional[TokenizerOptions] = None,
-        doc_only: bool = False,
+        input_nature: QueryDocInput = QueryDocInput.PAIRS,
     ) -> MICETokenizedTexts:
         # Determine per-side token limits
         q_max = self.max_query_length
@@ -98,7 +103,7 @@ class MICEQueryDocTokenizer(HFTokenizer):
                 token_type_ids=r.get("token_type_ids", None),
             )
         
-        if not doc_only:
+        if input_nature == QueryDocInput.PAIRS:
             ix_qs, ix_ds = input_records.pairs()
             queries = [input_records.unique_topics[i]["text_item"].text for i in ix_qs]
             docs = [input_records.unique_documents[i]["text_item"].text for i in ix_ds]
@@ -106,8 +111,16 @@ class MICEQueryDocTokenizer(HFTokenizer):
                 tokenized_q=_encode(queries, q_max),
                 tokenized_docs=_encode(docs, d_max),
             )
-        else:
-            ### WARNING: Assumes the input is composed oa a list of document record, 
+        elif input_nature == QueryDocInput.QUERY:
+            ### WARNING: Assumes the input is composed of a list of query records, 
+            # not an instance from BaseItems
+            queries = [query["text_item"].text for query in input_records]
+            tokenized_texts = MICETokenizedTexts(
+                tokenized_q=_encode(queries, q_max),
+                tokenized_docs=None, # No documents to encode
+            ).tokenized_q # Returns only the queries in that case, to be compatible later on
+        else: # input_nature == QueryDocInput.DOCUMENT
+            ### WARNING: Assumes the input is composed of a list of document records, 
             # not an instance from BaseItems
             docs = [doc["text_item"].text for doc in input_records]
             tokenized_texts = MICETokenizedTexts(
@@ -225,10 +238,10 @@ class MiceCrossEncoder(AbstractModuleScorer):
         return self.tokenizer.max_query_length
 
     def batch_tokenize(
-        self, input_records: BaseItems, options=None, doc_only: bool = False
+        self, input_records: BaseItems, options=None, input_nature: QueryDocInput = QueryDocInput.PAIRS
     ) -> MICETokenizedTexts:
         """Transform the text to tokens by using the tokenizer"""
-        return self.tokenizer.tokenize(input_records, options=options, doc_only=doc_only)
+        return self.tokenizer.tokenize(input_records, options=options, input_nature=input_nature)
 
     def get_tokenizer_fn(self):
         return self.batch_tokenize
@@ -398,6 +411,38 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
             model=self
         )
 
+    def query_token_embeddings(self, records: List[IDTextRecord]
+    ) -> List[torch.Tensor]:
+        """Encode a batch of queries and return the list of per-token
+        embeddings, one tensor ``(num_tokens, dim)`` per query. Padding
+        positions are filtered out.
+        """
+        options = TokenizerOptions(max_length=self.max_query_len)
+        tokenized = self.batch_tokenize(
+            records, options=options, input_nature=QueryDocInput.QUERY
+        )
+        if tokenized.ids.device != self.device:
+            tokenized = tokenized.to(self.device)
+        output = self.encode_queries(tokenized.ids, tokenized.mask)
+        
+        return output
+    
+    def document_token_embeddings(self, records: List[IDTextRecord]
+    ) -> List[torch.Tensor]:
+        """Encode a batch of documents and return the list of per-token
+        embeddings, one tensor ``(num_tokens, dim)`` per document. Padding
+        positions are filtered out.
+        """
+        options = TokenizerOptions(max_length=self.max_doc_len)
+        tokenized = self.batch_tokenize(
+            records, options=options, input_nature=QueryDocInput.DOCUMENT
+        )
+        if tokenized.ids.device != self.device:
+            tokenized = tokenized.to(self.device)
+        output = self.encode_documents(tokenized.ids, tokenized.mask)
+        
+        return output
+
     def encode_queries(self, input_ids, attention_mask):
         """Compute bottom layers (independent encoding)"""
         x = self.embeddings(input_ids)
@@ -517,7 +562,7 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         # Prepare inputs
         if tokenized is None:
-            tokenized = self.batch_tokenize(inputs)
+            tokenized = self.batch_tokenize(inputs, input_nature=QueryDocInput.PAIRS)
 
         tokenized_q = to_device(tokenized.tokenized_q, self.device)
         tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
@@ -952,7 +997,6 @@ class MiceDocumentEncoder(TextEncoderBase):
         
         return [output[i] for i in range(output.shape[0])]
 
-
     def encode_documents(
         self, records: List[IDTextRecord]
     ) -> TokensRepresentationOutput:
@@ -963,8 +1007,10 @@ class MiceDocumentEncoder(TextEncoderBase):
     def forward(self, inputs: List[IDTextRecord], *args, options: Optional[TokenizerOptions] = None)-> EncoderOutput:
         assert len(args) == 0, "Unhandled extra arguments"
         tokenized = self.model.batch_tokenize(
-            inputs, options=options, doc_only=True
+            inputs, options=options, input_nature=QueryDocInput.DOCUMENT
         )
+        if tokenized.ids.device != self.model.device:
+            tokenized = tokenized.to(self.model.device)
         return self.model.encode_documents(tokenized.ids, tokenized.mask)
 
 class InitMICEBERTFromHFID(LightweightTask):
