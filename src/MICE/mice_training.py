@@ -344,7 +344,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                             ).submit(launcher=launcher_index, init_tasks=[load_model])
 
                             plaid_retriever = PlaidRetriever.C(
-                                store=documents.tag("dataset", dataset),
+                                store=documents,
                                 index=plaid_index,
                                 encoder=mice_model,
                                 topk=cfg.retrieval.k,
@@ -352,14 +352,14 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                                 n_full_scores=cfg.plaid.n_full_scores,
                             )
 
-                            # 2) Run tests
-                            all_weights.append(load_model)
-                            tests.evaluate_retriever(
-                                plaid_retriever,
-                                launcher_evaluate,
-                                model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                                init_tasks=[load_model],
-                            )
+                        # 2) Run tests
+                        all_weights.append(load_model)
+                        tests.evaluate_retriever(
+                            plaid_retriever,
+                            launcher_evaluate,
+                            model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
+                            init_tasks=[load_model],
+                        )
 
     all_configs, all_tags = generate_grid(cfg)
 
