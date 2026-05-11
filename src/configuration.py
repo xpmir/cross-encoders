@@ -261,8 +261,12 @@ class PlaidConfiguration:
     """Whether to use PLAID for retrieval"""
     
     ### Indexation params ###
-    batch_size: int = 32
-    """Batch size when encoding documents for PLAID"""
+    warmup_docs: int = 1000
+    """Number of documents to use for the initial warmup phase of PLAID indexing, where
+    the centroids are initialized"""
+
+    batch_size: int = 25_000
+    """Batch size (in tokens) when encoding documents for PLAID"""
 
     dim: int = 128
     """Per-token embedding dimension for PLAID index"""
@@ -276,6 +280,9 @@ class PlaidConfiguration:
     n_samples_kmeans: int = 0
     """Number of token samples used to train the centroids (0 = fast-plaid
     default)."""
+
+    max_points_per_centroid: int = 256
+    """Maximum number of points (documents) per centroid. Controls the creation of new centroids."""
 
     compress_only: bool = False
     """Whether to build a compress-only index (no IVF search)"""

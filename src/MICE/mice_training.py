@@ -335,10 +335,13 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                             plaid_index = PlaidIndexBuilder.C(
                                 documents=documents.tag("dataset", dataset),
                                 encoder=doc_encoder,
-                                batch_size=cfg.plaid.batch_size,
+                                warmup_docs=cfg.plaid.warmup_docs,
+                                batch_size=cfg.indexation.batch_size,
+                                fast_plaid_batch_size=cfg.plaid.batch_size,
                                 n_bits=cfg.plaid.n_bits,
                                 kmeans_niters=cfg.plaid.kmeans_niters,
                                 n_samples_kmeans=cfg.plaid.n_samples_kmeans,
+                                seed=seed,
                                 compress_only=cfg.plaid.compress_only,
                                 
                             ).submit(launcher=launcher_index, init_tasks=[load_model])

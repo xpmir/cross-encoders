@@ -13,7 +13,7 @@ from xpmir.rankers import AbstractModuleScorer
 from xpm_torch.utils import to_device
 from xpm_torch.module import SimpleModuleLoader
 
-from xpmir.text.encoders import EncoderOutput, TextEncoderBase, TokensRepresentationOutput
+from xpmir.text.encoders import EncoderOutput, TextEncoderBase, TokensEncoderOutput, TokensRepresentationOutput
 from xpmir.text.huggingface.tokenizers import HFTokenizer
 from xpmir.text.tokenizers import TokenizerOptions
 
@@ -981,10 +981,16 @@ class MiceDocumentEncoder(TextEncoderBase):
         super().__initialize__()
         self.model.initialize()  
         
-
     @property
     def dimension(self):
         return self.model.dimension
+
+    @staticmethod
+    def _token_mask(output: TokensRepresentationOutput) -> Optional[torch.Tensor]:
+        mask = output.tokenized.mask
+        if mask is None:
+            return None
+        return mask.to(output.value.device).bool()        
 
     def document_token_embeddings(
         self, records: List[IDTextRecord]
@@ -994,8 +1000,11 @@ class MiceDocumentEncoder(TextEncoderBase):
         positions are filtered out.
         """
         output = self.encode_documents(records)
-        
-        return [output[i] for i in range(output.shape[0])]
+        mask = self._token_mask(output)
+        value = output.value
+        if mask is None:
+            return [value[i] for i in range(value.shape[0])]
+        return [value[i][mask[i]] for i in range(value.shape[0])]
 
     def encode_documents(
         self, records: List[IDTextRecord]
@@ -1011,7 +1020,7 @@ class MiceDocumentEncoder(TextEncoderBase):
         )
         if tokenized.ids.device != self.model.device:
             tokenized = tokenized.to(self.model.device)
-        return self.model.encode_documents(tokenized.ids, tokenized.mask)
+        return TokensEncoderOutput(tokenized, self.model.encode_documents(tokenized.ids, tokenized.mask))
 
 class InitMICEBERTFromHFID(LightweightTask):
     """Worker-node task to load weights into MICE BERT model"""

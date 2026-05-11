@@ -15,7 +15,7 @@ preprocessing:
 
 indexation:
     batch_size: 128
-    requirements: duration=8h & cpu(cores=5) & cuda(mem=80G)
+    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
 
 validation:
     # Use 500 topics for validation
@@ -73,4 +73,4 @@ plaid:
     batch_size: 25_000
     n_bits: 4
     kmeans_niters: 4
-
+    warmup_docs: 1000
