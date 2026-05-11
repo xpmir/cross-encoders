@@ -328,25 +328,35 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                         )
                         for k, v in cfg_tags.items():
                             load_model.tag(k, v)
-                        
+
                         doc_encoder = mice_model.get_document_encoder()
-                        
+
                         # 1) Build the index and retriever for this model
-                        for dataset, documents in test_run_retriever_factory.documents.items():
+                        for (
+                            dataset,
+                            documents,
+                        ) in test_run_retriever_factory.documents.items():
                             logging.info(f"Building PLAID index for dataset {dataset}")
-                            plaid_index = PlaidIndexBuilder.C(
-                                documents=documents.tag("dataset", dataset),
-                                encoder=doc_encoder,
-                                warmup_docs=cfg.plaid.warmup_docs,
-                                batch_size=cfg.indexation.batch_size,
-                                fast_plaid_batch_size=cfg.plaid.batch_size,
-                                n_bits=cfg.plaid.n_bits,
-                                kmeans_niters=cfg.plaid.kmeans_niters,
-                                n_samples_kmeans=cfg.plaid.n_samples_kmeans,
-                                seed=seed,
-                                compress_only=cfg.plaid.compress_only,
-                                
-                            ).submit(launcher=launcher_index, init_tasks=[load_model], transient=TransientMode.REMOVE)
+                            plaid_index = (
+                                PlaidIndexBuilder.C(
+                                    documents=documents,
+                                    encoder=doc_encoder,
+                                    warmup_docs=cfg.plaid.warmup_docs,
+                                    batch_size=cfg.indexation.batch_size,
+                                    fast_plaid_batch_size=cfg.plaid.batch_size,
+                                    n_bits=cfg.plaid.n_bits,
+                                    kmeans_niters=cfg.plaid.kmeans_niters,
+                                    n_samples_kmeans=cfg.plaid.n_samples_kmeans,
+                                    seed=seed,
+                                    compress_only=cfg.plaid.compress_only,
+                                )
+                                .tag("dataset", dataset)
+                                .submit(
+                                    launcher=launcher_index,
+                                    init_tasks=[load_model],
+                                    transient=TransientMode.REMOVE,
+                                )
+                            )
 
                             plaid_retriever = PlaidRetriever.C(
                                 store=documents,
