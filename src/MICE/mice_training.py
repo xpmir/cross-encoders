@@ -61,6 +61,9 @@ class Mice_FineTuning(CE_FineTuning):
     n_contextualization_layers: int = 6
     """Number of bottom encoder layers that process query and document independently"""
 
+    n_docs_ctx_layers: Optional[int] = None
+    """Number of bottom encoder layers for the document. If None, use n_contextualization_layers."""
+
     n_interaction_layers: Optional[int] = None
     """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
@@ -100,6 +103,9 @@ def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     n_ctx_layers = model_tags.get(
         "n_contextualization_layers", cfg.n_contextualization_layers
     )
+    n_docs_layers = model_tags.get("n_docs_ctx_layers", cfg.n_docs_ctx_layers)
+    doc_suffix = f"-d{n_docs_layers}" if n_docs_layers is not None else ""
+
     n_inter_layers = model_tags.get("n_interaction_layers", cfg.n_interaction_layers)
     cross_attn_first = model_tags.get("cross_attn_first", cfg.cross_attn_first)
     vanilla = "-vanilla" if not cross_attn_first else ""
@@ -110,7 +116,7 @@ def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"Mice-l{n_ctx_layers}+{n_inter_layers}{vanilla}-{base}{loss}"
+    return f"Mice-l{n_ctx_layers}{doc_suffix}+{n_inter_layers}{vanilla}-{base}{loss}"
 
 
 @learning_experiment()
@@ -223,6 +229,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
         mice_model, scorer_hf_init_tasks = mice_scorer(
             hf_id=cfg.base,
             n_contextualization_layers=cfg.n_contextualization_layers,
+            n_docs_ctx_layers=cfg.n_docs_ctx_layers,
             n_interaction_layers=cfg.n_interaction_layers,
             bound_bottom_layers=cfg.bound_bottom_layers,
             mask_cls_to_doc=cfg.mask_cls_to_doc,
@@ -314,6 +321,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                             launcher_evaluate,
                             model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
                             init_tasks=[load_model],
+                            with_run=cfg.save_runs,
                         )
                 else:
                     logging.info(

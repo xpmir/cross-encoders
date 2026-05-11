@@ -13,7 +13,12 @@ from xpmir.rankers import AbstractModuleScorer
 from xpm_torch.utils import to_device
 from xpm_torch.module import SimpleModuleLoader
 
-from xpmir.text.encoders import EncoderOutput, TextEncoderBase, TokensEncoderOutput, TokensRepresentationOutput
+from xpmir.text.encoders import (
+    EncoderOutput,
+    TextEncoderBase,
+    TokensEncoderOutput,
+    TokensRepresentationOutput,
+)
 from xpmir.text.huggingface.tokenizers import HFTokenizer
 from xpmir.text.tokenizers import TokenizerOptions
 
@@ -54,11 +59,15 @@ class MICETokenizedTexts(NamedTuple):
     tokenized_docs: TokenizedTexts
     """tokenized Documents"""
 
+
 class QueryDocInput(Enum):
     """Enum to specify whether the input is a query or a document, for tokenization purposes."""
+
     QUERY = "query"
     DOCUMENT = "document"
-    PAIRS = "pairs" # Both query and document are present in the input records, and should be tokenized together (default)
+    PAIRS = "pairs"  # Both query and document are present in the input records, and should be tokenized together (default)
+
+
 class MICEQueryDocTokenizer(HFTokenizer):
     """Specific tokenizer for MICE that handles query and document independently"""
 
@@ -102,7 +111,7 @@ class MICEQueryDocTokenizer(HFTokenizer):
                 mask=r.get("attention_mask", None),
                 token_type_ids=r.get("token_type_ids", None),
             )
-        
+
         if input_nature == QueryDocInput.PAIRS:
             ix_qs, ix_ds = input_records.pairs()
             queries = [input_records.unique_topics[i]["text_item"].text for i in ix_qs]
@@ -112,21 +121,25 @@ class MICEQueryDocTokenizer(HFTokenizer):
                 tokenized_docs=_encode(docs, d_max),
             )
         elif input_nature == QueryDocInput.QUERY:
-            ### WARNING: Assumes the input is composed of a list of query records, 
+            ### WARNING: Assumes the input is composed of a list of query records,
             # not an instance from BaseItems
             queries = [query["text_item"].text for query in input_records]
-            tokenized_texts = MICETokenizedTexts(
-                tokenized_q=_encode(queries, q_max),
-                tokenized_docs=None, # No documents to encode
-            ).tokenized_q # Returns only the queries in that case, to be compatible later on
-        else: # input_nature == QueryDocInput.DOCUMENT
-            ### WARNING: Assumes the input is composed of a list of document records, 
+            tokenized_texts = (
+                MICETokenizedTexts(
+                    tokenized_q=_encode(queries, q_max),
+                    tokenized_docs=None,  # No documents to encode
+                ).tokenized_q
+            )  # Returns only the queries in that case, to be compatible later on
+        else:  # input_nature == QueryDocInput.DOCUMENT
+            ### WARNING: Assumes the input is composed of a list of document records,
             # not an instance from BaseItems
             docs = [doc["text_item"].text for doc in input_records]
-            tokenized_texts = MICETokenizedTexts(
-                tokenized_q=None,
-                tokenized_docs=_encode(docs, d_max),
-            ).tokenized_docs # Returns only the docs in that case, to be compatible later on
+            tokenized_texts = (
+                MICETokenizedTexts(
+                    tokenized_q=None,
+                    tokenized_docs=_encode(docs, d_max),
+                ).tokenized_docs
+            )  # Returns only the docs in that case, to be compatible later on
 
         return tokenized_texts
 
@@ -148,6 +161,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
 
     n_contextualization_layers: Param[int] = 6
     """Number of bottom encoder layers that process query and document independently"""
+
+    n_docs_ctx_layers: Param[Optional[int]] = field(default=None, ignore_default=True)
+    """Number of bottom encoder layers for the document. If None, use n_contextualization_layers."""
 
     n_interaction_layers: Param[Optional[int]] = None
     """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
@@ -232,16 +248,21 @@ class MiceCrossEncoder(AbstractModuleScorer):
     @property
     def max_doc_len(self):
         return self.tokenizer.max_doc_length
-    
+
     @property
     def max_query_len(self):
         return self.tokenizer.max_query_length
 
     def batch_tokenize(
-        self, input_records: BaseItems, options=None, input_nature: QueryDocInput = QueryDocInput.PAIRS
+        self,
+        input_records: BaseItems,
+        options=None,
+        input_nature: QueryDocInput = QueryDocInput.PAIRS,
     ) -> MICETokenizedTexts:
         """Transform the text to tokens by using the tokenizer"""
-        return self.tokenizer.tokenize(input_records, options=options, input_nature=input_nature)
+        return self.tokenizer.tokenize(
+            input_records, options=options, input_nature=input_nature
+        )
 
     def get_tokenizer_fn(self):
         return self.batch_tokenize
@@ -282,7 +303,7 @@ class MiceCrossEncoder(AbstractModuleScorer):
         attn_mask.masked_fill_(~valid_pairs[:, None, :, :], torch.finfo(dtype).min)
         return attn_mask
 
-    def get_document_encoder(self)->TextEncoderBase:
+    def get_document_encoder(self) -> TextEncoderBase:
         """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
         raise NotImplementedError()
 
@@ -356,6 +377,13 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         # Build Bottom layers, either bound or distinct
         if self.bound_bottom_layers:
+            if (
+                self.n_docs_ctx_layers is not None
+                and self.n_docs_ctx_layers != self.n_contextualization_layers
+            ):
+                raise ValueError(
+                    "n_docs_ctx_layers must be equal to n_contextualization_layers if bound_bottom_layers is True"
+                )
             self.add_module(
                 "bottom_layers",
                 nn.ModuleList(
@@ -366,16 +394,26 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
                 ),
             )
         else:
-            for name in ["document_bottom_layers", "query_bottom_layers"]:
-                self.add_module(
-                    name,
-                    nn.ModuleList(
-                        [
-                            BertLayer(self.config)
-                            for _ in range(self.n_contextualization_layers)
-                        ]
-                    ),
-                )
+            self.add_module(
+                "query_bottom_layers",
+                nn.ModuleList(
+                    [
+                        BertLayer(self.config)
+                        for _ in range(self.n_contextualization_layers)
+                    ]
+                ),
+            )
+            n_doc_layers = (
+                self.n_docs_ctx_layers
+                if self.n_docs_ctx_layers is not None
+                else self.n_contextualization_layers
+            )
+            self.add_module(
+                "document_bottom_layers",
+                nn.ModuleList(
+                    [BertLayer(self.config) for _ in range(n_doc_layers)],
+                ),
+            )
 
         if self.n_interaction_layers is not None:
             num_top = self.n_interaction_layers
@@ -404,15 +442,12 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
                 torch.randn(1, 1, self.head_config.hidden_size) * 0.02
             )
 
-    def get_document_encoder(self)->TextEncoderBase:
+    def get_document_encoder(self) -> TextEncoderBase:
         """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
-        
-        return MiceDocumentEncoder.C(
-            model=self
-        )
 
-    def query_token_embeddings(self, records: List[IDTextRecord]
-    ) -> List[torch.Tensor]:
+        return MiceDocumentEncoder.C(model=self)
+
+    def query_token_embeddings(self, records: List[IDTextRecord]) -> List[torch.Tensor]:
         """Encode a batch of queries and return the list of per-token
         embeddings, one tensor ``(num_tokens, dim)`` per query. Padding
         positions are filtered out.
@@ -424,10 +459,11 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         if tokenized.ids.device != self.device:
             tokenized = tokenized.to(self.device)
         output = self.encode_queries(tokenized.ids, tokenized.mask)
-        
+
         return output
-    
-    def document_token_embeddings(self, records: List[IDTextRecord]
+
+    def document_token_embeddings(
+        self, records: List[IDTextRecord]
     ) -> List[torch.Tensor]:
         """Encode a batch of documents and return the list of per-token
         embeddings, one tensor ``(num_tokens, dim)`` per document. Padding
@@ -440,7 +476,7 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         if tokenized.ids.device != self.device:
             tokenized = tokenized.to(self.device)
         output = self.encode_documents(tokenized.ids, tokenized.mask)
-        
+
         return output
 
     def encode_queries(self, input_ids, attention_mask):
@@ -774,15 +810,49 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         temp_model = AutoModelForSequenceClassification.from_config(self.config)
         self.rotary_emb = ModernBertRotaryEmbedding(self.config)
         self.add_module("embeddings", temp_model.model.embeddings)
-        self.add_module(
-            "bottom_layers",
-            nn.ModuleList(
-                [
-                    type(temp_model.model.layers[0])(self.config, i)
-                    for i in range(self.n_contextualization_layers)
-                ]
-            ),
-        )
+
+        # Build Bottom layers, either bound or distinct
+        if self.bound_bottom_layers:
+            if (
+                self.n_docs_ctx_layers is not None
+                and self.n_docs_ctx_layers != self.n_contextualization_layers
+            ):
+                raise ValueError(
+                    "n_docs_ctx_layers must be equal to n_contextualization_layers if bound_bottom_layers is True"
+                )
+            self.add_module(
+                "bottom_layers",
+                nn.ModuleList(
+                    [
+                        type(temp_model.model.layers[0])(self.config, i)
+                        for i in range(self.n_contextualization_layers)
+                    ]
+                ),
+            )
+        else:
+            self.add_module(
+                "query_bottom_layers",
+                nn.ModuleList(
+                    [
+                        type(temp_model.model.layers[0])(self.config, i)
+                        for i in range(self.n_contextualization_layers)
+                    ]
+                ),
+            )
+            n_doc_layers = (
+                self.n_docs_ctx_layers
+                if self.n_docs_ctx_layers is not None
+                else self.n_contextualization_layers
+            )
+            self.add_module(
+                "document_bottom_layers",
+                nn.ModuleList(
+                    [
+                        type(temp_model.model.layers[0])(self.config, i)
+                        for i in range(n_doc_layers)
+                    ]
+                ),
+            )
 
         if self.n_interaction_layers is not None:
             num_top = self.n_interaction_layers
@@ -924,10 +994,18 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
             lt: self.rotary_emb(x_d, d_pos, layer_type=lt) for lt in unique_layer_types
         }
 
-        for layer in self.bottom_layers:
+        if self.bound_bottom_layers:
+            query_bottom_layers = self.bottom_layers
+            document_bottom_layers = self.bottom_layers
+        else:
+            query_bottom_layers = self.query_bottom_layers
+            document_bottom_layers = self.document_bottom_layers
+
+        for layer in query_bottom_layers:
             x_q = layer(
                 x_q, q_ext, position_embeddings=q_pos_embeds[layer.attention_type]
             )
+        for layer in document_bottom_layers:
             x_d = layer(
                 x_d, d_ext, position_embeddings=d_pos_embeds[layer.attention_type]
             )
@@ -972,15 +1050,15 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
 
 
 class MiceDocumentEncoder(TextEncoderBase):
-    """Overrides TokenizedTextEncoder to load the bottom layers from MICE and 
+    """Overrides TokenizedTextEncoder to load the bottom layers from MICE and
     instantiate a document encoder from them"""
+
     model: Param[MiceCrossEncoder]
 
-    
     def __initialize__(self) -> None:
         super().__initialize__()
-        self.model.initialize()  
-        
+        self.model.initialize()
+
     @property
     def dimension(self):
         return self.model.dimension
@@ -990,7 +1068,7 @@ class MiceDocumentEncoder(TextEncoderBase):
         mask = output.tokenized.mask
         if mask is None:
             return None
-        return mask.to(output.value.device).bool()        
+        return mask.to(output.value.device).bool()
 
     def document_token_embeddings(
         self, records: List[IDTextRecord]
@@ -1013,14 +1091,22 @@ class MiceDocumentEncoder(TextEncoderBase):
         output = self(records, options=options)
         return output
 
-    def forward(self, inputs: List[IDTextRecord], *args, options: Optional[TokenizerOptions] = None)-> EncoderOutput:
+    def forward(
+        self,
+        inputs: List[IDTextRecord],
+        *args,
+        options: Optional[TokenizerOptions] = None,
+    ) -> EncoderOutput:
         assert len(args) == 0, "Unhandled extra arguments"
         tokenized = self.model.batch_tokenize(
             inputs, options=options, input_nature=QueryDocInput.DOCUMENT
         )
         if tokenized.ids.device != self.model.device:
             tokenized = tokenized.to(self.model.device)
-        return TokensEncoderOutput(tokenized, self.model.encode_documents(tokenized.ids, tokenized.mask))
+        return TokensEncoderOutput(
+            tokenized, self.model.encode_documents(tokenized.ids, tokenized.mask)
+        )
+
 
 class InitMICEBERTFromHFID(LightweightTask):
     """Worker-node task to load weights into MICE BERT model"""
@@ -1071,7 +1157,7 @@ class InitMICEBERTFromHFID(LightweightTask):
 
             for cntx_module_name in contextualization_module_names:
                 contextualization_module = getattr(model, cntx_module_name)
-                for i in range(model.n_contextualization_layers):
+                for i in range(len(contextualization_module)):
                     if i < len(full_bert.encoder.layer):
                         contextualization_module[i].load_state_dict(
                             full_bert.encoder.layer[i].state_dict()
@@ -1200,18 +1286,26 @@ class InitMICEModernBERTFromHFID(LightweightTask):
             )
 
         if hasattr(full_backbone.model, "layers"):
-            logger.info(
-                f"Seeding {model.n_contextualization_layers} bottom layers from backbone"
-            )
-            for i in range(model.n_contextualization_layers):
-                if i < len(full_backbone.model.layers):
-                    model.bottom_layers[i].load_state_dict(
-                        full_backbone.model.layers[i].state_dict()
-                    )
-                else:
-                    logger.warning(
-                        f"Backbone has only {len(full_backbone.model.layers)} layers; cannot seed bottom layer {i}"
-                    )
+            logger.info("Seeding bottom layers from backbone")
+            if model.bound_bottom_layers:
+                contextualization_module_names = ["bottom_layers"]
+            else:
+                contextualization_module_names = [
+                    "document_bottom_layers",
+                    "query_bottom_layers",
+                ]
+
+            for cntx_module_name in contextualization_module_names:
+                contextualization_module = getattr(model, cntx_module_name)
+                for i in range(len(contextualization_module)):
+                    if i < len(full_backbone.model.layers):
+                        contextualization_module[i].load_state_dict(
+                            full_backbone.model.layers[i].state_dict()
+                        )
+                    else:
+                        logger.warning(
+                            f"Backbone has only {len(full_backbone.model.layers)} layers; cannot seed bottom layer {i}"
+                        )
         else:
             logger.warning(
                 f"Backbone {hf_id} has no layers; skipping bottom layer seeding"
@@ -1327,6 +1421,7 @@ class InitMICEModernBERTFromHFID(LightweightTask):
 def mice_scorer(
     hf_id: str,
     n_contextualization_layers: int = 6,
+    n_docs_ctx_layers: Optional[int] = None,
     n_interaction_layers: Optional[int] = None,
     bound_bottom_layers: bool = True,
     mask_cls_to_doc: bool = True,
@@ -1348,6 +1443,7 @@ def mice_scorer(
     Args:
         hf_id: Hugging Face checkpoint identifier.
         n_contextualization_layers: Number of bottom encoder layers that process query and document independently.
+        n_docs_ctx_layers: Number of bottom encoder layers for the document. If None, use n_contextualization_layers.
         n_interaction_layers: Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone.
         bound_bottom_layers: whether to bound bottom query and document encoding layers
         mask_cls_to_doc: If True, prevents [CLS] from attending to document tokens.
@@ -1361,6 +1457,13 @@ def mice_scorer(
         max_doc_length: Maximum number of tokens for the document.
         max_length: Maximum total number of tokens (used as default for query/doc if not specified).
     """
+    # Automatically unbind bottom layers if n_docs_ctx_layers is specified
+    if n_docs_ctx_layers is not None and bound_bottom_layers:
+        logger.info(
+            "n_docs_ctx_layers provided: automatically setting bound_bottom_layers to False"
+        )
+        bound_bottom_layers = False
+
     tokenizer = MICEQueryDocTokenizer.C(
         model_id=hf_id,
         max_query_length=max_query_length,
@@ -1368,20 +1471,25 @@ def mice_scorer(
         max_length=max_length,
     )
 
+    common_kwargs = dict(
+        hf_id=hf_id,
+        tokenizer=tokenizer,
+        n_contextualization_layers=n_contextualization_layers,
+        n_docs_ctx_layers=n_docs_ctx_layers,
+        n_interaction_layers=n_interaction_layers,
+        bound_bottom_layers=bound_bottom_layers,
+        mask_cls_to_doc=mask_cls_to_doc,
+        mask_query_to_cls=mask_query_to_cls,
+        cross_attn_first=cross_attn_first,
+        freeze_base=freeze_base,
+        random_top_layers=random_top_layers,
+        compress_dim=compress_dim,
+        global_cls_token=global_cls_token,
+    )
+
     if "modernbert" in hf_id.lower() or "ettin" in hf_id.lower():
         model = ModernBertMiceCrossEncoder.C(
-            hf_id=hf_id,
-            tokenizer=tokenizer,
-            n_contextualization_layers=n_contextualization_layers,
-            n_interaction_layers=n_interaction_layers,
-            bound_bottom_layers=bound_bottom_layers,
-            mask_cls_to_doc=mask_cls_to_doc,
-            mask_query_to_cls=mask_query_to_cls,
-            cross_attn_first=cross_attn_first,
-            freeze_base=freeze_base,
-            random_top_layers=random_top_layers,
-            compress_dim=compress_dim,
-            global_cls_token=global_cls_token,
+            **common_kwargs,
             pooling_method=pooling_method,
         )
         return model, [InitMICEModernBERTFromHFID.C(model=model)]
@@ -1390,18 +1498,7 @@ def mice_scorer(
         from .qwen_mice import QwenMiceCrossEncoder, InitMICEQwenFromHFID
 
         model = QwenMiceCrossEncoder.C(
-            hf_id=hf_id,
-            tokenizer=tokenizer,
-            n_contextualization_layers=n_contextualization_layers,
-            n_interaction_layers=n_interaction_layers,
-            bound_bottom_layers=bound_bottom_layers,
-            mask_cls_to_doc=mask_cls_to_doc,
-            mask_query_to_cls=mask_query_to_cls,
-            cross_attn_first=cross_attn_first,
-            freeze_base=freeze_base,
-            random_top_layers=random_top_layers,
-            compress_dim=compress_dim,
-            global_cls_token=global_cls_token,
+            **common_kwargs,
             pooling_method=pooling_method or "cls",
         )
         return model, [InitMICEQwenFromHFID.C(model=model)]
@@ -1414,18 +1511,5 @@ def mice_scorer(
                 f"No Backbone recognized for {hf_id}, using default 'BertMiceCrossEncoder' architecture"
             )
 
-        model = BertMiceCrossEncoder.C(
-            hf_id=hf_id,
-            tokenizer=tokenizer,
-            n_contextualization_layers=n_contextualization_layers,
-            n_interaction_layers=n_interaction_layers,
-            bound_bottom_layers=bound_bottom_layers,
-            mask_cls_to_doc=mask_cls_to_doc,
-            mask_query_to_cls=mask_query_to_cls,
-            cross_attn_first=cross_attn_first,
-            freeze_base=freeze_base,
-            random_top_layers=random_top_layers,
-            compress_dim=compress_dim,
-            global_cls_token=global_cls_token,
-        )
+        model = BertMiceCrossEncoder.C(**common_kwargs)
         return model, [InitMICEBERTFromHFID.C(model=model)]

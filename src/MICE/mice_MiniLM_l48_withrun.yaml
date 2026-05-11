@@ -1,24 +1,22 @@
-id: train_mice_miniLM_l4|8+3
+id: train_mice_miniLM_l4|8_ID_withruns
 title: "Mice-MiniLM Training"
 description:
-    Compare mice using 4 or 8 layers
+    Compare mice using 4 or 8 layers - saves the runs to compare the distributions of models
 
 module: MICE.mice_training
 parent: ./mice_MiniLM_l4.yaml
 # pre_experiment: pre_experiment
 
-seed: 12 # To mimick the HF xp
 nb_repetitions: 2
-
 
 base: microsoft/MiniLM-L12-H384-uncased
 n_interaction_layers: 3
-
+save_runs: true
 
 evaluation: #default = Minified tests
     all_datasets: false
+    beir13: false
     in_domain: true
-    beir13: true
 
 #### Params that are grid searched
 grid_search:

@@ -22,6 +22,7 @@ from xpm_torch import Random
 from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
+from xpm_torch.optim import GradientLogHook, GradientClippingHook
 
 from xpmir.papers.results import PaperResults
 from xpmir.neural.huggingface import hf_cross_scorer
@@ -187,8 +188,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 val_run_retriever_factory,
                 retriever_tag,
             )
-
-            from xpm_torch.optim import GradientLogHook, GradientClippingHook
 
             hooks = [setmeta(GradientLogHook.C(), True)]
 

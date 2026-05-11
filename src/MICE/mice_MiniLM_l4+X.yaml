@@ -1,28 +1,28 @@
-id: train_mice_miniLM_l4|8+3
-title: "Mice-MiniLM Training"
+id: train_mice_miniLM_l4+X
+title: "Mice-MiniLM-l4+X Training"
 description:
-    Compare mice using 4 or 8 layers
+    Studies the impact of the number of interaction layers
 
 module: MICE.mice_training
 parent: ./mice_MiniLM_l4.yaml
 # pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 2
+nb_repetitions: 3
 
 
 base: microsoft/MiniLM-L12-H384-uncased
-n_interaction_layers: 3
+n_contextualization_layers: 4
 
 
 evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
-    beir13: true
+    beir13: false
 
 #### Params that are grid searched
 grid_search:
-    n_contextualization_layers:
-        values_list:
-            - 4
+    n_interaction_layers:
+        values_range:
+            - 2
             - 8

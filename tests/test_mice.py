@@ -61,11 +61,18 @@ class TestMiceForwardTask(LightweightTask):
 )
 @pytest.mark.parametrize("cross_attn_first", [True, False])
 @pytest.mark.parametrize("mask_cls_to_doc", [False])
-@pytest.mark.parametrize("n_contextualization_layers", [2])
-@pytest.mark.parametrize("bound_bottom_layers", [True, False])
+@pytest.mark.parametrize(
+    "n_contextualization_layers, n_docs_ctx_layers, bound_bottom_layers",
+    [
+        (2, None, True),
+        (2, None, False),
+        (2, 3, False),
+    ],
+)
 def test_mice(
     model_id,
     n_contextualization_layers,
+    n_docs_ctx_layers,
     cross_attn_first: bool,
     mask_cls_to_doc: bool,
     bound_bottom_layers,
@@ -76,6 +83,7 @@ def test_mice(
     scorer_cfg, init_tasks = mice_scorer(
         hf_id=model_id,
         n_contextualization_layers=n_contextualization_layers,
+        n_docs_ctx_layers=n_docs_ctx_layers,
         cross_attn_first=cross_attn_first,
         bound_bottom_layers=bound_bottom_layers,
         mask_cls_to_doc=mask_cls_to_doc,
@@ -90,8 +98,17 @@ def test_mice(
 
     test_forward_task.execute()
 
-    # --- Persistence Verification ---
+    # Verify layer counts
     model = test_forward_task.scorer
+    if bound_bottom_layers:
+        assert len(model.bottom_layers) == n_contextualization_layers
+    else:
+        assert len(model.query_bottom_layers) == n_contextualization_layers
+        assert len(model.document_bottom_layers) == (
+            n_docs_ctx_layers or n_contextualization_layers
+        )
+
+    # --- Persistence Verification ---
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)

@@ -112,12 +112,16 @@ def run(helper: IRExperimentHelper, cfg: LocalEvalsConfig) -> PaperResults:
 
     for model_name in cfg.models:
         model_path = root_path / model_name
-        # weights_path = model_path / "model_weights.pt"
+        # Check for different possible weight files
         weights_path = model_path / "model.safetensors"
+        if not weights_path.exists():
+            weights_path = model_path / "model_weights.pt"
 
-        if weights_path.exists():
-            logging.info(f"Evaluating model: {model_name} from {weights_path}")
-            # Build the model
+        is_hf_format = (model_path / "config.json").exists()
+
+        if weights_path.exists() or is_hf_format:
+            logging.info(f"Evaluating model: {model_name} from {model_path}")
+            # Build the model using the base HF ID for structure
             scorer, ce_init_tasks = hf_cross_scorer(
                 hf_id=cfg.base,
                 max_length=cfg.max_length,
@@ -126,26 +130,12 @@ def run(helper: IRExperimentHelper, cfg: LocalEvalsConfig) -> PaperResults:
             )
             scorer.tag("scorer", model_name)
 
-            # Load the weights
-            load_task = CELoader.C(path=weights_path, value=scorer)
+            # Load the weights from the local path
+            # If it's a full HF directory (config.json exists), we can load from the directory
+            # otherwise we load the specific weight file
+            load_path = model_path if is_hf_format else weights_path
+            load_task = CELoader.C(path=load_path, value=scorer)
             ce_init_tasks.append(load_task)
-
-            # evaluate with the underlying First stage retriever
-            tests.evaluate_retriever(
-                partial(
-                    scorer_retriever,
-                    scorer=scorer,
-                    retrievers=retriever_factory,
-                    batch_size=cfg.retrieval.batch_size,
-                ),
-                launcher=launcher_evaluate,
-                init_tasks=retriever_init_tasks + ce_init_tasks,
-            )
-        elif (model_path / "config.json").exists():
-            logging.info(f"Evaluating model: {model_path} (HuggingFace format)")
-            # Build the model
-            scorer, ce_init_tasks = hf_cross_scorer(hf_id=str(model_path))
-            scorer.tag("scorer", Path(model_path).name)
 
             # evaluate with the underlying First stage retriever
             tests.evaluate_retriever(

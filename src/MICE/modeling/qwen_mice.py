@@ -251,16 +251,48 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         temp_model = AutoModelForCausalLM.from_config(self.config)
         self.add_module("embeddings", temp_model.model.embed_tokens)
 
-        # Bottom layers: use the same class as in the backbone
-        self.add_module(
-            "bottom_layers",
-            nn.ModuleList(
-                [
-                    type(temp_model.model.layers[0])(self.config, i)
-                    for i in range(self.n_contextualization_layers)
-                ]
-            ),
-        )
+        # Build Bottom layers, either bound or distinct
+        if self.bound_bottom_layers:
+            if (
+                self.n_docs_ctx_layers is not None
+                and self.n_docs_ctx_layers != self.n_contextualization_layers
+            ):
+                raise ValueError(
+                    "n_docs_ctx_layers must be equal to n_contextualization_layers if bound_bottom_layers is True"
+                )
+            self.add_module(
+                "bottom_layers",
+                nn.ModuleList(
+                    [
+                        type(temp_model.model.layers[0])(self.config, i)
+                        for i in range(self.n_contextualization_layers)
+                    ]
+                ),
+            )
+        else:
+            self.add_module(
+                "query_bottom_layers",
+                nn.ModuleList(
+                    [
+                        type(temp_model.model.layers[0])(self.config, i)
+                        for i in range(self.n_contextualization_layers)
+                    ]
+                ),
+            )
+            n_doc_layers = (
+                self.n_docs_ctx_layers
+                if self.n_docs_ctx_layers is not None
+                else self.n_contextualization_layers
+            )
+            self.add_module(
+                "document_bottom_layers",
+                nn.ModuleList(
+                    [
+                        type(temp_model.model.layers[0])(self.config, i)
+                        for i in range(n_doc_layers)
+                    ]
+                ),
+            )
 
         # Top layers: augmented with cross-attention
         if self.n_interaction_layers is not None:
@@ -452,13 +484,21 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         d_position_embeddings = self.rotary_emb(x_d, d_pos)
 
         # Bottom
-        for layer in self.bottom_layers:
+        if self.bound_bottom_layers:
+            query_bottom_layers = self.bottom_layers
+            document_bottom_layers = self.bottom_layers
+        else:
+            query_bottom_layers = self.query_bottom_layers
+            document_bottom_layers = self.document_bottom_layers
+
+        for layer in query_bottom_layers:
             x_q = layer(
                 x_q,
                 attention_mask=None,
                 position_ids=q_pos,
                 position_embeddings=q_position_embeddings,
             )
+        for layer in document_bottom_layers:
             x_d = layer(
                 x_d,
                 attention_mask=None,
@@ -537,18 +577,26 @@ class InitMICEQwenFromHFID(LightweightTask):
 
         # Bottom layers
         if hasattr(full_backbone.model, "layers"):
-            logger.info(
-                f"Seeding {model.n_contextualization_layers} bottom layers from backbone"
-            )
-            for i in range(model.n_contextualization_layers):
-                if i < len(full_backbone.model.layers):
-                    model.bottom_layers[i].load_state_dict(
-                        full_backbone.model.layers[i].state_dict()
-                    )
-                else:
-                    logger.warning(
-                        f"Backbone has only {len(full_backbone.model.layers)} layers; cannot seed bottom layer {i}"
-                    )
+            logger.info("Seeding bottom layers from backbone")
+            if model.bound_bottom_layers:
+                contextualization_module_names = ["bottom_layers"]
+            else:
+                contextualization_module_names = [
+                    "document_bottom_layers",
+                    "query_bottom_layers",
+                ]
+
+            for cntx_module_name in contextualization_module_names:
+                contextualization_module = getattr(model, cntx_module_name)
+                for i in range(len(contextualization_module)):
+                    if i < len(full_backbone.model.layers):
+                        contextualization_module[i].load_state_dict(
+                            full_backbone.model.layers[i].state_dict()
+                        )
+                    else:
+                        logger.warning(
+                            f"Backbone has only {len(full_backbone.model.layers)} layers; cannot seed bottom layer {i}"
+                        )
         else:
             logger.warning(
                 f"Backbone {hf_id} has no layers; skipping bottom layer seeding"
