@@ -47,6 +47,11 @@ retrieval:
 evaluation:
     all_datasets: true
 
+
+max_length: 512 # even if ettin can do better - we only compare backbones
+max_query_length: 32
+max_doc_length: 256
+
 #### Params that are grid searched
 grid_search:
     base:

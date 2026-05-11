@@ -277,6 +277,12 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     max_length: Optional[int] = None
     """max len for scorer, default to 0 = max len of the model"""
 
+    max_query_length: Optional[int] = None
+    """Maximum query length for cross-encoders"""
+
+    max_doc_length: Optional[int] = None
+    """Maximum document length for cross-encoders"""
+
     pooling_method: str = PoolingMethod.CLS.value
     """Pooling method to use for the ModernBert based scorer: cls or mean"""
 
