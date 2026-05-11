@@ -15,6 +15,7 @@ import shutil
 from functools import partial
 from typing import Optional
 from pathlib import Path
+from experimaestro.scheduler.transient import TransientMode
 import numpy as np
 import pandas as pd
 
@@ -297,6 +298,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                             .tag("validation", name)
                             .tag("seed", seed)
                             .tag("first_stage", retriever_tag)
+                            .tag("plaid_retriever", False)
                         )
                         for k, v in cfg_tags.items():
                             load_model.tag(k, v)
@@ -344,16 +346,16 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                                 seed=seed,
                                 compress_only=cfg.plaid.compress_only,
                                 
-                            ).submit(launcher=launcher_index, init_tasks=[load_model])
+                            ).submit(launcher=launcher_index, init_tasks=[load_model], transient=TransientMode.REMOVE)
 
                             plaid_retriever = PlaidRetriever.C(
                                 store=documents,
-                                index=plaid_index,
+                                index=stop_tags(plaid_index),
                                 encoder=mice_model,
                                 topk=cfg.retrieval.k,
                                 n_ivf_probe=cfg.plaid.n_ivf_probe,
                                 n_full_scores=cfg.plaid.n_full_scores,
-                            )
+                            ).tag("plaid_retriever", True)
 
                         # 2) Run tests
                         all_weights.append(load_model)
