@@ -8,13 +8,14 @@ pre_experiment: ../../pre_experiment.py
 gpu: true
 
 # root path for all models
-model_root: /data/morand/experiments/cross_encoders/experiments/core_base_paper/dry-run/results/models
-
-base: bert-base-uncased
+# model_root: /data/morand/experiments/cross_encoders/experiments/core_base_paper/dry-run/results/models
+model_root: /lustre/fsn1/projects/rech/npl/commun/cross_encoders/experiments/colbertNeg_mini/20260505_105350/results/models/
 
 # dir name for the model to evaluate
 models:
-  - cross-encoder-bert-base-infoNCE
+  - cross-encoder-MiniLM-L12-infoNCE_RankDistiLLM/encoder_path
+
+base: cross-encoder/ms-marco-MiniLM-L12-v2
 
 # Optional: HF ID for the first-stage retriever (if empty, uses BM25)
 retriever_hf_id: naver/splade-v3-distilbert
@@ -29,6 +30,6 @@ retrieval:
   batch_size: 128
   k: 100
 
-evaluation:
-  test_max_topics: 100
-  all_datasets: true
+# evaluation:
+#   test_max_topics: 100
+#   all_datasets: true

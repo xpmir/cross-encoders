@@ -20,6 +20,7 @@ Usage:
 
 from typing import List, Optional
 from attrs import Factory
+from pathlib import Path
 from functools import partial
 import pandas as pd
 
@@ -34,13 +35,12 @@ from xpmir.neural.huggingface import hf_cross_scorer
 from xpmir.neural.sentence_transformers import st_cross_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
-from xpmir.text.huggingface.tokenizers import get_default_max_len
 
 from format import dataframe_to_latex, aggregations
 from tests import build_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from retrievers import splade_retriever, bm25_retriever
-from training_utils import add_dataset_aggregations
+from training_utils import add_dataset_aggregations, check_detailed_results
 
 import logging
 
@@ -57,6 +57,12 @@ class BaselinesConfig(NeuralIRExperiment):
     scorers_st_id: List[str] = []
 
     max_length: Optional[int] = None
+    """Maximum length for cross-encoders"""
+
+    max_query_length: Optional[int] = None
+    """Maximum query length for cross-encoders"""
+
+    max_doc_length: Optional[int] = None
     """Maximum document length for cross-encoders"""
 
     retrievers_hf_id: List[str] = []
@@ -159,22 +165,17 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
             # Logic for max_length: use get_default_max_len for model id,
             # and pass it to constructor only if default is higher than the one given
-            default_max_len = get_default_max_len(scorer_id)
-            if cfg.max_length and default_max_len > cfg.max_length:
-                max_len = cfg.max_length
-            else:
-                max_len = None
-                logging.warning(
-                    f"No max_len provided or default max_len {default_max_len} is not greater than provided max_len {cfg.max_length}. Using default max_len {default_max_len} for scorer {scorer_id}"
-                )
 
             if scorer_type == "hf":
                 scorer, ce_init_tasks = hf_cross_scorer(
-                    hf_id=scorer_id, max_doc_length=max_len
+                    hf_id=scorer_id,
+                    max_length=cfg.max_length,
+                    max_doc_length=cfg.max_doc_length,
+                    max_query_length=cfg.max_query_length,
                 )
             else:
                 scorer, ce_init_tasks = st_cross_scorer(
-                    model_id=scorer_id, max_length=max_len
+                    model_id=scorer_id, max_length=cfg.max_length
                 )
 
             scorer.tag("scorer", scorer_id)
@@ -198,6 +199,17 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
     # Wait for all tasks to complete
     helper.xp.wait()
+
+    # Post-process validation: check for zero scores in detailed.dat
+    # that might indicate Multi-GPU synchronization issues
+    for dataset_name, evals in tests.collection.items():
+        for evaluation in evals.results:
+            detailed_path = Path(evaluation.detailed)
+            if detailed_path.exists():
+                check_detailed_results(
+                    detailed_path,
+                    metric_name="nDCG@10" if not cfg.retrievers_only else "R@1000",
+                )
 
     df = tests.to_dataframe()
 

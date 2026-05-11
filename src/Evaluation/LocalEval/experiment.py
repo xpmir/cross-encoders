@@ -39,6 +39,12 @@ class LocalEvalsConfig(NeuralIRExperiment):
     max_length: Optional[int] = None
     """max len for scorer, default to 0 = max len of the model"""
 
+    max_query_length: Optional[int] = None
+    """Maximum query length for cross-encoders"""
+
+    max_doc_length: Optional[int] = None
+    """Maximum document length for cross-encoders"""
+
     models: List[str] = []
     """List of directory names for the models to evaluate"""
 
@@ -51,15 +57,12 @@ class LocalEvalsConfig(NeuralIRExperiment):
 class CELoader(PathSerializationLWTask):
     def execute(self):
         """Loads the model from disk using the given serialization path"""
-        import torch
 
         # first initialize model structure (empty init)
         self.value.initialize()
         # then load state dict
         logging.info("Loading model from disk: %s", self.path)
-        data = torch.load(self.path)
-
-        self.value.encoder.load_state_dict(data)
+        self.value.load_model(self.path)
 
 
 @ir_experiment()
@@ -109,13 +112,17 @@ def run(helper: IRExperimentHelper, cfg: LocalEvalsConfig) -> PaperResults:
 
     for model_name in cfg.models:
         model_path = root_path / model_name
-        weights_path = model_path / "model_weights.pt"
+        # weights_path = model_path / "model_weights.pt"
+        weights_path = model_path / "model.safetensors"
 
         if weights_path.exists():
             logging.info(f"Evaluating model: {model_name} from {weights_path}")
             # Build the model
             scorer, ce_init_tasks = hf_cross_scorer(
-                hf_id=cfg.base, max_doc_length=cfg.max_doc_len
+                hf_id=cfg.base,
+                max_length=cfg.max_length,
+                max_query_length=cfg.max_query_length,
+                max_doc_length=cfg.max_doc_length,
             )
             scorer.tag("scorer", model_name)
 

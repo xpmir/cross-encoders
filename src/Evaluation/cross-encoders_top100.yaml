@@ -19,11 +19,11 @@ scorers_hf_id:
   # - tomaarsen/ms-marco-ettin-32m-reranker
   # - tomaarsen/ms-marco-ettin-17m-reranker
 
-
 scorers_st_id:
   - Qwen/Qwen3-Reranker-0.6B
   - cross-encoder/ms-marco-MiniLM-L12-v2
   - mixedbread-ai/mxbai-rerank-base-v2
+  - xpmir/cross-encoder-MiniLM-L12-infoNCE
   # - mixedbread-ai/mxbai-rerank-large-v2
 
 retrievers_hf_id:

@@ -460,3 +460,59 @@ def export_model(
         for dataset, runpath in runs.items():
             shutil.copy(runpath, runs_dir / f"run_{dataset}.txt")
         logger.info(f"Copied {len(list(runs.keys()))} runs to {runs_dir}")
+
+
+def check_detailed_results(detailed_path: Path, metric_name: str = "nDCG@10"):
+    """
+    Check if there are any zero scores for a given metric in a detailed.dat file.
+
+    The format of detailed.dat is:
+    {:25s} {:10s} {:.4f}
+    (Metric Name) (Query ID) (Value)
+    """
+    if not detailed_path.exists():
+        logger.error(f"Detailed results file not found at {detailed_path}")
+        return
+
+    zeros_count = 0
+    total_count = 0
+
+    try:
+        with detailed_path.open("r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+
+                # The format is fixed width or space separated
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+
+                # Metric name is the first part (can be multiple parts if not careful,
+                # but split() handles spaces)
+                current_metric = parts[0]
+                value = float(parts[-1])
+
+                if current_metric == metric_name:
+                    total_count += 1
+                    if value == 0.0:
+                        zeros_count += 1
+
+        if total_count == 0:
+            logger.warning(
+                f"No results found for metric '{metric_name}' in {detailed_path}"
+            )
+        elif zeros_count > 0:
+            percentage = (zeros_count / total_count) * 100
+            logger.warning(
+                f"FOUND {zeros_count}/{total_count} ({percentage:.1f}%) ZERO SCORES "
+                f"for metric '{metric_name}' in {detailed_path}. "
+                "This might indicate a synchronization issue in Multi-GPU inference."
+            )
+        else:
+            logger.info(
+                f"All {total_count} queries for '{metric_name}' have non-zero scores in {detailed_path}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error reading detailed results: {e}")

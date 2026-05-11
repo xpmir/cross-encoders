@@ -54,20 +54,15 @@ evaluation:
     in_domain: true
     # lotte_search: true
 
-save_runs: true
 #MICE params
 n_contextualization_layers: 4
 n_interaction_layers: 3
-# global_cls_token: true
+bound_bottom_layers: false
+# save_runs: true
 
 
 #### Params that are grid searched
 grid_search:
-
-    cross_attn_first:
-        values_list:
-            - true
-            - false
 
     base:
         values_list:
