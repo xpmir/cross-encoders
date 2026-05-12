@@ -4,7 +4,7 @@ description:
     Grid search the necessary number of contextualization layers
     For Mice models with 3 interactions layers
 
-module: MICE.mice_training
+module: MICE.experiments.mice_training
 # pre_experiment: pre_experiment
 parent: ./mice_MiniLM_l4.yaml
 
@@ -12,10 +12,11 @@ seed: 12 # To mimick the HF xp
 nb_repetitions: 2
 
 
-base: microsoft/MiniLM-L12-H384-uncased
-n_contextualization_layers: 4
+base: jhu-clsp/ettin-encoder-68m # ettin-68 has 19 layers
+max_length: 1024
+n_contextualization_layers: 8
 n_interaction_layers: 3
-
+mask_cls_to_doc: false
 
 # evaluation: #default = Minified tests
 #     all_datasets: false
@@ -26,4 +27,4 @@ grid_search:
     n_contextualization_layers:
         values_range:
             - 0
-            - 9
+            - 18

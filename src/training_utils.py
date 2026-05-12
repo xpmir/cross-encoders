@@ -465,9 +465,9 @@ def export_model(
             return
         runs_dir = best_model_path / "evals"
         runs_dir.mkdir(parents=True, exist_ok=True)
-        for dataset, runpath in runs.items():
-            shutil.copy(runpath, runs_dir / f"run_{dataset}.txt")
-        for dataset, dpath in runs.items():
+        # for dataset, runpath in runs.items():
+        #     shutil.copy(runpath, runs_dir / f"run_{dataset}.txt")
+        for dataset, dpath in detailed.items():
             shutil.copy(dpath, runs_dir / f"detailed_{dataset}.dat")
         logger.info(f"Copied {len(list(runs.keys()))} runs to {runs_dir}")
 

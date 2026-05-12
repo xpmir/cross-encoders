@@ -3,7 +3,7 @@ title: "Mice-Ettin-17m Training"
 description:
     Base Training for Ettin-17m-based MICE model.
 
-module: MICE.mice_training
+module: MICE.experiments.mice_training
 # pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp

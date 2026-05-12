@@ -3,7 +3,7 @@ title: "Mice-MiniLM Training"
 description:
     Compare mice using 4 or 8 layers
 
-module: MICE.mice_training
+module: MICE.experiments.mice_training
 parent: ../mice_MiniLM_l4.yaml #same training params as Mice-l4+3
 # pre_experiment: pre_experiment
 

@@ -3,7 +3,7 @@ title: "Mice-MiniLM Training"
 description:
     try All combinations of boolean flags for Mice training
 
-module: MICE.mice_training
+module: MICE.experiments.mice_training
 # pre_experiment: pre_experiment
 parent: ../mice_MiniLM_l4.yaml
 

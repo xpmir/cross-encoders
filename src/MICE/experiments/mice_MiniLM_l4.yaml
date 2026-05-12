@@ -1,13 +1,13 @@
-id: train_mice_ettin_32m
-title: "Mice-Ettin-32m Training"
+id: train_mice_miniLM_l4
+title: "Mice-MiniLM Training"
 description:
-    Base Training for Ettin-32m-based MICE model.
+    Base Training for MiniLM-based MICE model.
 
-module: MICE.mice_training
+module: MICE.experiments.mice_training
 # pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 1
+nb_repetitions: 3
 
 
 retriever: ""
@@ -33,6 +33,7 @@ learner:
         lr: 7e-6
         eps: 1.0e-8
     # sample_max: 2_000_000
+    loss: marginMSE
     max_grad_norm: 1.0
     checkpoint_interval: 100
     validation_interval: 50
@@ -41,37 +42,16 @@ learner:
     requirements: duration=12h & cpu(cores=16) & cuda(mem=80G)
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G)
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
     k: 1000
-    batch_size: 256
+    batch_size: 64
 
-# evaluation: #default = Minified tests
-#     all_datasets: false
-#     in_domain: true
+evaluation: #default = Minified tests
+    all_datasets: false
+    in_domain: true
+    beir13: true
 
-
-n_contextualization_layers: 6
+base: microsoft/MiniLM-L12-H384-uncased
+n_contextualization_layers: 4
 n_interaction_layers: 3
-
-
-#### Params that are grid searched
-grid_search:
-
-    base:
-        values_list:
-            - jhu-clsp/ettin-encoder-32m
-
-    learner.optimization.batch_size:
-        values_list:
-            - 32
-            # - 64
-
-    learner.optimization.lr:
-        values_list:
-            # - 1e-6
-            - 7e-6
-
-    learner.loss:
-        values_list:
-            - marginMSE
-            - infoNCE_RankDistiLLM
+mask_cls_to_doc: false
