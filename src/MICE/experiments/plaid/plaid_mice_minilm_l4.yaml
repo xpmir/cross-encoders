@@ -15,7 +15,7 @@ preprocessing:
 
 indexation:
     batch_size: 128
-    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
+    requirements: duration=8h & cpu(cores=20) & cuda(mem=80G)
 
 validation:
     # Use 500 topics for validation
@@ -69,6 +69,8 @@ base: microsoft/MiniLM-L12-H384-uncased
 
 plaid:
     use_plaid: true
-    batch_size: 1_000
+    batch_size: 25_000
     n_bits: 4
     kmeans_niters: 4
+    buffer_size: 5000
+    compress_only: true

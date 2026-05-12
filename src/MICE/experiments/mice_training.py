@@ -349,7 +349,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                                 PlaidIndexBuilder.C(
                                     documents=documents,
                                     encoder=doc_encoder,
-                                    warmup_docs=cfg.plaid.warmup_docs,
+                                    buffer_size=cfg.plaid.buffer_size,
                                     batch_size=cfg.indexation.batch_size,
                                     fast_plaid_batch_size=cfg.plaid.batch_size,
                                     n_bits=cfg.plaid.n_bits,
