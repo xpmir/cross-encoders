@@ -12,9 +12,9 @@ nb_repetitions: 3
 
 
 base: microsoft/MiniLM-L12-H384-uncased
-n_interaction_layers: 10
-n_contextualization_layers: 2
 n_docs_ctx_layers: 12
+n_contextualization_layers: 10
+n_interaction_layers: 2
 
 evaluation: #default = Minified tests
     all_datasets: false

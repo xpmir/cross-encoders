@@ -430,6 +430,7 @@ def export_model(
 
     def get_runs_per_tags(model_tags: dict):
         runs = {}
+        detailed = {}
         for dataset, evals in tests.collection.items():
             for eval_tags, evaluate in evals.per_tags.items():
                 # Check if all given tags are present and match in the task's tags
@@ -445,20 +446,29 @@ def export_model(
                         logger.warning(
                             f"Didn't found run.txt in {job_path} for {dataset}"
                         )
-        return runs
+                    detailed_path = job_path / "detailed.dat"
+                    if detailed_path.exists():
+                        detailed[dataset] = detailed_path
+                    else:
+                        logger.warning(
+                            f"Didn't found detailed.dat in {job_path} for {dataset}"
+                        )
+        return runs, detailed
 
     # 5. Export runs
     if save_runs:
         if not tests:
             logger.error("save_runs is True but no tests provided, skipping...")
-        runs = get_runs_per_tags(learner_tags)
+        runs, detailed = get_runs_per_tags(learner_tags)
         if not runs:
             logging.warning(f"not runs retrieved for model with tags {learner_tags}")
             return
-        runs_dir = best_model_path / "runs"
+        runs_dir = best_model_path / "evals"
         runs_dir.mkdir(parents=True, exist_ok=True)
         for dataset, runpath in runs.items():
             shutil.copy(runpath, runs_dir / f"run_{dataset}.txt")
+        for dataset, dpath in runs.items():
+            shutil.copy(dpath, runs_dir / f"detailed_{dataset}.dat")
         logger.info(f"Copied {len(list(runs.keys()))} runs to {runs_dir}")
 
 
