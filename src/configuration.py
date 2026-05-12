@@ -261,9 +261,8 @@ class PlaidConfiguration:
     """Whether to use PLAID for retrieval"""
     
     ### Indexation params ###
-    warmup_docs: int = 1000
-    """Number of documents to use for the initial warmup phase of PLAID indexing, where
-    the centroids are initialized"""
+    buffer_size: int = 1000
+    """Number of documents to use for creating/updating the PLAID index"""
 
     batch_size: int = 25_000
     """Batch size (in tokens) when encoding documents for PLAID"""
