@@ -37,7 +37,11 @@ retrieval:
 evaluation:
   #just for debugging
   test_max_topics: 100
-  all_datasets: true
+  all_datasets: false
+  datasets:
+        - nfcorpus
+        - touche
+        - arguana
   # in_domain: false
   # beir13: true
   # nanobeir: true

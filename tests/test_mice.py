@@ -54,8 +54,8 @@ class TestMiceForwardTask(LightweightTask):
 @pytest.mark.parametrize(
     "model_id",
     [
+        "jhu-clsp/ettin-encoder-68m",  # ModernBERT
         "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
-        # "jhu-clsp/ettin-encoder-17m",  # ModernBERT
         # "Qwen/Qwen2.5-0.5B-Instruct",           # Qwen
     ],
 )
@@ -82,6 +82,7 @@ def test_mice(
     # Initialize scorer configuration
     scorer_cfg, init_tasks = mice_scorer(
         hf_id=model_id,
+        # n_interaction_layers=3, #automatic
         n_contextualization_layers=n_contextualization_layers,
         n_docs_ctx_layers=n_docs_ctx_layers,
         cross_attn_first=cross_attn_first,

@@ -247,6 +247,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                         launcher_evaluate,
                         model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
                         init_tasks=[load_model],
+                        with_run=cfg.save_runs,
                     )
 
     all_configs, all_tags = generate_grid(cfg)
@@ -347,7 +348,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     logging.info(f"df with only best models:\n{best_models_df}")
 
     best_models_list = []
-    if not best_models_df.empty:
+    if not best_models_df.empty and cfg.export_trained_models:
         # Check if model folder exists before saving models, delete if so
         models_path = helper.xp.resultspath / "models"
         if models_path.exists():
@@ -387,6 +388,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 best_cfg=best_cfg,
                 resultspath=helper.xp.resultspath,
                 card_template_txt=card_template_txt,
+                save_runs=cfg.save_runs,
+                tests=tests,
             )
 
         if best_models_list:

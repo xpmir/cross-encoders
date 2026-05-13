@@ -91,9 +91,6 @@ class Mice_FineTuning(CE_FineTuning):
     compress_dim: float = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
 
-    save_runs: bool = False
-    """Whether to save the evaluation runs in the best model folders"""
-
 
 def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     """Creates the HF id from tags using formatting conventions."""
@@ -473,7 +470,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
     logging.info(f"df with only best models:\n{best_models_df}")
 
     best_models_list = []
-    if not best_models_df.empty:
+    if not best_models_df.empty and cfg.export_trained_models:
         # Check if model folder exists before saving models, delete if so
         models_path = helper.xp.resultspath / "models"
         if models_path.exists():

@@ -14,11 +14,6 @@ evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
 
-
-n_contextualization_layers: 4
-n_interaction_layers: 3
-global_cls_token: false
-
 #### Params that are grid searched
 grid_search:
 
@@ -40,8 +35,3 @@ grid_search:
         values_list:
             - true
             - false
-
-
-    learner.loss:
-        values_list:
-            - marginMSE

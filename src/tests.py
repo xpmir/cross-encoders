@@ -446,3 +446,38 @@ def build_tests(
         check_datasets_docs(tests)
 
     return tests
+
+
+def get_max_query_length(
+    tokenizer, evaluations_collection: EvaluationsCollection
+) -> dict[str, int]:
+    """Helper to find the maximum query length for each dataset in the collection."""
+    from xpmir.text.huggingface.tokenizers import HFTokenizer
+
+    res = {}
+
+    # Get the underlying transformers tokenizer
+    if isinstance(tokenizer, HFTokenizer):
+        if not hasattr(tokenizer, "tokenizer"):
+            tokenizer.__initialize__()
+        hf_tokenizer = tokenizer.tokenizer
+    else:
+        hf_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
+
+    for name, evals in evaluations_collection.collection.items():
+        unique_queries = {
+            topic["text_item"].text for topic in evals.dataset.topics.iter_topics()
+        }
+
+        if not unique_queries:
+            res[name] = 0
+            continue
+
+        # Tokenize all queries and find the maximum length
+        lengths = [
+            len(hf_tokenizer.encode(q, add_special_tokens=False))
+            for q in unique_queries
+        ]
+        res[name] = max(lengths)
+
+    return res

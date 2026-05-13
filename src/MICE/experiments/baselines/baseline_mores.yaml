@@ -18,5 +18,5 @@ n_interaction_layers: 2
 
 evaluation: #default = Minified tests
     all_datasets: false
-    beir13: false
-    in_domain: false
+    beir13: true
+    in_domain: true

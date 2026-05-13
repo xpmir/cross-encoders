@@ -146,7 +146,7 @@ class MICEQueryDocTokenizer(HFTokenizer):
 
 class MiceCrossEncoder(AbstractModuleScorer):
     """
-    Mid-Fusion Cross Encoder base Architecture, with Cross-Attention in the top layers.
+    Mice Cross Encoder base Architecture, with Cross-Attention in the top layers.
     The bottom layers encode query and document independently, while the top layers
     allow the query to attend to the document via cross-attention mechanisms.
     """
@@ -221,6 +221,34 @@ class MiceCrossEncoder(AbstractModuleScorer):
         # TODO we should fetch the head_config file if available
         # (if we need to instanciate from a pretrained Mice model)
         self.config = AutoConfig.from_pretrained(self.hf_id)
+
+        # Check that we don't exceed the number of layers in the backbone
+        num_backbone_layers = getattr(self.config, "num_hidden_layers", 0)
+        if num_backbone_layers > 0:
+            if self.n_contextualization_layers > num_backbone_layers:
+                raise ValueError(
+                    f"n_contextualization_layers ({self.n_contextualization_layers}) "
+                    f"exceeds backbone layers ({num_backbone_layers}) for {self.hf_id}"
+                )
+            if (
+                self.n_docs_ctx_layers is not None
+                and self.n_docs_ctx_layers > num_backbone_layers
+            ):
+                raise ValueError(
+                    f"n_docs_ctx_layers ({self.n_docs_ctx_layers}) "
+                    f"exceeds backbone layers ({num_backbone_layers}) for {self.hf_id}"
+                )
+            if self.n_interaction_layers is not None:
+                total_requested = (
+                    self.n_contextualization_layers + self.n_interaction_layers
+                )
+                if total_requested > num_backbone_layers:
+                    raise ValueError(
+                        f"Total requested layers ({total_requested}) exceeds backbone "
+                        f"layers ({num_backbone_layers}) for {self.hf_id}. "
+                        f"(n_ctx={self.n_contextualization_layers}, n_inter={self.n_interaction_layers})"
+                    )
+
         self.head_config = AutoConfig.from_pretrained(self.hf_id)
         self.head_config.is_decoder = True
         self.head_config.add_cross_attention = True
@@ -344,7 +372,7 @@ class MiceCrossEncoder(AbstractModuleScorer):
 
 
 class BertMiceCrossEncoder(MiceCrossEncoder):
-    """Mid-Fusion Cross Encoder based on BERT Architecture."""
+    """Mice Cross Encoder based on BERT Architecture."""
 
     _version: Constant[int] = field(default=3, overrides=True)
     """Model version"""
@@ -588,7 +616,7 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         doc_hidden_states: Optional[torch.Tensor] = None,
     ):
         """
-        Forward pass of the Mid-Fusion Cross Encoder.
+        Forward pass of the Mice Cross Encoder.
         inputs: BaseRecords containing 'topics' and 'documents' with TextItems.
         tokenized_queries: Optional pre-tokenized queries to skip tokenization step.
         tokenized_docs: Optional pre-tokenized documents to skip tokenization step.
@@ -791,7 +819,7 @@ class ModernBertCrossAttentionLayer(nn.Module):
 
 
 class ModernBertMiceCrossEncoder(MiceCrossEncoder):
-    """Mid-Fusion Cross Encoder based on ModernBERT Architecture."""
+    """Mice Cross Encoder based on ModernBERT Architecture."""
 
     pooling_method: Param[Optional[str]] = None
     """Pooling method to use for the ModernBert based scorer: cls or mean.
@@ -1198,11 +1226,11 @@ class InitMICEBERTFromHFID(LightweightTask):
             # Also seed Cross-Attention from the same weights
             if not model.random_top_layers:
                 logger.info(
-                    f"Copying weights from original BERT to Mid-Fusion top layer {i}"
+                    f"Copying weights from original BERT to Interaction top layer {i}"
                 )
                 self._copy_bert_weights(original_top_layers[i], new_layer)
             else:
-                logger.info(f"Initializing Mid-Fusion top layer {i} randomly")
+                logger.info(f"Initializing Interaction top layer {i} randomly")
 
             model.top_layers.append(new_layer)
 
@@ -1420,7 +1448,7 @@ class InitMICEModernBERTFromHFID(LightweightTask):
 
 def mice_scorer(
     hf_id: str,
-    n_contextualization_layers: int = 6,
+    n_contextualization_layers: int,
     n_docs_ctx_layers: Optional[int] = None,
     n_interaction_layers: Optional[int] = None,
     bound_bottom_layers: bool = True,

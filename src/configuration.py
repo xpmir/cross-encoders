@@ -257,9 +257,10 @@ class PlaidConfiguration:
     """
     Configuration for PLAID integration in MICE retrieval pipeline.
     """
+
     use_plaid: bool = False
     """Whether to use PLAID for retrieval"""
-    
+
     ### Indexation params ###
     warmup_docs: int = 1000
     """Number of documents to use for the initial warmup phase of PLAID indexing, where
@@ -295,6 +296,7 @@ class PlaidConfiguration:
     """Number of candidates for which fast-plaid computes full scores
     (0 = fast-plaid default)."""
 
+
 @configuration()
 class CE_FineTuning(RerankerMSMarcoV1Configuration):
     nb_repetitions: int = field(default=1)
@@ -307,7 +309,7 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
 
     preprocessing: Preprocessing = Factory(Preprocessing)
 
-    evaluation: Evaluation = Factory(Evaluation) 
+    evaluation: Evaluation = Factory(Evaluation)
 
     plaid: PlaidConfiguration = Factory(PlaidConfiguration)
 
@@ -334,6 +336,12 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     compare_with_baseline: bool = False
     """After evaluations are done, whether to test statistical significance against a baseline.
     By default, the baseline is BM25 + the CE simply fine-tuned on the same setup."""
+
+    save_runs: bool = False
+    """Whether to save the evaluation runs in the best model folders"""
+
+    export_trained_models: bool = True
+    """Whether to export the best models to the models/ folder"""
 
     normalize_docs_per_batch: bool = True
     """whether to normalize documents per batch for listwise losses"""

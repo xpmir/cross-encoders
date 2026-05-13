@@ -237,11 +237,11 @@ class MiniLMMidFusionCrossEncoder(MidFusionCrossEncoder):
             # Note: The Cross-Attention block (new_layer.crossattention) will remain random!
             if not self.random_top_layers:
                 logger.info(
-                    f"Copying weights from original BERT to Mid-Fusion top layer {i}"
+                    f"Copying weights from original BERT to Interaction top layer {i}"
                 )
                 self._copy_weights(original_top_layers[i], new_layer)
             else:
-                logger.info(f"Initializing Mid-Fusion top layer {i} randomly")
+                logger.info(f"Initializing Interaction top layer {i} randomly")
 
             self.top_layers.append(new_layer)
 
@@ -395,7 +395,7 @@ class MiniLMMidFusionCrossEncoder(MidFusionCrossEncoder):
         doc_hidden_states: Optional[torch.Tensor] = None,
     ):
         """
-        Forward pass of the Mid-Fusion Cross Encoder.
+        Forward pass of the Mice Cross Encoder.
         inputs: BaseRecords containing 'topics' and 'documents' with TextItems.
         tokenized_queries: Optional pre-tokenized queries to skip tokenization step.
         tokenized_docs: Optional pre-tokenized documents to skip tokenization step.

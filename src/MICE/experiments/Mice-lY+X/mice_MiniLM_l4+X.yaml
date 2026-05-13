@@ -4,8 +4,9 @@ description:
     Studies the impact of the number of interaction layers
 
 module: MICE.experiments.mice_training
-parent: ./mice_MiniLM_l4.yaml
-# pre_experiment: pre_experiment
+pre_experiment: pre_experiment
+parent: ../mice_MiniLM_l4.yaml
+export_trained_models: false
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 3
