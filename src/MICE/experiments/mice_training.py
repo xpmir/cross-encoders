@@ -36,7 +36,7 @@ from xpmir.text.huggingface.tokenizers import get_default_max_len
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 
-from MICE.modeling.mice import mice_scorer
+from MICE.modeling.mice import MicePlaidRetriever, mice_scorer
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
 from configuration import generate_grid, CE_FineTuning
@@ -357,22 +357,22 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                                     n_samples_kmeans=cfg.plaid.n_samples_kmeans,
                                     seed=seed,
                                     compress_only=cfg.plaid.compress_only,
+                                    force_cpu_indexing=cfg.plaid.force_cpu_indexing,
                                 )
                                 .tag("dataset", dataset)
                                 .submit(
                                     launcher=launcher_index,
                                     init_tasks=[load_model],
-                                    transient=TransientMode.REMOVE,
+                                    # transient=TransientMode.REMOVE,
                                 )
                             )
 
-                            plaid_retriever = PlaidRetriever.C(
+                            plaid_retriever = MicePlaidRetriever.C(
                                 store=documents,
                                 index=stop_tags(plaid_index),
-                                encoder=mice_model,
+                                scorer=mice_model,
+                                first_stage_retriever=test_run_retriever_factory(documents),
                                 topk=cfg.retrieval.k,
-                                n_ivf_probe=cfg.plaid.n_ivf_probe,
-                                n_full_scores=cfg.plaid.n_full_scores,
                             ).tag("plaid_retriever", True)
 
                         # 2) Run tests

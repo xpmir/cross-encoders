@@ -286,6 +286,10 @@ class PlaidConfiguration:
     compress_only: bool = False
     """Whether to build a compress-only index (no IVF search)"""
 
+    force_cpu_indexing: bool = False
+    """When True, forces the use of CPU for indexing even if a GPU is available.
+    This can be useful to avoid GPU OOM errors during indexing, especially for large corpora."""
+
     ### Retrieval params ###
     n_ivf_probe: int = 8
     """Number of IVF clusters to probe in PLAID (lower = faster, less accurate)"""

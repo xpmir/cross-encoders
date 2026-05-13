@@ -1,12 +1,16 @@
 from enum import Enum
 from typing import List, Tuple, Optional, NamedTuple
-from datamaestro_ir.data.base import IDTextRecord
+from datamaestro_ir.data.base import IDTextRecord, ScoredDocument
+from experimaestro.core.arguments import Meta
 import torch
 import torch.nn as nn
 import logging
 from pathlib import Path
 
 from experimaestro import Param, LightweightTask, Constant, field
+from xpm_torch.configuration import FabricConfiguration
+from xpmir.index.plaid import PlaidIndex, PlaidRetriever, _import_fast_plaid
+from xpmir.rankers.retriever import Retriever
 from xpmir.text import TokenizedTexts
 from xpmir.letor.records import BaseItems
 from xpmir.rankers import AbstractModuleScorer
@@ -583,7 +587,7 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
     def forward(
         self,
-        inputs: BaseItems,
+        inputs: Optional[BaseItems] = None,
         tokenized: Optional[MICETokenizedTexts] = None,
         doc_hidden_states: Optional[torch.Tensor] = None,
     ):
@@ -595,19 +599,17 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         doc_hidden_states: Optional pre-computed document hidden states from bottom layers.
         info: TrainerContext for additional context (not used here).
         """
-
+        if inputs is None and tokenized is None:
+            raise ValueError("Either raw inputs or tokenized inputs must be provided.")
+        
         # Prepare inputs
         if tokenized is None:
             tokenized = self.batch_tokenize(inputs, input_nature=QueryDocInput.PAIRS)
 
         tokenized_q = to_device(tokenized.tokenized_q, self.device)
-        tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
-
         query_ids = tokenized_q.ids
         query_mask = tokenized_q.mask
-        doc_ids = tokenized_docs.ids
-        doc_mask = tokenized_docs.mask
-
+        
         # 1. Process Query through Bottom Layers
         q_hidden = self.encode_queries(query_ids, query_mask)
 
@@ -628,9 +630,15 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         if doc_hidden_states is None:
             # Process Doc through Bottom Layers
+            tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
+            doc_ids = tokenized_docs.ids
+            doc_mask = tokenized_docs.mask
+
             doc_hidden_states = self.encode_documents(
                 doc_ids, doc_mask
             )  # shape [batch, seq_len_doc, dim]
+        
+
 
         # 2. Prepare Masks for Top Layers
         # Mask for Self-Attention (Query) shape [batch, 1, seq_len_query, seq_len_query]
@@ -1106,6 +1114,85 @@ class MiceDocumentEncoder(TextEncoderBase):
         return TokensEncoderOutput(
             tokenized, self.model.encode_documents(tokenized.ids, tokenized.mask)
         )
+
+class MicePlaidRetriever(Retriever):
+    """Implements Plaid retrieval using a MICE BERT model.
+    At the moment, the PLAID index is only used for compressing documents, 
+    retrieval is run with a sparse retriever and documents are gathered with the 
+    `get_document_tokens()` method of the index.
+    """
+    scorer: Param[AbstractModuleScorer]
+    """The appropriate Mice scorer."""
+
+    first_stage_retriever: Param[Retriever]
+    """A first stage retriever to fetch candidate documents for the PLAID index."""
+
+    index: Param[PlaidIndex]
+    """The fast-plaid index to search."""
+
+    topk: Param[int]
+    """Number of documents to return per query."""
+
+    fabric_config: Meta[FabricConfiguration] = field(
+        default_factory=FabricConfiguration.C
+    )
+    """Control the device for the model encoding and fast-plaid index."""
+    
+    def initialize(self):
+        super().initialize()
+        if not self.index.compress_only:
+            raise RuntimeError(
+                "Search with PLAID isn't supported at this stage.\
+                The index must be built with compress_only=True and retrieval is done with a sparse retriever."
+            )
+
+        logger.info("PLAID retriever: initializing the encoder")
+        # 1. Initialize Fabric first
+        fabric = self.fabric_config.get_fabric()
+        fabric.launch()
+
+        with fabric.init_module():
+            self.scorer.initialize()
+            self.scorer = fabric.setup(self.scorer)
+            self.scorer.eval()
+
+        logger.info("PLAID retriever: initializing the retriever")
+        self.first_stage_retriever.initialize()
+
+    def _store(self):
+        return self.index.documents
+
+    def retrieve(self, record: IDTextRecord) -> List[ScoredDocument]:
+        # Retrieves the documents
+        scoredDocuments = self.first_stage_retriever.retrieve(record)
+
+        # Decompressing the document tokens embedding from the index by their doc_id
+        doc_list: list = []
+        for doc_id in scoredDocuments:
+            token_embeddings = self.index.get_document_tokens(doc_id)
+            doc_list.append(token_embeddings.to(self.scorer.device)) # Move token embeddings to scorer device
+
+        # Tokenize the queries
+        tokenized_queries = self.scorer.batch_tokenize(
+            [record], input_nature=QueryDocInput.QUERY
+        )
+
+        with torch.no_grad():
+            # Pass the tokenized queries and the doc embeddings through the MICE encoder to get the scores
+            results = self.scorer(
+                tokenized=MICETokenizedTexts(tokenized_q=tokenized_queries, tokenized_docs=None),
+                doc_hidden_states=doc_list,
+            )
+            
+        single = results[0] if results else []
+        out: List[ScoredDocument] = []
+        for doc_index, score in single:
+            out.append(
+                ScoredDocument(self._store().document_int(int(doc_index)), float(score))
+            )
+        
+        out.sort(reverse=True)
+        return out[: (self.top_k or len(out))]
 
 
 class InitMICEBERTFromHFID(LightweightTask):
