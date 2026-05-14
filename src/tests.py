@@ -466,8 +466,9 @@ def get_max_query_length(
 
     for name, evals in evaluations_collection.collection.items():
         unique_queries = {
-            topic["text_item"].text for topic in evals.dataset.topics.iter_topics()
+            topic["text_item"].text for topic in evals.dataset.topics.instance().iter()
         }
+        # logging.warning(f"first query for {name} is '{list(unique_queries)[0]}'")
 
         if not unique_queries:
             res[name] = 0
@@ -479,5 +480,4 @@ def get_max_query_length(
             for q in unique_queries
         ]
         res[name] = max(lengths)
-
     return res
