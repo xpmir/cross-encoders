@@ -40,6 +40,9 @@ class Losses(str, Enum):
     infoNCE_Colbertv2Neg = "infoNCE_Colbertv2Neg"
     """InfoNCE using the negatives sampled by Schlatt et al. 2025 with ColBERTv2"""
 
+    infoNCE_RankDistiLLM = "infoNCE_RankDistiLLM"
+    """InfoNCE using the negatives sampled from the RankDistiLLM top-50 pool using MS MARCO qrels"""
+
     BCE_Colbertv2Neg = "BCE_Colbertv2Neg"
     """Binary Cross Entropy loss with ColBERTv2 negatives"""
 

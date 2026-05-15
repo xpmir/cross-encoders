@@ -41,6 +41,7 @@ from xpmir.letor.distillation.pairwise import (
 
 from xpm_torch.huggingface import TorchHFHub
 from configuration import Losses, CE_FineTuning
+from samplers import msmarco_rankdistillm_sampled_colbert50
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         Losses.BCE_Colbertv2Neg,
         Losses.hingeLoss_Colbertv2Neg,
         Losses.infoNCE_Colbertv2Neg,
+        Losses.infoNCE_RankDistiLLM,
     ):
         passages_per_query = 8
         batch_size = cfg.learner.optimization.batch_size
@@ -141,15 +143,22 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
                 f"Not normalizing docs per batch, {passages_per_query} docs x {batch_size} = {batch_size * passages_per_query} docs per batch"
             )
 
-        if loss_member is Losses.infoNCE_Colbertv2Neg:
+        if loss_member in (Losses.infoNCE_Colbertv2Neg, Losses.infoNCE_RankDistiLLM):
             loss_fn = ListwiseSoftmaxCrossEntropy.C()
         elif loss_member is Losses.hingeLoss_Colbertv2Neg:
             loss_fn = ListwiseHingeLoss.C()
         else:
             loss_fn = ListwiseBCE.C()
 
+        if loss_member is Losses.infoNCE_RankDistiLLM:
+            sampler = msmarco_rankdistillm_sampled_colbert50(
+                passages_per_query=passages_per_query
+            )
+        else:
+            sampler = msmarco_colbertv2_annotated(passages_per_query=passages_per_query)
+
         return DistillationListwiseTrainer.C(
-            sampler=msmarco_colbertv2_annotated(passages_per_query=passages_per_query),
+            sampler=sampler,
             lossfn=loss_fn,
             batch_size=batch_size,
         )

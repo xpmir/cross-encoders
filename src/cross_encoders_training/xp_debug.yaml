@@ -83,3 +83,4 @@ grid_search:
             # - hingeLoss
             - distillRankNET
             - infoNCE_Colbertv2Neg
+            - infoNCE_RankDistiLLM
