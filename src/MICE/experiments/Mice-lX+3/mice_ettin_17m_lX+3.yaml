@@ -19,4 +19,4 @@ grid_search:
     n_contextualization_layers:
         values_range:
             - 0
-            - 8 # 7 layers
+            - 5 # 7 layers

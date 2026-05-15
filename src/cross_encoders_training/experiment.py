@@ -420,7 +420,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     metric_cols_grouped = [c for c in df_grouped.columns if c not in tag_cols]
     df_grouped = df_grouped[tag_cols + metric_cols_grouped]
 
-    print(df_grouped)
+    logging.info(f"Aggregated Results:\n{df_grouped}")
     df_grouped.to_csv(helper.xp.resultspath / "results.csv", index=False)
 
     latex_table = dataframe_to_latex(
