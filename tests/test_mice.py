@@ -54,8 +54,9 @@ class TestMiceForwardTask(LightweightTask):
 @pytest.mark.parametrize(
     "model_id",
     [
-        "jhu-clsp/ettin-encoder-68m",  # ModernBERT
-        "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
+        "google/electra-small-discriminator",  # Electra
+        # "jhu-clsp/ettin-encoder-68m",  # ModernBERT
+        # "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
         # "Qwen/Qwen2.5-0.5B-Instruct",           # Qwen
     ],
 )

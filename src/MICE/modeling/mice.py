@@ -1531,6 +1531,12 @@ def mice_scorer(
         )
         return model, [InitMICEQwenFromHFID.C(model=model)]
 
+    elif "electra" in hf_id.lower():
+        from .electra_mice import ElectraMiceCrossEncoder, InitMICEElectraFromHFID
+
+        model = ElectraMiceCrossEncoder.C(**common_kwargs)
+        return model, [InitMICEElectraFromHFID.C(model=model)]
+
     else:
         if not any(
             key in hf_id.lower() for key in ["bert", "minilm", "roberta", "deberta"]
