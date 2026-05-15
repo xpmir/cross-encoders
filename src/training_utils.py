@@ -379,6 +379,12 @@ def export_model(
     """
     models_path = resultspath / "models"
     best_model_path = models_path / model_name
+    if best_model_path.exists():
+        scorer_path = best_tags.replace("/", "-")
+        logging.warning(
+            f"Model directory for {model_name} already exists. using {scorer_path} as model name instead to avoid overwriting."
+        )
+
     best_model_path.mkdir(parents=True, exist_ok=True)
 
     csv_results.to_csv(best_model_path / "results.csv", index=False)

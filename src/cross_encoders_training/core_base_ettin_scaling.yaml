@@ -16,12 +16,13 @@ learner:
 
 retrieval:
     requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
+    batch_size: 64
     k: 1000
-    batch_size: 32 # hoping its ok for ettin-1b
 
 evaluation:
     all_datasets: false
     in_domain: true
+    beir13: true
 
 
 #### Params that are grid searched
@@ -31,7 +32,7 @@ grid_search:
         values_list:
             - jhu-clsp/ettin-encoder-150m
             - jhu-clsp/ettin-encoder-400m
-            - jhu-clsp/ettin-encoder-1b
+            # - jhu-clsp/ettin-encoder-1b
 
     learner.loss:
         values_list:

@@ -55,3 +55,4 @@ grid_search:
             - microsoft/MiniLM-L12-H384-uncased
             - jhu-clsp/ettin-encoder-68m
             - jhu-clsp/ettin-encoder-32m
+            - jhu-clsp/ettin-encoder-17m

@@ -10,9 +10,7 @@ parent: ./mice_MiniLM_l4.yaml # same training parameters
 #     all_datasets: false
 #     in_domain: true
 
-
 base: jhu-clsp/ettin-encoder-32m
-max_length: 1024
 n_contextualization_layers: 6
 n_interaction_layers: 3
-mask_cls_to_doc: false
+max_length: 1024

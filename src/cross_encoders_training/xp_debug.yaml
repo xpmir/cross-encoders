@@ -55,8 +55,11 @@ retrieval:
 
 evaluation:
     test_max_topics: 100
-    in_domain: true
-    beir13: true
+    in_domain: false
+    beir13: false
+    datasets:
+        - arguana
+        - touche
     # nanobeir: true
 
 #### Params that are grid searched
@@ -64,8 +67,8 @@ grid_search:
     base:
         values_list:
             - jhu-clsp/ettin-encoder-32m
+            - microsoft/MiniLM-L12-H384-uncased
             # - microsoft/deberta-v3-base
-            # - microsoft/MiniLM-L12-H384-uncased
             # - jhu-clsp/ettin-encoder-17m
             # - jhu-clsp/ettin-encoder-68m
 

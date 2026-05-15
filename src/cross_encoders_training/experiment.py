@@ -33,7 +33,7 @@ from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
 from configuration import CE_FineTuning, generate_grid
-from tests import build_tests, get_max_query_length
+from tests import build_tests
 from format import (
     aggregation_hf,
     aggregations,
@@ -173,18 +173,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             max_query_length=cfg.max_query_length,
             max_doc_length=cfg.max_doc_length,
         )
-
-        # Check for query truncation in test sets
-        max_query_lengths = get_max_query_length(scorer_model.tokenizer, tests)
-        logging.info(max_query_lengths)
-        # for ds_name, max_len in max_query_lengths.items():
-        #     limit = scorer_model.tokenizer.max_query_length
-        #     if limit and max_len > limit:
-        #         logging.warning(
-        #             f"Dataset '{ds_name}' has queries up to {max_len} tokens, "
-        #             f"which exceeds the configured max_query_length of {limit}. "
-        #             f"Queries will be truncated."
-        #         )
 
         for k, v in cfg_tags.items():
             scorer_model.tag(k, v)
@@ -432,10 +420,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     metric_cols_grouped = [c for c in df_grouped.columns if c not in tag_cols]
     df_grouped = df_grouped[tag_cols + metric_cols_grouped]
 
-    logging.info(df_grouped)
-
-    output_file = helper.xp.resultspath / "results.csv"
-    df_grouped.to_csv(output_file, index=False)
+    print(df_grouped)
+    df_grouped.to_csv(helper.xp.resultspath / "results.csv", index=False)
 
     latex_table = dataframe_to_latex(
         df_grouped,

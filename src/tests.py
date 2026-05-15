@@ -1,6 +1,6 @@
 from functools import lru_cache
 from datamaestro import prepare_dataset
-
+from typing import Union, List
 from xpmir.datasets.adapters import RandomFold
 from xpmir.datasets.samplers import prepare_collection
 from xpmir.evaluation import Evaluations, EvaluationsCollection
@@ -449,10 +449,23 @@ def build_tests(
 
 
 def get_max_query_length(
-    tokenizer, evaluations_collection: EvaluationsCollection
-) -> dict[str, int]:
-    """Helper to find the maximum query length for each dataset in the collection."""
+    tokenizer, datasets: Union[EvaluationsCollection, List[str], str]
+) -> dict[str, dict]:
+    """Helper to find the maximum query length for each dataset in the collection.
+
+    Arguments:
+        tokenizer: HFTokenizer or raw transformers tokenizer
+        datasets: EvaluationsCollection, list of dataset IDs, or a single dataset ID
+
+    Returns:
+        A dict mapping dataset names to a dict with:
+        - 'max_len': the maximum token length
+        - 'sample': a random query from the dataset
+        - 'sample_len': the token length of the sample
+    """
     from xpmir.text.huggingface.tokenizers import HFTokenizer
+    from datamaestro import prepare_dataset
+    import random
 
     res = {}
 
@@ -464,14 +477,36 @@ def get_max_query_length(
     else:
         hf_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
 
-    for name, evals in evaluations_collection.collection.items():
-        unique_queries = {
-            topic["text_item"].text for topic in evals.dataset.topics.instance().iter()
-        }
-        # logging.warning(f"first query for {name} is '{list(unique_queries)[0]}'")
+    # Normalize datasets to a dictionary of dataset objects
+    dataset_dict = {}
+    if isinstance(datasets, EvaluationsCollection):
+        for name, evals in datasets.collection.items():
+            dataset_dict[name] = evals.dataset
+    elif isinstance(datasets, str):
+        dataset_dict[datasets] = prepare_dataset(datasets)
+    elif isinstance(datasets, list):
+        for ds_id in datasets:
+            # For list of strings, use the ID as name
+            dataset_dict[ds_id] = prepare_dataset(ds_id)
+
+    for name, dataset in dataset_dict.items():
+        try:
+            # Try different ways to iterate topics
+            if hasattr(dataset, "topics") and hasattr(dataset.topics, "iter_topics"):
+                topics = dataset.topics.iter_topics()
+            elif hasattr(dataset, "topics") and hasattr(dataset.topics, "instance"):
+                topics = dataset.topics.instance().iter()
+            else:
+                topics = dataset.topics
+
+            unique_queries = list({topic["text_item"].text for topic in topics})
+        except Exception as e:
+            logger.warning(f"Could not iterate topics for dataset {name}: {e}")
+            res[name] = {"max_len": 0, "sample": "", "sample_len": 0}
+            continue
 
         if not unique_queries:
-            res[name] = 0
+            res[name] = {"max_len": 0, "sample": "", "sample_len": 0}
             continue
 
         # Tokenize all queries and find the maximum length
@@ -479,5 +514,15 @@ def get_max_query_length(
             len(hf_tokenizer.encode(q, add_special_tokens=False))
             for q in unique_queries
         ]
-        res[name] = max(lengths)
+
+        # Pick a random sample
+        sample_query = random.choice(unique_queries)
+        sample_len = len(hf_tokenizer.encode(sample_query, add_special_tokens=False))
+
+        res[name] = {
+            "max_len": max(lengths),
+            "sample": sample_query,
+            "sample_len": sample_len,
+        }
+
     return res
