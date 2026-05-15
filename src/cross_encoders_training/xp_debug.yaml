@@ -81,6 +81,6 @@ grid_search:
             # - hingeLoss_Colbertv2Neg
             # - BCE_Colbertv2Neg
             # - hingeLoss
-            - distillRankNET
-            - infoNCE_Colbertv2Neg
+            # - distillRankNET
+            # - infoNCE_Colbertv2Neg
             - infoNCE_RankDistiLLM

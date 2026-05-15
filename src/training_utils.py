@@ -3,16 +3,19 @@
 import logging
 import yaml
 import shutil
+from typing import Callable
 from pathlib import Path
 from attrs import asdict
 import numpy as np
 import pandas as pd
 from jinja2 import Template
 
-from experimaestro.annotations import tags as get_tags
 from experimaestro.launcherfinder import find_launcher
+from experimaestro.annotations import tags as get_tags
 
 from xpm_torch.trainers import LossTrainer
+from xpm_torch.huggingface import TorchHFHub
+
 from xpmir.letor.trainers.batchwise import BatchwiseTrainer
 from xpmir.letor.trainers.pairwise import PairwiseTrainer
 from xpmir.evaluation import EvaluationsCollection
@@ -39,9 +42,14 @@ from xpmir.letor.distillation.pairwise import (
     MSEDifferenceLoss,
 )
 
-from xpm_torch.huggingface import TorchHFHub
+
 from configuration import Losses, CE_FineTuning
 from samplers import msmarco_rankdistillm_sampled_colbert50
+from format import (
+    aggregations,
+    aggregation_hf,
+    dataframe_to_latex,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,25 +70,6 @@ def get_task_by_tags(tasks: list, tags: dict):
 def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
     """
     Builds a trainer based on the configuration's loss function.
-
-    The trainer is responsible for the training loop, including sampling and loss calculation.
-    Depending on the loss type, it returns one of:
-    - `PairwiseTrainer` for BCE and Hinge loss.
-    - `DistillationPairwiseTrainer` for MarginMSE.
-    - `DistillationListwiseTrainer` for RankDistiLLM, DistillRankNET, and ADR_MSE.
-    - `BatchwiseTrainer` for InfoNCE with in-batch negatives.
-
-    Args:
-        cfg: The fine-tuning configuration. It uses `cfg.learner.loss` to determine
-            the loss function and `cfg.learner.optimization.batch_size` for the batch size.
-
-    Returns:
-        LossTrainer: A configured trainer instance from `xpm_torch` or `xpmir`.
-
-    Raises:
-        ValueError: If `cfg.learner.loss` is not a valid member of the `Losses` enum.
-        NotImplementedError: If the specified loss is valid but its trainer construction
-            is not implemented.
     """
     try:
         loss_member = Losses(cfg.learner.loss)
@@ -370,30 +359,9 @@ def export_model(
     save_runs: bool = False,
     tests: EvaluationsCollection = None,
 ):
-    """Exports all artifacts (weights, logs, readme, config) for a best model.
-    Also saves the results to a CSV file and generates a README card using a template.
-
-    Args:
-        best_tags: The tags corresponding to the best model configuration.
-        model_name: The name to use for the exported model (e.g., "Mice-lX+Y").
-        csv_results: The results dataframe to save as CSV.
-        md_results: The results dataframe to format in the README.
-        learners: The list of learner tasks to search for the best model's task.
-        all_weights: The list of all weight-saving tasks to find the best model's weights.
-        best_cfg: The configuration of the best model, used for README generation.
-        resultspath: The base path where the model artifacts and results should be saved.
-        card_template_txt: Optional Jinja2 template string for the README card.
-        save_runs: Whether to save the evaluation runs in the best model folders.
-        tests: Optional EvaluationsCollection containing the evals
-    """
+    """Exports all artifacts (weights, logs, readme, config) for a best model."""
     models_path = resultspath / "models"
     best_model_path = models_path / model_name
-    if best_model_path.exists():
-        scorer_path = best_tags.replace("/", "-")
-        logging.warning(
-            f"Model directory for {model_name} already exists. using {scorer_path} as model name instead to avoid overwriting."
-        )
-
     best_model_path.mkdir(parents=True, exist_ok=True)
 
     csv_results.to_csv(best_model_path / "results.csv", index=False)
@@ -448,7 +416,6 @@ def export_model(
         detailed = {}
         for dataset, evals in tests.collection.items():
             for eval_tags, evaluate in evals.per_tags.items():
-                # Check if all given tags are present and match in the task's tags
                 if all(
                     str(eval_tags.get(tag)) == str(value)
                     for tag, value in model_tags.items()
@@ -457,17 +424,9 @@ def export_model(
                     run_path = job_path / "run.txt"
                     if run_path.exists():
                         runs[dataset] = run_path
-                    else:
-                        logger.warning(
-                            f"Didn't found run.txt in {job_path} for {dataset}"
-                        )
                     detailed_path = job_path / "detailed.dat"
                     if detailed_path.exists():
                         detailed[dataset] = detailed_path
-                    else:
-                        logger.warning(
-                            f"Didn't found detailed.dat in {job_path} for {dataset}"
-                        )
         return runs, detailed
 
     # 5. Export runs
@@ -480,64 +439,168 @@ def export_model(
             return
         runs_dir = best_model_path / "evals"
         runs_dir.mkdir(parents=True, exist_ok=True)
-        # for dataset, runpath in runs.items():
-        #     shutil.copy(runpath, runs_dir / f"run_{dataset}.txt")
         for dataset, dpath in detailed.items():
             shutil.copy(dpath, runs_dir / f"detailed_{dataset}.dat")
         logger.info(f"Copied {len(list(runs.keys()))} runs to {runs_dir}")
 
 
-def check_detailed_results(detailed_path: Path, metric_name: str = "nDCG@10"):
-    """
-    Check if there are any zero scores for a given metric in a detailed.dat file.
+def process_experiment_results(
+    tests: EvaluationsCollection,
+    all_tags: list,
+    config_map: dict,
+    cfg: CE_FineTuning,
+    helper,
+    learners: list,
+    all_weights: list,
+    get_name_fn: Callable,
+):
+    """Shared post-experiment results processing and reporting."""
 
-    The format of detailed.dat is:
-    {:25s} {:10s} {:.4f}
-    (Metric Name) (Query ID) (Value)
-    """
-    if not detailed_path.exists():
-        logger.error(f"Detailed results file not found at {detailed_path}")
+    # 1. Exctract data
+    df = tests.to_dataframe()
+
+    if df.empty:
+        logging.info("No results found, Ending experiment")
         return
 
-    zeros_count = 0
-    total_count = 0
+    logging.info(f"Evaluated models: \n- {'\n- '.join(tests.per_model.keys())}")
 
-    try:
-        with detailed_path.open("r") as f:
-            for line in f:
-                if not line.strip():
-                    continue
+    # Identify available metric columns and convert to numeric
+    metric_cols = [col for col in df.columns if col[0] == "metric"]
+    df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
 
-                # The format is fixed width or space separated
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
+    # Flatten MultiIndex columns and remove duplicates
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[1] if col[1] else col[0] for col in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]
 
-                # Metric name is the first part (can be multiple parts if not careful,
-                # but split() handles spaces)
-                current_metric = parts[0]
-                value = float(parts[-1])
+    # Drop useless columns
+    cols_to_drop = [col for col in df.columns if "index_doc" in str(col).lower()]
+    df = df.drop(columns=cols_to_drop, errors="ignore")
 
-                if current_metric == metric_name:
-                    total_count += 1
-                    if value == 0.0:
-                        zeros_count += 1
+    # Identify grid search keys
+    grid_keys = set()
+    for tags in all_tags:
+        grid_keys.update(tags.keys())
 
-        if total_count == 0:
-            logger.warning(
-                f"No results found for metric '{metric_name}' in {detailed_path}"
+    # Tags to group by
+    group_by_tags = sorted(list({"first_stage"} | grid_keys))
+    model_id_tags = sorted(group_by_tags + ["seed"])
+
+    # Add both specific aggregations (ID, BEIR, etc.) and the global mean
+    df_with_aggs = add_dataset_aggregations(
+        df,
+        group_by_cols=model_id_tags,
+        aggregations=aggregations,
+        add_mean=True,  # will add 'mean' dataset at the end
+    )
+
+    save_raw_results(df_with_aggs, helper.xp.resultspath)
+
+    # keep only results with a base tag (all our models have it)
+    # We ensure it's not NaN and not an empty string to exclude first-stage only results
+    scorer_only_df = df_with_aggs[
+        df_with_aggs["base"].notna()
+        & (df_with_aggs["base"].astype(str) != "")
+        & (df_with_aggs["base"].astype(str) != "nan")
+    ]
+
+    # Read model card template
+    template_path = Path(__file__).parent / "CrossEncoderCard.md"
+    card_template_txt = template_path.read_text() if template_path.exists() else None
+
+    # Identify and export best models per configuration
+    best_models_df = identify_best_models(
+        scorer_only_df,
+        dataset="mean",
+        metric="nDCG@10",
+        group_by_tags=group_by_tags,
+    )
+    logging.info(f"df with only best models:\n{best_models_df}")
+
+    best_models_list = []
+    if not best_models_df.empty and cfg.export_trained_models:
+        # Check if model folder exists before saving models, delete if so
+        models_path = helper.xp.resultspath / "models"
+        if models_path.exists():
+            shutil.rmtree(models_path)
+            logging.info(f"Deleted existing models directory: {models_path}")
+
+        for _, best_row in best_models_df.iterrows():
+            # Extract tags for this best model
+            best_tags = {tag: best_row[tag] for tag in model_id_tags}
+
+            logging.info(f"Best evaluated model is {best_tags}")
+
+            # Reconstruct the grid tags to find the original config
+            best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
+            best_cfg = config_map.get(frozenset(best_grid_tags.items()))
+
+            # Filter the original dataframe for this specific best model (all datasets)
+            mask = pd.Series(True, index=df_with_aggs.index)
+            for tag in model_id_tags:
+                mask &= df_with_aggs[tag].astype(str) == str(best_row[tag])
+
+            best_model_df = df_with_aggs[mask].copy()
+            best_models_list.append(best_model_df)
+
+            # Format and Export artifacts
+            csv_results, md_results = format_model_results(
+                best_model_df, aggregations=aggregation_hf
             )
-        elif zeros_count > 0:
-            percentage = (zeros_count / total_count) * 100
-            logger.warning(
-                f"FOUND {zeros_count}/{total_count} ({percentage:.1f}%) ZERO SCORES "
-                f"for metric '{metric_name}' in {detailed_path}. "
-                "This might indicate a synchronization issue in Multi-GPU inference."
-            )
-        else:
-            logger.info(
-                f"All {total_count} queries for '{metric_name}' have non-zero scores in {detailed_path}"
+
+            export_model(
+                best_tags=best_tags,
+                model_name=get_name_fn(best_tags),
+                csv_results=csv_results,
+                md_results=md_results,
+                learners=learners,
+                all_weights=all_weights,
+                best_cfg=best_cfg,
+                resultspath=helper.xp.resultspath,
+                card_template_txt=card_template_txt,
+                save_runs=cfg.save_runs,
+                tests=tests,
             )
 
-    except Exception as e:
-        logger.error(f"Error reading detailed results: {e}")
+        if best_models_list:
+            best_model_df = pd.concat(best_models_list, ignore_index=True)
+            best_model_df.to_csv(
+                helper.xp.resultspath / "best_models_per_scorer_raw_results.csv",
+                index=False,
+            )
+
+    # Final aggregation and LaTeX table generation
+    metric_names = [col[1] for col in metric_cols]
+    df_grouped = (
+        df_with_aggs.groupby(["dataset"] + group_by_tags, dropna=False)[metric_names]
+        .agg(["mean", "var"])
+        .reset_index()
+    )
+
+    # Reorder columns: tags first, metrics after
+    tag_cols_expected = ["dataset"] + group_by_tags
+    tag_cols = []
+    for col in tag_cols_expected:
+        if (col, "") in df_grouped.columns:
+            tag_cols.append((col, ""))
+        elif col in df_grouped.columns:
+            tag_cols.append(col)
+
+    metric_cols_grouped = [c for c in df_grouped.columns if c not in tag_cols]
+    df_grouped = df_grouped[tag_cols + metric_cols_grouped]
+
+    logging.info(f"Aggregated Results:\n{df_grouped}")
+    df_grouped.to_csv(helper.xp.resultspath / "results.csv", index=False)
+
+    latex_table = dataframe_to_latex(
+        df_grouped,
+        caption="Evaluation Results",
+        label="tab:eval_results",
+        sig_df=None,
+    )
+    with open(helper.xp.resultspath / "results.tex", "w") as f:
+        f.write(latex_table)
+
+    logging.info(f"Saved aggregated results to {helper.xp.resultspath / 'results.csv'}")
+    logging.info("Experiment completed successfully.")
