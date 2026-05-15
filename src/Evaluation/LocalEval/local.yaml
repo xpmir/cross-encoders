@@ -13,7 +13,7 @@ model_root: /lustre/fsn1/projects/rech/npl/commun/cross_encoders/experiments/col
 
 # dir name for the model to evaluate
 models:
-  - cross-encoder-MiniLM-L12-infoNCE_RankDistiLLM/encoder_path
+  - cross-encoder-MiniLM-L12-infoNCE_Colbertv2Neg/encoder_path
 
 base: cross-encoder/ms-marco-MiniLM-L12-v2
 

@@ -124,9 +124,9 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
 
     ### Listwise losses with ColBERT negatives ###
     elif loss_member in (
-        Losses.BCE_RankDistiLLM,
-        Losses.hingeLoss_RankDistiLLM,
-        Losses.infoNCE_RankDistiLLM,
+        Losses.BCE_Colbertv2Neg,
+        Losses.hingeLoss_Colbertv2Neg,
+        Losses.infoNCE_Colbertv2Neg,
     ):
         passages_per_query = 8
         batch_size = cfg.learner.optimization.batch_size
@@ -141,9 +141,9 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
                 f"Not normalizing docs per batch, {passages_per_query} docs x {batch_size} = {batch_size * passages_per_query} docs per batch"
             )
 
-        if loss_member is Losses.infoNCE_RankDistiLLM:
+        if loss_member is Losses.infoNCE_Colbertv2Neg:
             loss_fn = ListwiseSoftmaxCrossEntropy.C()
-        elif loss_member is Losses.hingeLoss_RankDistiLLM:
+        elif loss_member is Losses.hingeLoss_Colbertv2Neg:
             loss_fn = ListwiseHingeLoss.C()
         else:
             loss_fn = ListwiseBCE.C()

@@ -23,5 +23,5 @@ grid_search:
 
     learner.loss:
         values_list:
-            - infoNCE_RankDistiLLM
+            - infoNCE_Colbertv2Neg
             - marginMSE

@@ -37,6 +37,6 @@ grid_search:
 
     learner.loss:
         values_list:
-            - infoNCE_RankDistiLLM
-            - hingeLoss_RankDistiLLM
-            - bce_RankDistiLLM
+            - infoNCE_Colbertv2Neg
+            - hingeLoss_Colbertv2Neg
+            - BCE_Colbertv2Neg

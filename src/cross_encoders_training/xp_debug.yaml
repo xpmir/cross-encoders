@@ -78,8 +78,8 @@ grid_search:
             # - hingeLoss
             # - marginMSE
             # - ADR_MSE
-            # - hingeLoss_RankDistiLLM
-            # - bce_RankDistiLLM
+            # - hingeLoss_Colbertv2Neg
+            # - BCE_Colbertv2Neg
             # - hingeLoss
             - distillRankNET
-            - infoNCE_RankDistiLLM
+            - infoNCE_Colbertv2Neg

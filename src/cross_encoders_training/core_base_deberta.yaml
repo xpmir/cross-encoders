@@ -39,4 +39,4 @@ grid_search:
             - ADR_MSE
             - marginMSE
             - hingeLoss
-            - infoNCE_RankDistiLLM
+            - infoNCE_Colbertv2Neg

@@ -58,6 +58,6 @@ grid_search:
             - marginMSE
             # - infoNCE
             # - hingeLoss
-            # - infoNCE_RankDistiLLM
+            # - infoNCE_Colbertv2Neg
             # - distillRankNET
             # - ADR_MSE

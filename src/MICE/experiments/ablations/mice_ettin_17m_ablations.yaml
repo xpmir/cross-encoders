@@ -73,7 +73,7 @@ grid_search:
     learner.loss:
         values_list:
             - marginMSE
-            # - infoNCE_RankDistiLLM
+            # - infoNCE_Colbertv2Neg
 
     learner.validation:
         values_list:

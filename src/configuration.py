@@ -37,13 +37,13 @@ class Losses(str, Enum):
     infoNCE = "infoNCE"
     """InfoNCE loss, with in-batch negatives"""
 
-    infoNCE_RankDistiLLM = "infoNCE_RankDistiLLM"
+    infoNCE_Colbertv2Neg = "infoNCE_Colbertv2Neg"
     """InfoNCE using the negatives sampled by Schlatt et al. 2025 with ColBERTv2"""
 
-    BCE_RankDistiLLM = "bce_RankDistiLLM"
+    BCE_Colbertv2Neg = "BCE_Colbertv2Neg"
     """Binary Cross Entropy loss with ColBERTv2 negatives"""
 
-    hingeLoss_RankDistiLLM = "hingeLoss_RankDistiLLM"
+    hingeLoss_Colbertv2Neg = "hingeLoss_Colbertv2Neg"
     """Hinge loss with ColBERTv2 negatives"""
 
     marginMSE = "marginMSE"

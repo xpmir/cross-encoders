@@ -61,6 +61,6 @@ grid_search:
             - bce
             - hingeLoss
             - marginMSE
-            - infoNCE_RankDistiLLM
+            - infoNCE_Colbertv2Neg
             - distillRankNET
             - ADR_MSE
