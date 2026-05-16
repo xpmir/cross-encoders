@@ -28,7 +28,7 @@ from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 
-from xpmir.index.plaid import PlaidIndexBuilder, PlaidRetriever
+from xpmir.index.plaid import PlaidIndexBuilder
 from xpmir.papers.results import PaperResults
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
@@ -36,7 +36,8 @@ from xpmir.text.huggingface.tokenizers import get_default_max_len
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 
-from MICE.modeling.mice import MicePlaidRetriever, mice_scorer
+from MICE.experiments.plaid_mice import MicePlaidRetriever, MicePlaidRetrieverv2 
+from MICE.modeling.mice import mice_scorer
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
 from configuration import generate_grid, CE_FineTuning
@@ -367,22 +368,28 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                                 )
                             )
 
-                            plaid_retriever = MicePlaidRetriever.C(
-                                store=documents,
-                                index=stop_tags(plaid_index),
-                                scorer=mice_model,
-                                first_stage_retriever=test_run_retriever_factory(documents),
-                                topk=cfg.retrieval.k,
-                            ).tag("plaid_retriever", True)
-
-                        # 2) Run tests
-                        all_weights.append(load_model)
-                        tests.evaluate_retriever(
-                            plaid_retriever,
-                            launcher_evaluate,
-                            model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                            init_tasks=[load_model],
-                        )
+                            # 2) Run tests
+                            all_weights.append(load_model)
+                            tests.evaluate_retriever(
+                                retriever=MicePlaidRetrieverv2.C(
+                                    store=documents,
+                                    index=stop_tags(plaid_index),
+                                    scorer=mice_model,
+                                    retriever=bm25_retriever(
+                                        cfg,
+                                        "bm25_plaid",
+                                        documents=documents,
+                                        launcher_index=launcher_index,
+                                        topk=cfg.retrieval.k,
+                                    ),
+                                    top_k=cfg.retrieval.k,
+                                    batchsize=cfg.retrieval.batch_size,
+                                ).tag("plaid_retriever", True),
+                                launcher=launcher_evaluate,
+                                model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
+                                init_tasks=[load_model],
+                                with_run=cfg.save_runs,
+                            )
 
     all_configs, all_tags = generate_grid(cfg)
 
