@@ -16,7 +16,7 @@ preprocessing:
 
 indexation:
     batch_size: 128
-    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
+    requirements: duration=20h & cpu(cores=4, mem=10G) & cuda(mem=40G)
 
 validation:
     # Use 500 topics for validation
@@ -49,11 +49,13 @@ retrieval:
     k: 100
 
 evaluation:
-    test_max_topics: 100
+    # test_max_topics: 100
     all_datasets: false
-    in_domain: true
-    # lotte_search: true
-
+    in_domain: false
+    datasets:
+        - arguana
+        - nfcorpus
+        # - fiqa
 #MICE params
 n_contextualization_layers: 4
 n_interaction_layers: 3
@@ -69,3 +71,11 @@ grid_search:
             - microsoft/MiniLM-L12-H384-uncased
             # - jhu-clsp/ettin-encoder-32m
             # - microsoft/MiniLM-L12-H384-uncased
+
+plaid:
+    use_plaid: true
+    batch_size: 25_000
+    n_bits: 4
+    kmeans_niters: 4
+    buffer_size: 5000
+    compress_only: true

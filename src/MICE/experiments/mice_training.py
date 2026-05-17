@@ -27,7 +27,6 @@ from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 
-from xpmir.index.plaid import PlaidIndexBuilder
 from xpmir.papers.results import PaperResults
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
@@ -35,9 +34,8 @@ from xpmir.text.huggingface.tokenizers import get_default_max_len
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 
-from MICE.experiments.plaid_mice import MicePlaidRetrieverv2
 from MICE.modeling.mice import mice_scorer
-from retrievers import splade_retriever, bm25_retriever
+from retrievers import splade_retriever, bm25_retriever, MicePlaidRetrieverFactory
 from validations import ValidationSet
 from configuration import generate_grid, CE_FineTuning
 from tests import build_tests
@@ -301,19 +299,19 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             # Evaluate each model on test collections
             for name, tracked_validation in tracked_validations.items():
                 logging.info(f"evaluating from validation: {name}")
-                if not cfg.plaid.use_plaid:
-                    for metric_name in tracked_validation.monitored():
-                        load_model = (
-                            outputs.listeners[tracked_validation.id][metric_name]
-                            .tag("validation", name)
-                            .tag("seed", seed)
-                            .tag("first_stage", retriever_tag)
-                            .tag("plaid_retriever", False)
-                        )
-                        for k, v in cfg_tags.items():
-                            load_model.tag(k, v)
+                for metric_name in tracked_validation.monitored():
+                    load_model = (
+                        outputs.listeners[tracked_validation.id][metric_name]
+                        .tag("validation", name)
+                        .tag("seed", seed)
+                        .tag("first_stage", retriever_tag)
+                    )
+                    for k, v in cfg_tags.items():
+                        load_model.tag(k, v)
+                    all_weights.append(load_model)
 
-                        all_weights.append(load_model)
+                    if not cfg.plaid.use_plaid:
+                        # Just evaluate the scorer with given first stage
                         tests.evaluate_retriever(
                             partial(
                                 scorer_retriever,
@@ -326,72 +324,38 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                             init_tasks=[load_model],
                             with_run=cfg.save_runs,
                         )
-                else:
-                    logging.info(
-                        f"Running PLAID-style evaluation from validation: {name}"
-                    )
-                    for metric_name in tracked_validation.monitored():
-                        load_model = (
-                            outputs.listeners[tracked_validation.id][metric_name]
-                            .tag("validation", name)
-                            .tag("seed", seed)
-                            .tag("first_stage", retriever_tag)
+                    else:
+                        logging.info(
+                            f"Running PLAID-style evaluation from validation: {name}"
                         )
-                        for k, v in cfg_tags.items():
-                            load_model.tag(k, v)
 
-                        doc_encoder = mice_model.get_document_encoder()
+                        # 1) Build the Retriever factory for first stage + mice + Plaid
+                        mice_plaid_factory = MicePlaidRetrieverFactory(
+                            mice_model=mice_model,
+                            first_stage_factory=test_run_retriever_factory,
+                            topk=cfg.retrieval.k,
+                            batchsize=cfg.retrieval.batch_size,
+                        )
 
-                        # 1) Build the index and retriever for this model
-                        for (
-                            dataset,
-                            documents,
-                        ) in test_run_retriever_factory.documents.items():
-                            logging.info(f"Building PLAID index for dataset {dataset}")
-                            plaid_index = (
-                                PlaidIndexBuilder.C(
-                                    documents=documents,
-                                    encoder=doc_encoder,
-                                    buffer_size=cfg.plaid.buffer_size,
-                                    batch_size=cfg.indexation.batch_size,
-                                    fast_plaid_batch_size=cfg.plaid.batch_size,
-                                    n_bits=cfg.plaid.n_bits,
-                                    kmeans_niters=cfg.plaid.kmeans_niters,
-                                    n_samples_kmeans=cfg.plaid.n_samples_kmeans,
-                                    seed=seed,
-                                    compress_only=cfg.plaid.compress_only,
-                                    force_cpu_indexing=cfg.plaid.force_cpu_indexing,
-                                )
-                                .tag("dataset", dataset)
-                                .submit(
-                                    launcher=launcher_index,
-                                    init_tasks=[load_model],
-                                    # transient=TransientMode.REMOVE,
-                                )
-                            )
+                        # 2) Build the plaid indexes for all datasets in the collection
+                        mice_plaid_factory.build_indexes(
+                            evaluations=tests,
+                            cfg=cfg.plaid,
+                            batch_size=cfg.retrieval.batch_size,
+                            seed=seed,
+                            launcher_index=launcher_index,
+                            init_tasks=[load_model],  # for loading mice model
+                        )
 
-                            # 2) Run tests
-                            all_weights.append(load_model)
-                            tests.evaluate_retriever(
-                                retriever=MicePlaidRetrieverv2.C(
-                                    store=documents,
-                                    index=stop_tags(plaid_index),
-                                    scorer=mice_model,
-                                    retriever=bm25_retriever(
-                                        cfg,
-                                        "bm25_plaid",
-                                        documents=documents,
-                                        launcher_index=launcher_index,
-                                        topk=cfg.retrieval.k,
-                                    ),
-                                    top_k=cfg.retrieval.k,
-                                    batchsize=cfg.retrieval.batch_size,
-                                ).tag("plaid_retriever", True),
-                                launcher=launcher_evaluate,
-                                model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                                init_tasks=[load_model],
-                                with_run=cfg.save_runs,
-                            )
+                        # 2) Run tests with the factory
+                        all_weights.append(load_model)
+                        tests.evaluate_retriever(
+                            retriever=mice_plaid_factory,
+                            launcher=launcher_evaluate,
+                            model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}-Plaid",
+                            init_tasks=[load_model],
+                            with_run=cfg.save_runs,
+                        )
 
     all_configs, all_tags = generate_grid(cfg)
 
