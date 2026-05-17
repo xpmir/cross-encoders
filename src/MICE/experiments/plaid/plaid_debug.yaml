@@ -15,7 +15,7 @@ preprocessing:
 
 indexation:
     batch_size: 128
-    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
+    requirements: duration=8h & cpu(cores=20) & cuda(mem=10G)
 
 validation:
     # Use 500 topics for validation
@@ -53,13 +53,13 @@ evaluation:
     in_domain: false
     datasets:
         - arguana
-        - fiqa
-        - nfcorpus
-        - quora
-        - scidocs
-        - scifact
-        - trec_covid
-        - touche
+        # - fiqa
+        # - nfcorpus
+        # - quora
+        # - scidocs
+        # - scifact
+        # - trec_covid
+        # - touche
     # lotte_search: true
 
 #MICE params
@@ -73,4 +73,6 @@ plaid:
     batch_size: 25_000
     n_bits: 4
     kmeans_niters: 4
-    warmup_docs: 1000
+    buffer_size: 1000
+    compress_only: true
+    force_cpu_indexing: true

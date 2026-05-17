@@ -15,7 +15,6 @@ import shutil
 from functools import partial
 from typing import Optional
 from pathlib import Path
-from experimaestro.scheduler.transient import TransientMode
 import numpy as np
 import pandas as pd
 
@@ -28,7 +27,7 @@ from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
 
-from xpmir.index.plaid import PlaidIndexBuilder, PlaidRetriever
+from xpmir.index.plaid import PlaidIndexBuilder
 from xpmir.papers.results import PaperResults
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
@@ -36,6 +35,7 @@ from xpmir.text.huggingface.tokenizers import get_default_max_len
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 
+from MICE.experiments.plaid_mice import MicePlaidRetrieverv2
 from MICE.modeling.mice import mice_scorer
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
@@ -352,7 +352,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                                 PlaidIndexBuilder.C(
                                     documents=documents,
                                     encoder=doc_encoder,
-                                    warmup_docs=cfg.plaid.warmup_docs,
+                                    buffer_size=cfg.plaid.buffer_size,
                                     batch_size=cfg.indexation.batch_size,
                                     fast_plaid_batch_size=cfg.plaid.batch_size,
                                     n_bits=cfg.plaid.n_bits,
@@ -360,32 +360,38 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                                     n_samples_kmeans=cfg.plaid.n_samples_kmeans,
                                     seed=seed,
                                     compress_only=cfg.plaid.compress_only,
+                                    force_cpu_indexing=cfg.plaid.force_cpu_indexing,
                                 )
                                 .tag("dataset", dataset)
                                 .submit(
                                     launcher=launcher_index,
                                     init_tasks=[load_model],
-                                    transient=TransientMode.REMOVE,
+                                    # transient=TransientMode.REMOVE,
                                 )
                             )
 
-                            plaid_retriever = PlaidRetriever.C(
-                                store=documents,
-                                index=stop_tags(plaid_index),
-                                encoder=mice_model,
-                                topk=cfg.retrieval.k,
-                                n_ivf_probe=cfg.plaid.n_ivf_probe,
-                                n_full_scores=cfg.plaid.n_full_scores,
-                            ).tag("plaid_retriever", True)
-
-                        # 2) Run tests
-                        all_weights.append(load_model)
-                        tests.evaluate_retriever(
-                            plaid_retriever,
-                            launcher_evaluate,
-                            model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                            init_tasks=[load_model],
-                        )
+                            # 2) Run tests
+                            all_weights.append(load_model)
+                            tests.evaluate_retriever(
+                                retriever=MicePlaidRetrieverv2.C(
+                                    store=documents,
+                                    index=stop_tags(plaid_index),
+                                    scorer=mice_model,
+                                    retriever=bm25_retriever(
+                                        cfg,
+                                        "bm25_plaid",
+                                        documents=documents,
+                                        launcher_index=launcher_index,
+                                        topk=cfg.retrieval.k,
+                                    ),
+                                    top_k=cfg.retrieval.k,
+                                    batchsize=cfg.retrieval.batch_size,
+                                ).tag("plaid_retriever", True),
+                                launcher=launcher_evaluate,
+                                model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
+                                init_tasks=[load_model],
+                                with_run=cfg.save_runs,
+                            )
 
     all_configs, all_tags = generate_grid(cfg)
 

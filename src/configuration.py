@@ -265,9 +265,8 @@ class PlaidConfiguration:
     """Whether to use PLAID for retrieval"""
 
     ### Indexation params ###
-    warmup_docs: int = 1000
-    """Number of documents to use for the initial warmup phase of PLAID indexing, where
-    the centroids are initialized"""
+    buffer_size: int = 1000
+    """Number of documents to use for creating/updating the PLAID index"""
 
     batch_size: int = 25_000
     """Batch size (in tokens) when encoding documents for PLAID"""
@@ -290,6 +289,10 @@ class PlaidConfiguration:
 
     compress_only: bool = False
     """Whether to build a compress-only index (no IVF search)"""
+
+    force_cpu_indexing: bool = False
+    """When True, forces the use of CPU for indexing even if a GPU is available.
+    This can be useful to avoid GPU OOM errors during indexing, especially for large corpora."""
 
     ### Retrieval params ###
     n_ivf_probe: int = 8

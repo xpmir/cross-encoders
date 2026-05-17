@@ -22,6 +22,7 @@ from xpmir.text.encoders import (
 from xpmir.text.huggingface.tokenizers import HFTokenizer
 from xpmir.text.tokenizers import TokenizerOptions
 
+
 # Configuration and common types
 
 # Transformers imports with safety checks
@@ -611,9 +612,10 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
     def forward(
         self,
-        inputs: BaseItems,
+        inputs: Optional[BaseItems] = None,
         tokenized: Optional[MICETokenizedTexts] = None,
         doc_hidden_states: Optional[torch.Tensor] = None,
+        doc_mask: Optional[torch.Tensor] = None,
     ):
         """
         Forward pass of the Mice Cross Encoder.
@@ -621,20 +623,19 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         tokenized_queries: Optional pre-tokenized queries to skip tokenization step.
         tokenized_docs: Optional pre-tokenized documents to skip tokenization step.
         doc_hidden_states: Optional pre-computed document hidden states from bottom layers.
+        doc_mask: Optional document attention mask when doc_hidden_states are provided.
         info: TrainerContext for additional context (not used here).
         """
+        if inputs is None and tokenized is None:
+            raise ValueError("Either raw inputs or tokenized inputs must be provided.")
 
         # Prepare inputs
         if tokenized is None:
             tokenized = self.batch_tokenize(inputs, input_nature=QueryDocInput.PAIRS)
 
         tokenized_q = to_device(tokenized.tokenized_q, self.device)
-        tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
-
         query_ids = tokenized_q.ids
         query_mask = tokenized_q.mask
-        doc_ids = tokenized_docs.ids
-        doc_mask = tokenized_docs.mask
 
         # 1. Process Query through Bottom Layers
         q_hidden = self.encode_queries(query_ids, query_mask)
@@ -656,9 +657,40 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         if doc_hidden_states is None:
             # Process Doc through Bottom Layers
+            tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
+            doc_ids = tokenized_docs.ids
+            doc_mask = tokenized_docs.mask
+
             doc_hidden_states = self.encode_documents(
                 doc_ids, doc_mask
             )  # shape [batch, seq_len_doc, dim]
+        else:
+            # doc_hidden_states has been provided: we need to deduce the masks AND pad the documents for the
+            # batch processing in the top layers.
+            def repad_batch(
+                doc_embeddings: List[
+                    torch.Tensor
+                ],  # each (seq_len_i, hidden) or (1, seq_len_i, hidden)
+            ) -> Tuple[torch.Tensor, torch.Tensor]:
+                # Normalize to (seq_len, hidden)
+                docs = [d.squeeze(0) if d.dim() == 3 else d for d in doc_embeddings]
+
+                lengths = [doc.shape[0] for doc in docs]
+                max_len = max(lengths)
+                device = docs[0].device
+                B = len(docs)
+
+                padded = torch.zeros(B, max_len, *docs[0].shape[1:], device=device)
+                mask = torch.zeros(B, max_len, device=device).long()
+
+                for i, doc in enumerate(docs):
+                    seq_len = doc.shape[0]
+                    padded[i, :seq_len] = doc
+                    mask[i, :seq_len] = 1
+
+                return padded, mask
+
+            doc_hidden_states, doc_mask = repad_batch(doc_hidden_states)
 
         # 2. Prepare Masks for Top Layers
         # Mask for Self-Attention (Query) shape [batch, 1, seq_len_query, seq_len_query]
