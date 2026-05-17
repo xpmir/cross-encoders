@@ -51,3 +51,11 @@ retrieval:
 base: google/electra-base-discriminator
 n_contextualization_layers: 4
 n_interaction_layers: 3
+
+
+#### Params that are grid searched
+grid_search:
+    n_contextualization_layers:
+        values_list:
+            - 4
+            - 8 # 12 layers

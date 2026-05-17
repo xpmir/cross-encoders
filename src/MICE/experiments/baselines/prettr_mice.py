@@ -23,17 +23,41 @@ class PreTTRCrossEncoder(HFCrossScorer):
     """
     PreTTR Baseline implementation wrapped in the MICE framework.
     It uses joint tokenization but prevents cross-attention in the early layers
-    using a join_mask. It also supports MICE's encode_documents API via
-    fixed-offset positional embeddings.
+    using a join_mask.
     """
 
     join_layer: Param[int] = field(default=6)
     """The layer index at which full self-attention begins."""
 
     prettr_max_query_length: Param[int] = field(default=32)
-    """The fixed offset used for offline document precomputation."""
+    """Legacy PreTTR query length parameter; fixed-offset encoding is kept in garage helper."""
 
     _version: Constant[int] = 1
+
+    def _garage_shifted_position_ids(
+        self, token_type_ids: torch.Tensor
+    ) -> torch.Tensor:
+        """Garage helper for future fixed-offset PreTTR positional ids."""
+        BAT, SEQ = token_type_ids.shape
+        position_ids = (
+            torch.arange(SEQ, dtype=torch.long, device=token_type_ids.device)
+            .unsqueeze(0)
+            .expand(BAT, SEQ)
+            .clone()
+        )
+
+        is_doc = token_type_ids == 1
+        for b in range(BAT):
+            doc_indices = torch.where(is_doc[b])[0]
+            if len(doc_indices) > 0:
+                doc_start = doc_indices[0]
+                num_doc = len(doc_indices)
+                position_ids[b, doc_start:] = torch.arange(
+                    self.prettr_max_query_length,
+                    self.prettr_max_query_length + num_doc,
+                    device=token_type_ids.device,
+                )
+        return position_ids
 
     def forward(
         self,
@@ -47,76 +71,49 @@ class PreTTRCrossEncoder(HFCrossScorer):
         attention_mask = to_device(tokenized.mask, self.device)
         token_type_ids = to_device(tokenized.token_type_ids, self.device)
 
-        # 1. Calculate position_ids with fixed offset for document
         BAT, SEQ = input_ids.shape
-        position_ids = (
-            torch.arange(SEQ, dtype=torch.long, device=self.device)
-            .unsqueeze(0)
-            .expand(BAT, SEQ)
-            .clone()
-        )
-
-        is_doc = token_type_ids == 1
-        if is_doc.any():
-            for b in range(BAT):
-                doc_indices = torch.where(is_doc[b])[0]
-                if len(doc_indices) > 0:
-                    doc_start = doc_indices[0]
-                    num_doc = len(doc_indices)
-                    position_ids[b, doc_start:] = torch.arange(
-                        self.prettr_max_query_length,
-                        self.prettr_max_query_length + num_doc,
-                        device=self.device,
-                    )
 
         # 2. Intercept Backbone Loop
         # We assume standard HF transformer models (BERT, RoBERTa, Electra, etc.)
         model = self.encoder.model
         base_model = getattr(model, model.base_model_prefix)
 
-        # Construct standard HF extended attention mask
-        # (Handles padding tokens)
-        extended_attention_mask = base_model.get_extended_attention_mask(
-            attention_mask, input_ids.size()
-        )
-
         # Initial embeddings
         hidden_states = base_model.embeddings(
             input_ids=input_ids,
             token_type_ids=token_type_ids,
-            position_ids=position_ids,
         )
 
-        # Construct join_mask (Prevents cross-type attention)
-        # Different token types (0 vs 1) should not attend to each other
-        join_mask = token_type_ids.reshape(BAT, 1, SEQ, 1) != token_type_ids.reshape(
-            BAT, 1, 1, SEQ
+        if (
+            hasattr(base_model, "embeddings_project")
+            and base_model.embeddings_project is not None
+        ):
+            hidden_states = base_model.embeddings_project(hidden_states)
+
+        # Build a single attention mask once: padding + join-blocks.
+        extended_attention_mask = base_model.get_extended_attention_mask(
+            attention_mask, input_ids.size()
+        ).to(dtype=hidden_states.dtype)
+
+        # get extended attn mask (2D)
+        b_attention_mask = attention_mask.bool()
+        ext_attn_mask = b_attention_mask.reshape(
+            BAT, 1, SEQ, 1
+        ) * b_attention_mask.reshape(BAT, 1, 1, SEQ)
+        join_mask = ~ext_attn_mask | (
+            token_type_ids.reshape(BAT, 1, SEQ, 1)
+            != token_type_ids.reshape(BAT, 1, 1, SEQ)
         )
-        # Mask is added to scores, so use large negative value
-        # Use a value compatible with the model's dtype
         join_mask = join_mask.to(dtype=hidden_states.dtype) * -10000.0
 
-        # Iterate layers manually
         for i, layer_module in enumerate(base_model.encoder.layer):
-            if i < self.join_layer:
-                # Add join_mask to prevent cross-attention in early layers
-                layer_mask = extended_attention_mask + join_mask
-            else:
-                # Standard full self-attention in late layers
-                layer_mask = extended_attention_mask
-
-            layer_outputs = layer_module(hidden_states, attention_mask=layer_mask)
-            hidden_states = layer_outputs[0]
-
-            # Ensure hidden_states stays 3D (batch, seq, dim)
-            # Some HF versions might squeeze batch if it's 1 in certain paths
-            if hidden_states.dim() == 2:
-                hidden_states = hidden_states.unsqueeze(0)
+            layer_mask = join_mask if i < self.join_layer else extended_attention_mask
+            hidden_states = layer_module(hidden_states, attention_mask=layer_mask)
 
         # 3. Scoring
         # Match HF model's pooling/classification logic
-        if model.config.model_type == "roberta":
-            # RobertaClassificationHead extracts CLS internally
+        # Roberta and Electra classification heads expect the full sequence (3D)
+        if model.config.model_type in ["roberta", "electra"]:
             logits = model.classifier(hidden_states)
         else:
             # Standard BERT-like: use pooler if exists, otherwise CLS token
@@ -155,7 +152,7 @@ class PreTTRCrossEncoder(HFCrossScorer):
     ) -> List[torch.Tensor]:
         # For PreTTR, document encoding must match the document part of joint tokenization
         # Standard joint tokenization for BERT is [CLS] query [SEP] doc [SEP]
-        # The document part is 'doc [SEP]' (encoded with token_type_id=1 and fixed position offset)
+        # The document part is 'doc [SEP]' (encoded with token_type_id=1).
         max_len = getattr(self.tokenizer, "max_doc_length", 512)
 
         # We encode WITHOUT [CLS] to match the 'type=1' behavior in joint forward
@@ -221,26 +218,12 @@ class PreTTRCrossEncoder(HFCrossScorer):
         attention_mask = to_device(attention_mask, self.device)
         token_type_ids = torch.ones_like(input_ids)
 
-        # Position IDs starting from offset
-        seq_length = input_ids.size(1)
-        position_ids = (
-            torch.arange(
-                self.prettr_max_query_length,
-                self.prettr_max_query_length + seq_length,
-                dtype=torch.long,
-                device=self.device,
-            )
-            .unsqueeze(0)
-            .expand_as(input_ids)
-        )
-
         model = self.encoder.model
         base_model = getattr(model, model.base_model_prefix)
 
         hidden_states = base_model.embeddings(
             input_ids=input_ids,
             token_type_ids=token_type_ids,
-            position_ids=position_ids,
         )
 
         ext_mask = base_model.get_extended_attention_mask(
@@ -283,21 +266,38 @@ class PreTTRDocumentEncoder(TextEncoderBase):
             padding=True,
             truncation=True,
             max_length=max_len,
+            add_special_tokens=False,
             return_tensors="pt",
         )
-        # Convert to TokenizedTexts
+
+        sep_id = self.model.tokenizer.tokenizer.sep_token_id
+        input_ids = torch.cat(
+            [
+                tokenized["input_ids"],
+                torch.full(
+                    (tokenized["input_ids"].shape[0], 1), sep_id, dtype=torch.long
+                ),
+            ],
+            dim=1,
+        )
+        attention_mask = torch.cat(
+            [
+                tokenized["attention_mask"],
+                torch.ones((tokenized["attention_mask"].shape[0], 1), dtype=torch.long),
+            ],
+            dim=1,
+        )
+
         tokenized_obj = TokenizedTexts(
-            ids=tokenized["input_ids"],
-            mask=tokenized["attention_mask"],
-            token_type_ids=tokenized.get("token_type_ids"),
-            lens=tokenized["attention_mask"].sum(dim=1).tolist(),
+            ids=input_ids,
+            mask=attention_mask,
+            token_type_ids=torch.ones_like(input_ids),
+            lens=attention_mask.sum(dim=1).tolist(),
         )
 
         return TokensEncoderOutput(
             tokenized_obj,
-            self.model.encode_documents(
-                tokenized["input_ids"], tokenized["attention_mask"]
-            ),
+            self.model.encode_documents(input_ids, attention_mask),
         )
 
     def forward(
