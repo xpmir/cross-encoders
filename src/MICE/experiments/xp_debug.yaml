@@ -48,14 +48,23 @@ retrieval:
     batch_size: 64
     k: 100
 
-evaluation:
-    # test_max_topics: 100
-    all_datasets: false
-    in_domain: false
-    datasets:
-        - arguana
-        - nfcorpus
-        # - fiqa
+# evaluation:
+#     # test_max_topics: 100
+#     all_datasets: false
+#     in_domain: false
+#     datasets:
+#         - arguana
+#         - nfcorpus
+#         # - fiqa
+
+# plaid:
+#     use_plaid: true
+#     batch_size: 25_000
+#     n_bits: 4
+#     kmeans_niters: 4
+#     buffer_size: 5000
+#     compress_only: true
+
 #MICE params
 n_contextualization_layers: 4
 n_interaction_layers: 3
@@ -71,11 +80,7 @@ grid_search:
             - microsoft/MiniLM-L12-H384-uncased
             # - jhu-clsp/ettin-encoder-32m
             # - microsoft/MiniLM-L12-H384-uncased
-
-plaid:
-    use_plaid: true
-    batch_size: 25_000
-    n_bits: 4
-    kmeans_niters: 4
-    buffer_size: 5000
-    compress_only: true
+    extra_attn_bias:
+        values_list:
+            - true
+            - false

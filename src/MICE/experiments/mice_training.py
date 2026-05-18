@@ -92,6 +92,9 @@ class Mice_FineTuning(CE_FineTuning):
     global_cls_token: bool = False
     """Whether to add a fresh [CLS] token before the top layers."""
 
+    extra_attn_bias: bool = False
+    """Whether to add an exact match cross-attention bias head."""
+
     compress_dim: float = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
 
@@ -111,13 +114,18 @@ def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     cross_attn_first = model_tags.get("cross_attn_first", cfg.cross_attn_first)
     vanilla = "-vanilla" if not cross_attn_first else ""
 
+    extra_attn_bias = model_tags.get("extra_attn_bias", cfg.extra_attn_bias)
+    bias = "-bias" if extra_attn_bias else ""
+
     loss = model_tags.get("loss", "")
     loss = loss_names.get(loss, loss).replace("/", "-")
     # try to get prettier name
     if len(loss):
         loss = f"-{loss}"
 
-    return f"Mice-l{n_ctx_layers}{doc_suffix}+{n_inter_layers}{vanilla}-{base}{loss}"
+    return (
+        f"Mice-l{n_ctx_layers}{doc_suffix}+{n_inter_layers}{vanilla}{bias}-{base}{loss}"
+    )
 
 
 @learning_experiment()
@@ -240,6 +248,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             random_top_layers=cfg.random_top_layers,
             compress_dim=cfg.compress_dim,
             global_cls_token=cfg.global_cls_token,
+            extra_attn_bias=cfg.extra_attn_bias,
             pooling_method=cfg.pooling_method,
             max_length=max_len,
         )
@@ -306,25 +315,29 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                         .tag("seed", seed)
                         .tag("first_stage", retriever_tag)
                     )
+                    if cfg.plaid.use_plaid:
+                        # first eval without, tag it with False
+                        load_model.tag("plaid_retriever", False)
                     for k, v in cfg_tags.items():
                         load_model.tag(k, v)
                     all_weights.append(load_model)
 
-                    if not cfg.plaid.use_plaid:
-                        # Just evaluate the scorer with given first stage
-                        tests.evaluate_retriever(
-                            partial(
-                                scorer_retriever,
-                                scorer=mice_model,
-                                retrievers=test_run_retriever_factory,
-                                batch_size=cfg.retrieval.batch_size,
-                            ),
-                            launcher_evaluate,
-                            model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                            init_tasks=[load_model],
-                            with_run=cfg.save_runs,
-                        )
-                    else:
+                    # Just evaluate the scorer with given first stage
+                    tests.evaluate_retriever(
+                        partial(
+                            scorer_retriever,
+                            scorer=mice_model,
+                            retrievers=test_run_retriever_factory,
+                            batch_size=cfg.retrieval.batch_size,
+                        ),
+                        launcher_evaluate,
+                        model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
+                        init_tasks=[load_model],
+                        with_run=cfg.save_runs,
+                    )
+                    if cfg.plaid.use_plaid:
+                        # tag with true now
+                        load_model.tag("plaid_retriever", True)
                         logging.info(
                             f"Running PLAID-style evaluation from validation: {name}"
                         )

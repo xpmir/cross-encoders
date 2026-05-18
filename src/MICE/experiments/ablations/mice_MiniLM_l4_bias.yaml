@@ -1,0 +1,20 @@
+id: train_mice_miniLM_L4_abl_bias
+title: "Mice-MiniLM Training"
+description:
+    Base Training for MiniLM-based MICE model.
+
+module: MICE.experiments.mice_training
+# pre_experiment: pre_experiment
+parent: ../mice_MiniLM_l4.yaml
+nb_repetitions: 1
+
+learner:
+    requirements: duration=12h & cpu(cores=4) & cuda(mem=40G)
+
+#### Params that are grid searched
+grid_search:
+
+    extra_attn_bias:
+        values_list:
+            - true
+            - false

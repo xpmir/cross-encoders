@@ -83,6 +83,7 @@ class PreTTRCrossEncoder(HFCrossScorer):
             input_ids=input_ids,
             token_type_ids=token_type_ids,
         )
+        dtype = hidden_states.dtype
 
         if (
             hasattr(base_model, "embeddings_project")
@@ -93,7 +94,7 @@ class PreTTRCrossEncoder(HFCrossScorer):
         # Build a single attention mask once: padding + join-blocks.
         extended_attention_mask = base_model.get_extended_attention_mask(
             attention_mask, input_ids.size()
-        ).to(dtype=hidden_states.dtype)
+        ).to(dtype=dtype)
 
         # get extended attn mask (2D)
         b_attention_mask = attention_mask.bool()
@@ -104,7 +105,9 @@ class PreTTRCrossEncoder(HFCrossScorer):
             token_type_ids.reshape(BAT, 1, SEQ, 1)
             != token_type_ids.reshape(BAT, 1, 1, SEQ)
         )
-        join_mask = join_mask.to(dtype=hidden_states.dtype) * -10000.0
+        join_mask = join_mask.to(dtype=dtype).masked_fill_(
+            join_mask, torch.finfo(dtype).min
+        )
 
         for i, layer_module in enumerate(base_model.encoder.layer):
             layer_mask = join_mask if i < self.join_layer else extended_attention_mask

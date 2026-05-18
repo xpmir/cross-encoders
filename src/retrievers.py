@@ -181,7 +181,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
             retriever=self.first_stage_factory(dataset=dataset, key=key),
             top_k=self.topk,
             batchsize=self.batchsize,
-        ).tag("plaid_retriever", True)
+        )
 
     # @classmethod
     # def from_results(cls, name: str, results: List) -> "MicePlaidRetrieverFactory":

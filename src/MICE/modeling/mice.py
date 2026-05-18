@@ -51,6 +51,68 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
+class ExactMatchAttentionHead(nn.Module):
+    def __init__(self, d_model, use_projections=True):
+        super().__init__()
+        self.use_projections = use_projections
+
+        if self.use_projections:
+            self.v_proj = nn.Linear(d_model, d_model, bias=False)
+            self.out_proj = nn.Linear(d_model, d_model, bias=False)
+
+    def forward(self, x, attn_mask):
+        B, Tv, C = x.shape
+        _, _, Tq, _ = attn_mask.shape
+        dtype = x.dtype
+        device = x.device
+
+        V = self.v_proj(x) if self.use_projections else x
+        V = V.unsqueeze(1)
+
+        dummy_Q = torch.zeros(B, 1, Tq, C, dtype=dtype, device=device)
+        dummy_K = torch.zeros(B, 1, Tv, C, dtype=dtype, device=device)
+
+        out = torch.nn.functional.scaled_dot_product_attention(
+            dummy_Q, dummy_K, V, attn_mask=attn_mask, dropout_p=0.0, is_causal=False
+        )
+
+        out = out.squeeze(1)
+
+        if self.use_projections:
+            out = self.out_proj(out)
+
+        return out
+
+
+def compute_mask(q_ids, doc_ids, is_causal: bool = False):
+    B, Tq = q_ids.shape
+    B, Td = doc_ids.shape
+
+    tokens_q = q_ids.unsqueeze(2)
+    tokens_k = doc_ids.unsqueeze(1)
+    match_mask = (tokens_q == tokens_k).unsqueeze(1)
+
+    if is_causal:
+        causal_mask = torch.tril(
+            torch.ones(Tq, Td, dtype=torch.bool, device=q_ids.device)
+        )
+        match_mask = match_mask & causal_mask.unsqueeze(0).unsqueeze(0)
+
+    attn_mask = torch.full(
+        match_mask.shape, float("-inf"), device=q_ids.device, dtype=torch.float32
+    )
+    attn_mask[match_mask] = 0.0
+
+    no_matches = ~match_mask.any(dim=-1)
+
+    if no_matches.any():
+        attn_mask[:, 0, :, 0] = torch.where(
+            no_matches[:, 0, :], 0.0, attn_mask[:, 0, :, 0]
+        )
+
+    return attn_mask
+
+
 class MICETokenizedTexts(NamedTuple):
     """Container for MICE tokenized inputs (separate query and document streams)"""
 
@@ -189,6 +251,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
 
     global_cls_token: Param[bool] = field(default=False, ignore_default=True)
     """Whether to add a fresh [CLS] token before the top layers."""
+
+    extra_attn_bias: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to add an exact match cross-attention bias head."""
 
     compress_dim: Param[float] = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
@@ -454,6 +519,17 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
             nn.ModuleList([BertLayer(self.head_config) for _ in range(num_top)]),
         )
 
+        if self.extra_attn_bias:
+            self.add_module(
+                "exact_match_heads",
+                nn.ModuleList(
+                    [
+                        ExactMatchAttentionHead(self.head_config.hidden_size)
+                        for _ in range(num_top)
+                    ]
+                ),
+            )
+
         self.pooler = getattr(temp_model, "pooler", None)
         if self.pooler:
             if self.compress_dim > 1:
@@ -538,11 +614,17 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         return x
 
     def forward_inverted_transformer(
-        self, q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask
+        self, q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask, exact_match_mask=None
     ):
         """Inverted transformer architecture: Cross-Attention followed by Self-Attention."""
         num_top = len(self.top_layers)
         for i, layer in enumerate(self.top_layers):
+            if self.extra_attn_bias and exact_match_mask is not None:
+                exact_match_out = self.exact_match_heads[i](
+                    doc_hidden_states, exact_match_mask
+                )
+                q_hidden = q_hidden + exact_match_out
+
             # Cross attention First (full sequence) to allow better information flow from document tokens
             # BertAttention.forward(hidden_states, attention_mask=None, head_mask=None, encoder_hidden_states=None, encoder_attention_mask=None, ...)
             q_hidden = layer.crossattention(
@@ -567,11 +649,17 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         return q_hidden
 
     def forward_vanilla_transformer(
-        self, q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask
+        self, q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask, exact_match_mask=None
     ):
         """Vanilla transformer architecture: Self-Attention followed by Cross-Attention."""
         num_top = len(self.top_layers)
         for i, layer in enumerate(self.top_layers):
+            if self.extra_attn_bias and exact_match_mask is not None:
+                exact_match_out = self.exact_match_heads[i](
+                    doc_hidden_states, exact_match_mask
+                )
+                q_hidden = q_hidden + exact_match_out
+
             if i == num_top - 1:
                 # Optimized last layer: Self-Attention on full sequence,
                 # then slice to CLS for Cross-Attention and MLP.
@@ -637,6 +725,12 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         query_ids = tokenized_q.ids
         query_mask = tokenized_q.mask
 
+        if self.extra_attn_bias or doc_hidden_states is None:
+            # otherwise we don't need the tokenized documents - save gpu mem
+            tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
+            doc_ids = tokenized_docs.ids
+            doc_mask = tokenized_docs.mask
+
         # 1. Process Query through Bottom Layers
         q_hidden = self.encode_queries(query_ids, query_mask)
 
@@ -657,9 +751,6 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         if doc_hidden_states is None:
             # Process Doc through Bottom Layers
-            tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
-            doc_ids = tokenized_docs.ids
-            doc_mask = tokenized_docs.mask
 
             doc_hidden_states = self.encode_documents(
                 doc_ids, doc_mask
@@ -698,6 +789,11 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         # Mask for Cross-Attention (Query attending to Doc) shape [batch, 1, seq_len_query, seq_len_doc]
         d_ext_mask = self.get_cross_attention_mask(query_mask, doc_mask, q_hidden.dtype)
 
+        if self.extra_attn_bias:
+            exact_match_mask = compute_mask(query_ids, doc_ids)
+        else:
+            exact_match_mask = None
+
         # 3. Process Query through Top Layers (with Cross-Attention to Doc)
         if self.adapter is not None:
             q_hidden = self.adapter(q_hidden)
@@ -705,11 +801,11 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 
         if self.cross_attn_first:
             q_hidden = self.forward_inverted_transformer(
-                q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask
+                q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask, exact_match_mask
             )
         else:
             q_hidden = self.forward_vanilla_transformer(
-                q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask
+                q_hidden, doc_hidden_states, q_ext_mask, d_ext_mask, exact_match_mask
             )
 
         # 4. Score (Use [CLS] of the Query)
@@ -1491,6 +1587,7 @@ def mice_scorer(
     random_top_layers: bool = False,
     compress_dim: float = 1.0,
     global_cls_token: bool = False,
+    extra_attn_bias: bool = False,
     pooling_method: Optional[str] = None,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
@@ -1545,6 +1642,7 @@ def mice_scorer(
         random_top_layers=random_top_layers,
         compress_dim=compress_dim,
         global_cls_token=global_cls_token,
+        extra_attn_bias=extra_attn_bias,
     )
 
     if "modernbert" in hf_id.lower() or "ettin" in hf_id.lower():
