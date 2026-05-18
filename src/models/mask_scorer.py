@@ -10,7 +10,6 @@ from xpmir.text.encoders import (
     TokenizedTexts,
 )
 from dataclasses import InitVar
-from xpm_torch import ModuleInitOptions
 
 from configuration import PoolingMethod
 from models.mask_modeling import (
@@ -70,13 +69,9 @@ class HFMaskedScorer(Module):
     def device(self):
         return self.model.device
 
-    def __initialize__(self, options: ModuleInitOptions):
-        """Initialize the HuggingFace transformer
-
-        Args:
-            options: loader options
-        """
-        super().__initialize__(options)
+    def __initialize__(self):
+        """Initialize the HuggingFace transformer"""
+        super().__initialize__()
 
         self.hf_config = AutoConfig.from_pretrained(self.hf_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.hf_id)
@@ -96,13 +91,9 @@ class HFMaskedMiniLMCrossScorer(HFMaskedScorer):
     Based on Huggingface `AutoModelForSequenceClassification` architecture with a masked MiniLM backbone
     """
 
-    def __initialize__(self, options: ModuleInitOptions):
-        """Initialize the HuggingFace transformer
-
-        Args:
-            options: loader options
-        """
-        super().__initialize__(options)
+    def __initialize__(self):
+        """Initialize the HuggingFace transformer"""
+        super().__initialize__()
 
         self.model = CustomMaskBertModel(self.hf_config)
         self.classifier = nn.Linear(self.hf_config.hidden_size, 1)
@@ -213,13 +204,9 @@ class HFMaskedEttinCrossScorer(HFMaskedScorer):
     """Pooling method to use for the Ettin based scorer: cls or mean.
     Leave it to None for models coming from the Hub, as it will be inferred from the model config."""
 
-    def __initialize__(self, options: ModuleInitOptions):
-        """Initialize the HuggingFace transformer
-
-        Args:
-            options: loader options
-        """
-        super().__initialize__(options)
+    def __initialize__(self):
+        """Initialize the HuggingFace transformer"""
+        super().__initialize__()
         self.model = CustomMaskModernBertModel(self.hf_config)
 
         if self.pooling_method is None:

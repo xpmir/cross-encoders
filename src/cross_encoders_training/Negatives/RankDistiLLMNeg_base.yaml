@@ -1,4 +1,4 @@
-id: colbertNeg_base
+id: RankDistiLLMNeg_base
 title: "Training Cross encoders with Colbert Negatives"
 description:
     Compare three losses using the same sampling of ColBert Negatives

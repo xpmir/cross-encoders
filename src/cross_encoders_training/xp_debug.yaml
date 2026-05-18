@@ -33,7 +33,7 @@ learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 32
-        max_epochs: 100 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        max_epochs: 300 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
         lr: 7e-6
@@ -46,10 +46,10 @@ learner:
     validation_interval: 10
     validation_top_k: 100
     validation: nanobeir11
-    requirements: duration=20h & cuda(mem=20G)
+    requirements: duration=20h & cpu(cores=4) & cuda(mem=40G)
 
 retrieval:
-    requirements: duration=20h & cuda(mem=20G)
+    requirements: duration=20h & cpu(cores=4) & cuda(mem=20G)
     batch_size: 64
     k: 100
 
@@ -82,5 +82,5 @@ grid_search:
             # - BCE_Colbertv2Neg
             # - hingeLoss
             # - distillRankNET
-            # - infoNCE_Colbertv2Neg
+            - infoNCE_Colbertv2Neg
             - infoNCE_RankDistiLLM

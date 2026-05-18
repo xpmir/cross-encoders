@@ -4,17 +4,14 @@ from transformers import AutoConfig
 from functools import lru_cache
 
 from experimaestro import Config, Constant, Param
-from datamaestro_text.data.ir import TextItem
-from xpmir.learning.context import TrainerContext
-from xpmir.letor.records import BaseRecords
-from xpmir.rankers import LearnableScorer
+from datamaestro_ir.data.base import TextItem, TextRecord
+from xpmir.rankers import AbstractModuleScorer
 
 from xpmir.text.encoders import (
     TokenizedTexts,
 )
 
 from models.mask_scorer import HFMaskedScorer
-from xpm_torch.xpmModel import xpmTorchHubModule
 import logging
 
 logger = logging.getLogger(__name__)
@@ -111,7 +108,7 @@ class AttentionPatch(Config):
     end_layer: Param[int] = -1
 
 
-class FrankenCrossScorer(xpmTorchHubModule, LearnableScorer):
+class FrankenCrossScorer(AbstractModuleScorer):
     """Base class where we will control everything related to the masking of
     attention parts within MiniLM."""
 
@@ -128,9 +125,9 @@ class FrankenCrossScorer(xpmTorchHubModule, LearnableScorer):
     def tokenizer(self):
         return self.scorer.tokenizer
 
-    def __initialize__(self, options):
-        super().__initialize__(options)
-        self.scorer.initialize(options)
+    def __initialize__(self):
+        super().__initialize__()
+        self.scorer.initialize()
 
         logging.info(
             f"Initialized FrankenCrossScorer with {len(self.attention_patches) if self.attention_patches else 0} attention patches."
@@ -190,8 +187,7 @@ class FrankenCrossScorer(xpmTorchHubModule, LearnableScorer):
 
     def forward(
         self,
-        inputs: BaseRecords,
-        info: TrainerContext = None,
+        inputs: TextRecord,
     ):
         r = self.tokenizer(
             [
