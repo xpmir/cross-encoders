@@ -61,9 +61,14 @@ class PreTTRCrossEncoder(HFCrossScorer):
 
     def forward(
         self,
-        inputs: BaseItems,
+        inputs: Optional[BaseItems] = None,
         tokenized: Optional[TokenizedTexts] = None,
+        doc_hidden_states: Optional[torch.Tensor] = None,
+        doc_mask: Optional[torch.Tensor] = None,
     ):
+        if inputs is None and tokenized is None:
+            raise ValueError("Either raw inputs or tokenized inputs must be provided.")
+
         if tokenized is None:
             tokenized = self.batch_tokenize(inputs)
 
@@ -72,55 +77,95 @@ class PreTTRCrossEncoder(HFCrossScorer):
         token_type_ids = to_device(tokenized.token_type_ids, self.device)
 
         BAT, SEQ = input_ids.shape
-
-        # 2. Intercept Backbone Loop
-        # We assume standard HF transformer models (BERT, RoBERTa, Electra, etc.)
         model = self.encoder.model
         base_model = getattr(model, model.base_model_prefix)
+        dtype = next(model.parameters()).dtype
 
-        # Initial embeddings
-        hidden_states = base_model.embeddings(
-            input_ids=input_ids,
-            token_type_ids=token_type_ids,
-        )
-        dtype = hidden_states.dtype
+        if doc_hidden_states is None:
+            # 1. Full joint forward through early layers with join_mask
+            hidden_states = base_model.embeddings(
+                input_ids=input_ids,
+                token_type_ids=token_type_ids,
+            )
 
-        if (
-            hasattr(base_model, "embeddings_project")
-            and base_model.embeddings_project is not None
-        ):
-            hidden_states = base_model.embeddings_project(hidden_states)
+            if (
+                hasattr(base_model, "embeddings_project")
+                and base_model.embeddings_project is not None
+            ):
+                hidden_states = base_model.embeddings_project(hidden_states)
 
-        # Build a single attention mask once: padding + join-blocks.
-        extended_attention_mask = base_model.get_extended_attention_mask(
-            attention_mask, input_ids.size()
-        ).to(dtype=dtype)
+            # Build join_mask
+            b_attention_mask = attention_mask.bool()
+            ext_attn_mask = b_attention_mask.reshape(
+                BAT, 1, SEQ, 1
+            ) * b_attention_mask.reshape(BAT, 1, 1, SEQ)
+            join_mask = ~ext_attn_mask | (
+                token_type_ids.reshape(BAT, 1, SEQ, 1)
+                != token_type_ids.reshape(BAT, 1, 1, SEQ)
+            )
+            join_mask = join_mask.to(dtype=dtype).masked_fill_(
+                join_mask, torch.finfo(dtype).min
+            )
 
-        # get extended attn mask (2D)
-        b_attention_mask = attention_mask.bool()
-        ext_attn_mask = b_attention_mask.reshape(
-            BAT, 1, SEQ, 1
-        ) * b_attention_mask.reshape(BAT, 1, 1, SEQ)
-        join_mask = ~ext_attn_mask | (
-            token_type_ids.reshape(BAT, 1, SEQ, 1)
-            != token_type_ids.reshape(BAT, 1, 1, SEQ)
-        )
-        join_mask = join_mask.to(dtype=dtype).masked_fill_(
-            join_mask, torch.finfo(dtype).min
-        )
+            extended_attention_mask = base_model.get_extended_attention_mask(
+                attention_mask, input_ids.size()
+            ).to(dtype=dtype)
 
-        for i, layer_module in enumerate(base_model.encoder.layer):
+            start_layer = 0
+        else:
+            # 2. Resuming from precomputed document embeddings
+            # We assume inputs contains only the queries (concatenated with [SEP] for joint-like structure)
+            # Actually, MicePlaidRetrieverv2 passes tokenized_queries (tokenized_q)
+            # which for PreTTR should be the query part [CLS] q [SEP]
+            # And doc_hidden_states is a list of [doc [SEP]] embeddings
+            def repad_batch(
+                doc_embeddings: List[torch.Tensor],
+            ) -> Tuple[torch.Tensor, torch.Tensor]:
+                docs = [d.squeeze(0) if d.dim() == 3 else d for d in doc_embeddings]
+                lengths = [doc.shape[0] for doc in docs]
+                max_len = max(lengths)
+                device = docs[0].device
+                B = len(docs)
+                padded = torch.zeros(B, max_len, *docs[0].shape[1:], device=device)
+                mask = torch.zeros(B, max_len, device=device).long()
+                for i, doc in enumerate(docs):
+                    seq_len = doc.shape[0]
+                    padded[i, :seq_len] = doc
+                    mask[i, :seq_len] = 1
+                return padded, mask
+
+            if isinstance(doc_hidden_states, list):
+                doc_hidden_states, doc_mask = repad_batch(doc_hidden_states)
+
+            # Encode queries up to join_layer
+            # tokenized contains only queries here
+            q_hidden = self.encode_queries(input_ids, attention_mask)
+
+            # Concatenate
+            hidden_states = torch.cat([q_hidden, doc_hidden_states], dim=1)
+            new_attention_mask = torch.cat([attention_mask, doc_mask], dim=1)
+            # Join layer mask is not needed anymore as we are at join_layer or above
+            # but we still need the extended_attention_mask for the remaining layers
+            extended_attention_mask = base_model.get_extended_attention_mask(
+                new_attention_mask, hidden_states.shape[:2]
+            ).to(dtype=dtype)
+
+            start_layer = self.join_layer
+            join_mask = None  # Not used
+
+        # Common loop for remaining layers
+        for i in range(start_layer, len(base_model.encoder.layer)):
+            layer_module = base_model.encoder.layer[i]
             layer_mask = join_mask if i < self.join_layer else extended_attention_mask
             hidden_states = layer_module(hidden_states, attention_mask=layer_mask)
 
-        # 3. Scoring
-        # Match HF model's pooling/classification logic
-        # Roberta and Electra classification heads expect the full sequence (3D)
+        # Scoring
         if model.config.model_type in ["roberta", "electra"]:
             logits = model.classifier(hidden_states)
         else:
-            # Standard BERT-like: use pooler if exists, otherwise CLS token
             if hasattr(base_model, "pooler") and base_model.pooler is not None:
+                # Pooler might need to be carefully handled if we sliced the sequence
+                # but standard BERT pooler just takes CLS token (hidden_states[:, 0])
                 pooled_output = base_model.pooler(hidden_states)
             else:
                 pooled_output = hidden_states[:, 0]
@@ -258,6 +303,27 @@ class PreTTRDocumentEncoder(TextEncoderBase):
     @property
     def dimension(self):
         return self.model.encoder.model.config.hidden_size
+
+    @staticmethod
+    def _token_mask(output: TokensRepresentationOutput) -> Optional[torch.Tensor]:
+        mask = output.tokenized.mask
+        if mask is None:
+            return None
+        return mask.to(output.value.device).bool()
+
+    def document_token_embeddings(
+        self, records: List[IDTextRecord]
+    ) -> List[torch.Tensor]:
+        """Encode a batch of documents and return the list of per-token
+        embeddings, one tensor ``(num_tokens, dim)`` per document. Padding
+        positions are filtered out.
+        """
+        output = self.encode_documents(records)
+        mask = self._token_mask(output)
+        value = output.value
+        if mask is None:
+            return [value[i] for i in range(value.shape[0])]
+        return [value[i][mask[i]] for i in range(value.shape[0])]
 
     def encode_documents(
         self, records: List[IDTextRecord]
