@@ -11,14 +11,11 @@ It leverages shared utilities from `training_utils`, `retrievers`, and
 """
 
 import logging
-import shutil
 from functools import partial
-from typing import Optional
-from pathlib import Path
+from typing import Optional, Callable, List, Tuple
 import numpy as np
-import pandas as pd
 
-from experimaestro import setmeta, stop_tags
+from experimaestro import setmeta, stop_tags, LightweightTask
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch import Random
@@ -34,26 +31,19 @@ from xpmir.text.huggingface.tokenizers import get_default_max_len
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 
-from MICE.modeling.mice import mice_scorer
+from MICE.modeling.mice import mice_scorer, MiceCrossEncoder
 from retrievers import splade_retriever, bm25_retriever, MicePlaidRetrieverFactory
 from validations import ValidationSet
 from configuration import generate_grid, CE_FineTuning
 from tests import build_tests
 from format import (
-    aggregations,
-    aggregation_hf,
-    dataframe_to_latex,
     loss_names,
     backbone_names_lower,
 )
 
 from training_utils import (
     build_trainer,
-    save_raw_results,
-    identify_best_models,
-    add_dataset_aggregations,
-    format_model_results,
-    export_model,
+    process_experiment_results,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -99,6 +89,36 @@ class Mice_FineTuning(CE_FineTuning):
     """Factor by which to divide the hidden dimensions of the top layers"""
 
 
+def build_mice(cfg: Mice_FineTuning) -> Tuple[MiceCrossEncoder, List[LightweightTask]]:
+    """Build the MICE model using the unified scorer factory."""
+    default_max_len = get_default_max_len(cfg.base)
+    if cfg.max_length and default_max_len > cfg.max_length:
+        max_len = cfg.max_length
+    else:
+        max_len = None
+        logging.warning(
+            f"No max_len provided or default max_len {default_max_len} is not greater than provided max_len {cfg.max_length}. Using default max_len {default_max_len} for scorer {cfg.base}"
+        )
+
+    return mice_scorer(
+        hf_id=cfg.base,
+        n_contextualization_layers=cfg.n_contextualization_layers,
+        n_docs_ctx_layers=cfg.n_docs_ctx_layers,
+        n_interaction_layers=cfg.n_interaction_layers,
+        bound_bottom_layers=cfg.bound_bottom_layers,
+        mask_cls_to_doc=cfg.mask_cls_to_doc,
+        mask_query_to_cls=cfg.mask_query_to_cls,
+        cross_attn_first=cfg.cross_attn_first,
+        freeze_base=cfg.freeze_base,
+        random_top_layers=cfg.random_top_layers,
+        compress_dim=cfg.compress_dim,
+        global_cls_token=cfg.global_cls_token,
+        extra_attn_bias=cfg.extra_attn_bias,
+        pooling_method=cfg.pooling_method,
+        max_length=max_len,
+    )
+
+
 def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     """Creates the HF id from tags using formatting conventions."""
     base = model_tags.get("base", "")
@@ -128,8 +148,13 @@ def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     )
 
 
-@learning_experiment()
-def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
+def TrainEvaluateLateInteractionScorer(
+    helper: LearningExperimentHelper,
+    cfg: CE_FineTuning,
+    build_model_fn: Callable,
+    get_model_name_fn: Callable,
+) -> PaperResults:
+    """Generic training and evaluation experiment for late interaction models."""
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
@@ -143,11 +168,11 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
 
     def run_one_config(
         helper: LearningExperimentHelper,
-        cfg: Mice_FineTuning,
+        cfg: CE_FineTuning,
         grid_search_id: str,
         cfg_tags: dict,
     ):
-        """Main process for Cross-encoder training"""
+        """Main process for one configuration of the late interaction model."""
 
         if cfg.retriever:
             # We don't use BM25, but a given sparse retriever
@@ -226,34 +251,11 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
 
         ce_trainer: LossTrainer = build_trainer(cfg)
 
-        default_max_len = get_default_max_len(cfg.base)
-        if cfg.max_length and default_max_len > cfg.max_length:
-            max_len = cfg.max_length
-        else:
-            max_len = None
-            logging.warning(
-                f"No max_len provided or default max_len {default_max_len} is not greater than provided max_len {cfg.max_length}. Using default max_len {default_max_len} for scorer {cfg.base}"
-            )
-        # Build the model using the unified scorer factory
-        mice_model, scorer_hf_init_tasks = mice_scorer(
-            hf_id=cfg.base,
-            n_contextualization_layers=cfg.n_contextualization_layers,
-            n_docs_ctx_layers=cfg.n_docs_ctx_layers,
-            n_interaction_layers=cfg.n_interaction_layers,
-            bound_bottom_layers=cfg.bound_bottom_layers,
-            mask_cls_to_doc=cfg.mask_cls_to_doc,
-            mask_query_to_cls=cfg.mask_query_to_cls,
-            cross_attn_first=cfg.cross_attn_first,
-            freeze_base=cfg.freeze_base,
-            random_top_layers=cfg.random_top_layers,
-            compress_dim=cfg.compress_dim,
-            global_cls_token=cfg.global_cls_token,
-            extra_attn_bias=cfg.extra_attn_bias,
-            pooling_method=cfg.pooling_method,
-            max_length=max_len,
-        )
+        # Build the model using the provided factory
+        model, model_init_tasks = build_model_fn(cfg)
+
         for k, v in cfg_tags.items():
-            mice_model.tag(k, v)
+            model.tag(k, v)
 
         # Run one Training and eval per seed
         for i in range(cfg.nb_repetitions):
@@ -264,7 +266,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             # (retriever + scorer) and keep the best performing model
             # on the validation set
             validations, tracked_validations = validation_set.build_listeners(
-                mice_model,
+                model,
                 val_run_retriever_factory,
                 retriever_tag,
             )
@@ -282,7 +284,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                 # Misc settings
                 random=random,
                 trainer=ce_trainer,  # How to train the model
-                model=mice_model,  # The model to train
+                model=model,  # The model to train
                 # Optimization settings
                 steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
                 optimizers=cfg.learner.optimization.optimizer,
@@ -300,7 +302,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
             # Submit job and link
             outputs = learner.submit(
                 launcher=launcher_learner,
-                init_tasks=scorer_hf_init_tasks,
+                init_tasks=model_init_tasks,
             )
             # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
             helper.tensorboard_service.add(learner, learner.logpath)
@@ -326,7 +328,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                     tests.evaluate_retriever(
                         partial(
                             scorer_retriever,
-                            scorer=mice_model,
+                            scorer=model,
                             retrievers=test_run_retriever_factory,
                             batch_size=cfg.retrieval.batch_size,
                         ),
@@ -342,9 +344,9 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                             f"Running PLAID-style evaluation from validation: {name}"
                         )
 
-                        # 1) Build the Retriever factory for first stage + mice + Plaid
+                        # 1) Build the Retriever factory for first stage + model + Plaid
                         mice_plaid_factory = MicePlaidRetrieverFactory(
-                            mice_model=mice_model,
+                            mice_model=model,
                             first_stage_factory=test_run_retriever_factory,
                             topk=cfg.retrieval.k,
                             batchsize=cfg.retrieval.batch_size,
@@ -357,7 +359,7 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
                             batch_size=cfg.retrieval.batch_size,
                             seed=seed,
                             launcher_index=launcher_index,
-                            init_tasks=[load_model],  # for loading mice model
+                            init_tasks=[load_model],  # for loading model
                         )
 
                         # 2) Run tests with the factory
@@ -404,161 +406,24 @@ def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
 
-    # Constants
-    grid_keys = set()
-    for tags in all_tags:
-        grid_keys.update(tags.keys())
-
-    # Ensure unique tags for grouping
-    tag_names = {"first_stage"} | grid_keys
-    group_by_tags = [("tag", k) for k in sorted(list(tag_names))]
-    model_id_tags = group_by_tags + [("tag", "seed")]
-
-    # 1. Exctract data
-    df = tests.to_dataframe()
-
-    if df.empty:
-        logging.info("No results found, Ending experiment")
-        return
-
-    logging.info(f"Evaluated models: \n- {'\n- '.join(tests.per_model.keys())}")
-
-    # Convert to numeric
-    metric_cols = [col for col in df.columns if col[0] == "metric"]
-    df[metric_cols] = df[metric_cols].apply(pd.to_numeric, downcast="float")
-
-    # Flatten MultiIndex columns and remove duplicates
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[1] if col[1] else col[0] for col in df.columns]
-    df = df.loc[:, ~df.columns.duplicated()]
-
-    # Drop useless columns
-    cols_to_drop = [col for col in df.columns if "index_doc" in str(col).lower()]
-    df = df.drop(columns=cols_to_drop, errors="ignore")
-
-    # Identify grid search keys
-    grid_keys = set()
-    for tags in all_tags:
-        grid_keys.update(tags.keys())
-
-    # Tags to group by
-    group_by_tags = sorted(list({"first_stage"} | grid_keys))
-    model_id_tags = sorted(group_by_tags + ["seed"])
-
-    # Add both specific aggregations (ID, BEIR, etc.) and the global mean
-    df_with_aggs = add_dataset_aggregations(
-        df,
-        group_by_cols=model_id_tags,
-        aggregations=aggregations,
-        add_mean=True,  # will add 'mean' dataset at the end
+    process_experiment_results(
+        tests=tests,
+        all_tags=all_tags,
+        config_map=config_map,
+        cfg=cfg,
+        helper=helper,
+        learners=learners,
+        all_weights=all_weights,
+        get_name_fn=partial(get_model_name_fn, cfg=all_configs[0]),
     )
 
-    save_raw_results(df_with_aggs, helper.xp.resultspath)
 
-    # keep only results with a base tag (all our models have it)
-    # We ensure it's not NaN and not an empty string to exclude first-stage only results
-    scorer_only_df = df_with_aggs[
-        df_with_aggs["base"].notna()
-        & (df_with_aggs["base"].astype(str) != "")
-        & (df_with_aggs["base"].astype(str) != "nan")
-    ]
-
-    # Read model card template
-    template_path = Path(__file__).parent / "CrossEncoderCard.md"
-    card_template_txt = template_path.read_text() if template_path.exists() else None
-
-    # Identify and export best models per configuration
-    best_models_df = identify_best_models(
-        scorer_only_df,
-        dataset="mean",
-        metric="nDCG@10",
-        group_by_tags=group_by_tags,
+@learning_experiment()
+def run(helper: LearningExperimentHelper, cfg: Mice_FineTuning) -> PaperResults:
+    """Main entry point for MICE training experiment."""
+    return TrainEvaluateLateInteractionScorer(
+        helper=helper,
+        cfg=cfg,
+        build_model_fn=build_mice,
+        get_model_name_fn=get_name_from_tags,
     )
-    logging.info(f"df with only best models:\n{best_models_df}")
-
-    best_models_list = []
-    if not best_models_df.empty and cfg.export_trained_models:
-        # Check if model folder exists before saving models, delete if so
-        models_path = helper.xp.resultspath / "models"
-        if models_path.exists():
-            shutil.rmtree(models_path)
-            logging.info(f"Deleted existing models directory: {models_path}")
-
-        for _, best_row in best_models_df.iterrows():
-            # Extract tags for this best model
-            best_tags = {tag: best_row[tag] for tag in model_id_tags}
-
-            logging.info(f"Best evaluated model is {best_tags}")
-
-            # Reconstruct the grid tags to find the original config
-            best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
-            best_cfg = config_map.get(frozenset(best_grid_tags.items()))
-
-            # Filter the original dataframe for this specific best model (all datasets)
-            mask = pd.Series(True, index=df_with_aggs.index)
-            for tag in model_id_tags:
-                mask &= df_with_aggs[tag].astype(str) == str(best_row[tag])
-
-            best_model_df = df_with_aggs[mask].copy()
-            best_models_list.append(best_model_df)
-
-            # Format and Export artifacts
-            csv_results, md_results = format_model_results(
-                best_model_df, aggregations=aggregation_hf
-            )
-
-            export_model(
-                best_tags=best_tags,
-                model_name=get_name_from_tags(best_tags, all_configs[0]),
-                csv_results=csv_results,
-                md_results=md_results,
-                learners=learners,
-                all_weights=all_weights,
-                best_cfg=best_cfg,
-                resultspath=helper.xp.resultspath,
-                card_template_txt=card_template_txt,
-                save_runs=cfg.save_runs,
-                tests=tests,
-            )
-
-        if best_models_list:
-            best_model_df = pd.concat(best_models_list, ignore_index=True)
-            best_model_df.to_csv(
-                helper.xp.resultspath / "best_models_per_scorer_raw_results.csv",
-                index=False,
-            )
-
-    # Final aggregation and LaTeX table generation
-    metric_names = [col[1] for col in metric_cols]
-    df_grouped = (
-        df_with_aggs.groupby(["dataset"] + group_by_tags, dropna=False)[metric_names]
-        .agg(["mean", "var"])
-        .reset_index()
-    )
-
-    # Reorder columns: tags first, metrics after
-    tag_cols_expected = ["dataset"] + group_by_tags
-    tag_cols = []
-    for col in tag_cols_expected:
-        if (col, "") in df_grouped.columns:
-            tag_cols.append((col, ""))
-        elif col in df_grouped.columns:
-            tag_cols.append(col)
-
-    metric_cols_grouped = [c for c in df_grouped.columns if c not in tag_cols]
-    df_grouped = df_grouped[tag_cols + metric_cols_grouped]
-
-    logging.info(f"Aggregated Results:\n{df_grouped}")
-    df_grouped.to_csv(helper.xp.resultspath / "results.csv", index=False)
-
-    latex_table = dataframe_to_latex(
-        df_grouped,
-        caption="Evaluation Results",
-        label="tab:eval_results",
-        sig_df=None,
-    )
-    with open(helper.xp.resultspath / "results.tex", "w") as f:
-        f.write(latex_table)
-
-    logging.info(f"Saved aggregated results to {helper.xp.resultspath / 'results.csv'}")
-    logging.info("Experiment completed successfully.")
