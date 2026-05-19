@@ -726,14 +726,11 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
             tokenized = self.batch_tokenize(inputs, input_nature=QueryDocInput.PAIRS)
 
         tokenized_q = to_device(tokenized.tokenized_q, self.device)
+        tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
         query_ids = tokenized_q.ids
+        doc_ids = tokenized_docs.ids
         query_mask = tokenized_q.mask
-
-        if self.extra_attn_bias or doc_hidden_states is None:
-            # otherwise we don't need the tokenized documents - save gpu mem
-            tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
-            doc_ids = tokenized_docs.ids
-            doc_mask = tokenized_docs.mask
+        doc_mask = tokenized_docs.mask
 
         # 1. Process Query through Bottom Layers
         q_hidden = self.encode_queries(query_ids, query_mask)
@@ -1052,6 +1049,94 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 torch.randn(1, 1, self.config.hidden_size) * 0.02
             )
 
+    def get_document_encoder(self) -> TextEncoderBase:
+        """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
+        return MiceDocumentEncoder.C(model=self)
+
+    def query_token_embeddings(self, records: List[IDTextRecord]) -> List[torch.Tensor]:
+        """Encode a batch of queries and return the list of per-token
+        embeddings, one tensor ``(num_tokens, dim)`` per query. Padding
+        positions are filtered out.
+        """
+        options = TokenizerOptions(max_length=self.max_query_len)
+        tokenized = self.batch_tokenize(
+            records, options=options, input_nature=QueryDocInput.QUERY
+        )
+        if tokenized.ids.device != self.device:
+            tokenized = tokenized.to(self.device)
+        output = self.encode_queries(tokenized.ids, tokenized.mask)
+
+        return output
+
+    def document_token_embeddings(
+        self, records: List[IDTextRecord]
+    ) -> List[torch.Tensor]:
+        """Encode a batch of documents and return the list of per-token
+        embeddings, one tensor ``(num_tokens, dim)`` per document. Padding
+        positions are filtered out.
+        """
+        options = TokenizerOptions(max_length=self.max_doc_len)
+        tokenized = self.batch_tokenize(
+            records, options=options, input_nature=QueryDocInput.DOCUMENT
+        )
+        if tokenized.ids.device != self.device:
+            tokenized = tokenized.to(self.device)
+        output = self.encode_documents(tokenized.ids, tokenized.mask)
+
+        return output
+
+    def encode_queries(self, input_ids, attention_mask) -> torch.Tensor:
+        """Compute bottom layers (independent encoding)"""
+        x_q = self.embeddings(input_ids)
+        q_ext = self.get_extended_attention_mask(attention_mask, torch.float32)
+
+        # Pos IDs for RoPE
+        b, s = input_ids.size()
+        q_pos = torch.arange(s, device=input_ids.device).unsqueeze(0).expand(b, s)
+
+        # Precompute RoPE for all layer types in config
+        unique_layer_types = set(self.config.layer_types)
+        q_pos_embeds = {
+            lt: self.rotary_emb(x_q, q_pos, layer_type=lt) for lt in unique_layer_types
+        }
+
+        if self.bound_bottom_layers:
+            query_bottom_layers = self.bottom_layers
+        else:
+            query_bottom_layers = self.query_bottom_layers
+
+        for layer in query_bottom_layers:
+            x_q = layer(
+                x_q, q_ext, position_embeddings=q_pos_embeds[layer.attention_type]
+            )
+        return x_q
+
+    def encode_documents(self, input_ids, attention_mask) -> torch.Tensor:
+        """Encode inputs through bottom layers (independent encoding)"""
+        x_d = self.embeddings(input_ids)
+        d_ext = self.get_extended_attention_mask(attention_mask, torch.float32)
+
+        # Pos IDs for RoPE
+        b, s = input_ids.size()
+        d_pos = torch.arange(s, device=input_ids.device).unsqueeze(0).expand(b, s)
+
+        # Precompute RoPE for all layer types in config
+        unique_layer_types = set(self.config.layer_types)
+        d_pos_embeds = {
+            lt: self.rotary_emb(x_d, d_pos, layer_type=lt) for lt in unique_layer_types
+        }
+
+        if self.bound_bottom_layers:
+            document_bottom_layers = self.bottom_layers
+        else:
+            document_bottom_layers = self.document_bottom_layers
+
+        for layer in document_bottom_layers:
+            x_d = layer(
+                x_d, d_ext, position_embeddings=d_pos_embeds[layer.attention_type]
+            )
+        return x_d
+
     def forward_vanilla_transformer(
         self, x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask=None
     ):
@@ -1140,58 +1225,29 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         return x_q
 
     def forward(
-        self, inputs: BaseItems, tokenized: Optional[MICETokenizedTexts] = None
+        self,
+        inputs: Optional[BaseItems] = None,
+        tokenized: Optional[MICETokenizedTexts] = None,
+        doc_hidden_states: Optional[torch.Tensor] = None,
+        doc_mask: Optional[torch.Tensor] = None,
     ):
+        if inputs is None and tokenized is None:
+            raise ValueError("Either raw inputs or tokenized inputs must be provided.")
+
+        # Prepare inputs
         if tokenized is None:
-            tokenized = self.batch_tokenize(inputs)
+            tokenized = self.batch_tokenize(inputs, input_nature=QueryDocInput.PAIRS)
 
         tokenized_q = to_device(tokenized.tokenized_q, self.device)
-        tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
-
         query_ids = tokenized_q.ids
         query_mask = tokenized_q.mask
+
+        tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
         doc_ids = tokenized_docs.ids
         doc_mask = tokenized_docs.mask
 
-        # Pos IDs for RoPE
-        def _get_pos_ids(ids):
-            b, s = ids.size()
-            return torch.arange(s, device=ids.device).unsqueeze(0).expand(b, s)
-
-        # Bottom
-        q_ext = self.get_extended_attention_mask(query_mask, torch.float32)
-        d_ext = self.get_extended_attention_mask(doc_mask, torch.float32)
-
-        x_q = self.embeddings(query_ids)
-        x_d = self.embeddings(doc_ids)
-
-        q_pos = _get_pos_ids(query_ids)
-        d_pos = _get_pos_ids(doc_ids)
-
-        # Precompute RoPE for all layer types in config
-        unique_layer_types = set(self.config.layer_types)
-        q_pos_embeds = {
-            lt: self.rotary_emb(x_q, q_pos, layer_type=lt) for lt in unique_layer_types
-        }
-        d_pos_embeds = {
-            lt: self.rotary_emb(x_d, d_pos, layer_type=lt) for lt in unique_layer_types
-        }
-
-        if self.bound_bottom_layers:
-            query_bottom_layers = self.bottom_layers
-            document_bottom_layers = self.bottom_layers
-        else:
-            query_bottom_layers = self.query_bottom_layers
-            document_bottom_layers = self.document_bottom_layers
-
-        for layer in query_bottom_layers:
-            x_q = layer(
-                x_q, q_ext, position_embeddings=q_pos_embeds[layer.attention_type]
-            )
-        for layer in document_bottom_layers:
-            x_d = layer(
-                x_d, d_ext, position_embeddings=d_pos_embeds[layer.attention_type]
-            )
+        # 1. Process Query through Bottom Layers
+        x_q = self.encode_queries(query_ids, query_mask)
 
         if self.global_cls_token:
             cls_token = self.global_cls.expand(x_q.shape[0], -1, -1)
@@ -1207,14 +1263,24 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 ],
                 dim=1,
             )
-            # Recompute pos embeds for top layers
-            q_pos = _get_pos_ids(query_mask)
-            q_pos_embeds = {
-                lt: self.rotary_emb(x_q, q_pos, layer_type=lt)
-                for lt in unique_layer_types
-            }
 
-        # Top
+        # Recompute pos embeds for top layers (only query side)
+        b, s = query_mask.size()
+        q_pos = torch.arange(s, device=query_mask.device).unsqueeze(0).expand(b, s)
+        unique_layer_types = set(self.config.layer_types)
+        q_pos_embeds = {
+            lt: self.rotary_emb(x_q, q_pos, layer_type=lt) for lt in unique_layer_types
+        }
+
+        if doc_hidden_states is None:
+            # Process Doc through Bottom Layers
+            x_d = self.encode_documents(doc_ids, doc_mask)
+        else:
+            x_d = doc_hidden_states
+            if doc_mask is None:
+                doc_mask = tokenized_docs.mask
+
+        # 2. Prepare Masks for Top Layers
         q_self = self.get_self_attention_mask(query_mask, x_q.dtype)
         cross_mask = self.get_cross_attention_mask(query_mask, doc_mask, x_q.dtype)
 
@@ -1223,6 +1289,7 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         else:
             exact_match_mask = None
 
+        # 3. Process Query through Top Layers (with Cross-Attention to Doc)
         if self.cross_attn_first:
             x_q = self.forward_inverted_transformer(
                 x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask
@@ -1232,6 +1299,7 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask
             )
 
+        # 4. Score (Use [CLS] of the Query)
         x_q = self.final_norm(x_q)
         pooled = self.pooling_function(x_q)
         return self.classifier(self.dropout_layer(self.head(pooled))).squeeze(-1)

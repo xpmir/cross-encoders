@@ -43,6 +43,23 @@ class DummyBatch:
         return cls(topics=topics, documents=documents)
 
 
+def get_attn_implementation(model):
+    attn_impl = "N/A"
+    try:
+        if hasattr(model, "config") and hasattr(model.config, "_attn_implementation"):
+            attn_impl = model.config._attn_implementation
+        elif (
+            hasattr(model, "bottom_layers")
+            and hasattr(model.bottom_layers, "config")
+            and hasattr(model.bottom_layers.config, "_attn_implementation")
+        ):
+            attn_impl = model.bottom_layers.config._attn_implementation
+        # Special case for some HF models that store it in a different place or wrappers
+    except Exception:
+        pass
+    return attn_impl
+
+
 def benchmark_model(
     batch,
     tokenized=None,
@@ -119,28 +136,17 @@ def benchmark_model(
             # We continue even if CPU, but warn.
 
         model.eval()
+        num_params = sum(p.numel() for p in model.parameters())
+        attn_impl = get_attn_implementation(model)
 
         if print_model_summary:
-            num_params = sum(p.numel() for p in model.parameters())
-            logger.info(f"Model Summary for {name}:\n - Parameters: {num_params:,}")
+            logger.info(
+                f"Model Summary for {name}:\n"
+                f" - Parameters: {num_params:,}\n"
+                f" - {name} Attention Implementation: {attn_impl}"
+            )
 
             # Try to detect attention implementation
-            attn_impl = "N/A"
-            try:
-                if hasattr(model, "config") and hasattr(
-                    model.config, "_attn_implementation"
-                ):
-                    attn_impl = model.config._attn_implementation
-                elif (
-                    hasattr(model, "bottom_layers")
-                    and hasattr(model.bottom_layers, "config")
-                    and hasattr(model.bottom_layers.config, "_attn_implementation")
-                ):
-                    attn_impl = model.bottom_layers.config._attn_implementation
-                # Special case for some HF models that store it in a different place or wrappers
-            except Exception:
-                pass
-            logger.info(f"{name} Attention Implementation: {attn_impl}")
             logger.info(model.__repr__())
 
         gc.collect()

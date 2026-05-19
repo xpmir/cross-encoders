@@ -5,11 +5,6 @@ description:
 
 module: MICE.experiments.mice_training
 parent: ./mice_ettin_68m.yaml # same training parameters
-pre_experiment: pre_experiment
-export_trained_models: false
-
-grid_search:
-    extra_attn_bias:
-        values_list:
-            - true
-            - false
+export_trained_models: true
+extra_attn_bias: true
+# pre_experiment: pre_experiment
