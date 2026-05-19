@@ -6,7 +6,7 @@ import sys
 import pandas as pd
 from pathlib import Path
 from transformers import AutoConfig
-
+from MICE.modeling.mice import MiceCrossEncoder
 from models.franken import FrankenCrossScorer, AttentionPatch
 from models.mask_scorer import HFMaskedMiniLMCrossScorer, HFMaskedEttinCrossScorer
 
@@ -87,7 +87,17 @@ def MLP_flops(d, d_ff, s):
     return 2 * s * (2 * d * d_ff)
 
 
-def compute_flops_transformer_layer(d, d_ff, s, alpha: float = 1.0):
+def compute_flops_self_attention(d, d_ff, s, alpha: float = 1.0):
+    """Computes FLOPs for a single self-attention layer with masking."""
+    linear_flops = attn_linear_flops(d, s)
+
+    # Attention cost: 4 * alpha * S^2 * d for QK^T and AV operations
+    attn_flops = 4 * alpha * (s**2) * d
+
+    return linear_flops + attn_flops
+
+
+def compute_flops_transformer_layer(d, d_ff, seq_len, alpha: float = 1.0):
     """
     Computes FLOPs for a single transformer layer.
 
@@ -98,15 +108,13 @@ def compute_flops_transformer_layer(d, d_ff, s, alpha: float = 1.0):
         alpha: Masking density
         is_interaction: Whether this is a MICE interaction layer (frozen document)
     """
-    linear_flops = attn_linear_flops(d, s) + MLP_flops(d, d_ff, s)
+    linear_flops = compute_flops_self_attention(d, d_ff, seq_len, alpha)
+    mlp_flops = MLP_flops(d, d_ff, seq_len)
 
-    # Attention cost: 4 * alpha * S^2 * d for QK^T and AV operations
-    attn_flops = 4 * alpha * (s**2) * d
-
-    print(
-        f"Linear FLOPs: {linear_flops / 1e9:.2f} GFLOPs (alpha={alpha:.3f}, Attention FLOPs: {attn_flops / 1e9:.2f} GFLOPs"
-    )
-    return linear_flops + attn_flops
+    # print(
+    #     f"Linear FLOPs: {linear_flops / 1e9:.2f} GFLOPs (alpha={alpha:.3f}, MLP FLOPs: {mlp_flops / 1e9:.2f} GFLOPs"
+    # )
+    return linear_flops + mlp_flops
 
 
 def compute_flops_cross_attn_layer(d, query_len, doc_len):
@@ -134,7 +142,7 @@ def compute_flops_cross_attn_layer(d, query_len, doc_len):
 
 
 # deprecated
-def calculate_franken_config_flops(config_path, query_len, max_seq_len):
+def compute_franken_config_flops(config_path, query_len, max_seq_len):
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
 
@@ -231,7 +239,7 @@ def calculate_franken_config_flops(config_path, query_len, max_seq_len):
     return total_flops, baseline_flops, hf_id, xp_id, avg_alpha
 
 
-def calculate_mice_config_flops(config_path, query_len, max_seq_len):
+def compute_mice_config_flops(config_path, query_len, max_seq_len):
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
 
@@ -249,7 +257,7 @@ def calculate_mice_config_flops(config_path, query_len, max_seq_len):
     if hf_id == "" or hf_id is None:
         raise ValueError(f"HF ID not found in config {config_path}")
 
-    d, d_ff, L = get_transformer_params(hf_id)
+    d, d_ff, nlayers = get_transformer_params(hf_id)
 
     # Determine n_contextualization_layers and n_interaction_layers
     n_contextualization_layers = cfg.get("n_contextualization_layers")
@@ -260,50 +268,15 @@ def calculate_mice_config_flops(config_path, query_len, max_seq_len):
             f"n_interaction_layers or n_contextualization_layers not found in config {config_path}"
         )
 
-    dropped_layers = list(
-        range(n_contextualization_layers + n_interaction_layers - 1, L)
+    total_flops, baseline_flops = compute_flops_mice(
+        MiceCrossEncoder.C(
+            n_contextualization_layers=n_contextualization_layers,
+            n_interaction_layers=n_interaction_layers,
+        ),
+        d,
+        d_ff,
+        nlayers,
     )
-
-    # model_cfg, init_tasks = mice_scorer(
-    #     hf_id=hf_id,
-    #     n_contextualization_layers=n_contextualization_layers,
-    #     n_interaction_layers=n_interaction_layers,
-    #     max_length=max_seq_len,
-    # )
-
-    # model = model_cfg.instance()
-    # model.__initialize__()
-    # logging.info(
-    #     f"Config: {config_path.name}, HF ID: {hf_id}, "
-    #     f"layers : {L}, N Contextualization Layers: {n_contextualization_layers},"
-    #     f" Dropped Layers: {len(dropped_layers)} ({dropped_layers})"
-    # )
-
-    doc_len = max_seq_len - query_len - 3
-
-    total_flops = 0
-    s = max_seq_len
-    n = query_len
-
-    for layer in range(L):
-        if layer in dropped_layers:
-            break
-
-        is_interaction = layer >= n_contextualization_layers
-        if is_interaction:
-            total_flops += compute_flops_cross_attn_layer(d, d_ff, s, n)
-        else:
-            # 1. query encoding layers: full attention but only on query tokens for linear layers
-            total_flops += compute_flops_transformer_layer(
-                d, d_ff, query_len, alpha=1.0
-            )
-            # 2. document encoding
-            total_flops += compute_flops_transformer_layer(
-                d, d_ff, doc_len, alpha=1.0
-            )  # no alpha for contextualization layers in MICE
-
-    # Baseline: Full cross-encoder (L layers, alpha=1.0, full linear for all tokens)
-    baseline_flops = L * compute_flops_transformer_layer(d, d_ff, s, n, 1.0)
 
     return (
         total_flops,
@@ -314,6 +287,61 @@ def calculate_mice_config_flops(config_path, query_len, max_seq_len):
     )  # avg_alpha is 1.0 for MICE since we don't apply masking in the same way
 
 
+def compute_flops_mice(
+    mice_cfg: MiceCrossEncoder,
+    d,
+    d_ff,
+    nlayers,
+    seq_len=512,
+    query_len=32,
+):
+    n_contextualization_layers = mice_cfg.n_contextualization_layers
+    n_interaction_layers = mice_cfg.n_interaction_layers
+    n_docs_ctx_layers = getattr(mice_cfg, "n_docs_ctx_layers", None)
+    if n_docs_ctx_layers is None:
+        n_docs_ctx_layers = n_contextualization_layers
+
+    # Max layers to iterate
+    max_layers_to_iterate = max(
+        n_contextualization_layers + n_interaction_layers, n_docs_ctx_layers
+    )
+
+    doc_len = seq_len - query_len - 3
+
+    total_flops = 0
+    for layer in range(max_layers_to_iterate):
+        if layer >= nlayers:
+            break
+
+        is_query_ctx = layer < n_contextualization_layers
+        is_doc_ctx = layer < n_docs_ctx_layers
+        is_interaction = layer >= n_contextualization_layers and layer < (
+            n_contextualization_layers + n_interaction_layers
+        )
+
+        if is_query_ctx:
+            # 1. query encoding layers: full attention but only on query tokens for linear layers
+            total_flops += compute_flops_transformer_layer(
+                d, d_ff, query_len, alpha=1.0
+            )
+
+        if is_doc_ctx:
+            # 2. document encoding
+            total_flops += compute_flops_transformer_layer(
+                d, d_ff, doc_len, alpha=1.0
+            )  # no alpha for contextualization layers in MICE
+
+        if is_interaction:
+            # interaction layers: full attention but only on query tokens for linear layers, plus cross-attention between query and document tokens
+            total_flops += compute_flops_self_attention(d, d_ff, query_len)
+            total_flops += compute_flops_cross_attn_layer(d, query_len, doc_len)
+
+    # Baseline: Full cross-encoder (L layers, alpha=1.0, full linear for all tokens)
+    baseline_flops = nlayers * compute_flops_transformer_layer(d, d_ff, seq_len, 1.0)
+
+    return total_flops, baseline_flops
+
+
 def calculate_config_flops(config_path, query_len, max_seq_len):
     """Determines the type of config (MICE or Franken) and calculates FLOPs accordingly."""
     with open(config_path, "r") as f:
@@ -321,9 +349,9 @@ def calculate_config_flops(config_path, query_len, max_seq_len):
 
     module = cfg.get("module", "")
     if "mice_training" in module:
-        return calculate_mice_config_flops(config_path, query_len, max_seq_len)
+        return compute_mice_config_flops(config_path, query_len, max_seq_len)
     elif "franken_cross_scorer" in module:
-        return calculate_franken_config_flops(config_path, query_len, max_seq_len)
+        return compute_franken_config_flops(config_path, query_len, max_seq_len)
     else:
         raise ValueError(f"Unknown module type in config {config_path}: {module}")
 
@@ -359,12 +387,13 @@ def main():
         f"Found {len(config_paths)} config files in {args.config_dir} with filter {args.filter}."
     )
     print(f"\nComparing FLOPs for S={args.max_seq_len}, n={args.query_len}\n")
-    print(
-        f"{'XP ID':<45} | {'Base Model':<20} | {'Alpha':<8} | {'GFLOPs':<10} | {'% Base':<10} | {'Speedup':<8}"
-    )
-    print("-" * 125)
 
     results = []
+    res = (
+        ""
+        f"{'XP ID':<35} | {'Base Model':<30} | {'Alpha':<8} | {'GFLOPs':<10} | {'% Base':<10} | {'Speedup':<8}"
+    )
+    res += "\n" + "-" * 125
     for cfg_path in sorted(config_paths):
         try:
             total, baseline, hf_id, xp_id, avg_alpha = calculate_config_flops(
@@ -377,9 +406,7 @@ def main():
         speedup = baseline / total
         flops_pct = (total / baseline) * 100
         model_name = hf_id.split("/")[-1]
-        print(
-            f"{xp_id:<45} | {model_name:<20} | {avg_alpha:<8.3f} | {total / 1e9:<10.2f} | {flops_pct:<9.1f}% | {speedup:<8.2f}x"
-        )
+        res += f"\n{xp_id:<35} | {model_name:<30} | {avg_alpha:<8.1f} | {total / 1e9:<10.2f} | {flops_pct:<9.1f}% | {speedup:<8.2f}x"
 
         results.append(
             {
@@ -393,6 +420,7 @@ def main():
                 "speedup": speedup,
             }
         )
+    print(res)
 
     if results:
         df = pd.DataFrame(results)

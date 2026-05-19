@@ -6,18 +6,22 @@ description:
 module: MICE.experiments.mice_training
 # pre_experiment: pre_experiment
 parent: ../mice_MiniLM_l4.yaml
-nb_repetitions: 1
 
-learner:
-    requirements: duration=12h & cpu(cores=4) & cuda(mem=40G)
+# learner:
+#     requirements: duration=12h & cpu(cores=4) & cuda(mem=40G)
 
-retrieval:
-    requirements: duration=20h & cpu(cores=4) & cuda(mem=30G) #prefer mono gpu on hacienda
-    k: 1000
-    batch_size: 64
+# retrieval:
+#     requirements: duration=20h & cpu(cores=4) & cuda(mem=30G) #prefer mono gpu on hacienda
+#     k: 1000
+#     batch_size: 64
 
 #### Params that are grid searched
 grid_search:
+
+    n_contextualization_layers:
+        values_list:
+            - 4
+            - 8 # 12 layers
 
     extra_attn_bias:
         values_list:

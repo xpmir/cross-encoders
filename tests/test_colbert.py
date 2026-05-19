@@ -37,14 +37,11 @@ def Colbert_scorer(
     # Encoder part
     hftokens_encoder = HFTokensEncoder.C(model=model)
 
-    # Full tokenized text encoder
-    tokenized_text_encoder = TokenizedTextEncoder.C(
-        tokenizer=tokenizer,
-        encoder=hftokens_encoder
-    )
-
     colbert = ColBERTEncoder.C(
-        encoder=tokenized_text_encoder,
+        encoder= TokenizedTextEncoder.C(
+            tokenizer=tokenizer,
+            encoder=hftokens_encoder
+        ),
         dim=dim,
         query_maxlen=query_maxlen,
         doc_maxlen=doc_maxlen,

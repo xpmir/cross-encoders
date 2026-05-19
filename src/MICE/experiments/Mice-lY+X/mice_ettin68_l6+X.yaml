@@ -23,4 +23,4 @@ grid_search:
     n_interaction_layers:
         values_range:
             - 1
-            - 5 # can go up to 15 # Ettin-68m has 19 layers
+            - 10 # can go up to 15 # Ettin-68m has 19 layers

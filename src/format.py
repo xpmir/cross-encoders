@@ -39,6 +39,18 @@ backbone_names_lower = {
     "microsoft/deberta-v3-base": "DeBERTav3",
 }
 
+backbone_nlayers = {
+    "jhu-clsp/ettin-encoder-17m": 7,
+    "jhu-clsp/ettin-encoder-32m": 12,
+    "microsoft/MiniLM-L12-H384-uncased": 12,
+    "jhu-clsp/ettin-encoder-68m": 19,
+    "bert-base-uncased": 12,
+    "google/electra-base-discriminator": 12,
+    "FacebookAI/roberta-base": 12,
+    "jhu-clsp/ettin-encoder-150m": 22,
+    "microsoft/deberta-v3-base": 12,
+}
+
 aggregations = {
     "In Domain": ["msmarco_dev", "trec2019", "trec2020"],
     "minified": [
