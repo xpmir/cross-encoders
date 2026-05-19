@@ -1,4 +1,4 @@
-id: train_prettr_miniLM_l4
+id: baseline_prettr_miniLM_l8
 title: "PreTTR-MiniLM Training"
 description:
     Base Training for MiniLM-based PreTTR model.
@@ -50,13 +50,4 @@ evaluation: #default = Minified tests
 
 base: microsoft/MiniLM-L12-H384-uncased
 prettr_max_query_length: 256
-join_layer: 4
-
-
-#### Params that are grid searched
-grid_search:
-    join_layer:
-        values_list:
-            - 0
-            - 4
-            - 8 # 12 layers
+join_layer: 8 #

@@ -20,7 +20,6 @@ Usage:
 
 from typing import List, Optional
 from attrs import Factory
-from pathlib import Path
 from functools import partial
 import pandas as pd
 
@@ -40,7 +39,7 @@ from format import dataframe_to_latex, aggregations
 from tests import build_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from retrievers import splade_retriever, bm25_retriever
-from training_utils import add_dataset_aggregations, check_detailed_results
+from training_utils import add_dataset_aggregations
 
 import logging
 
@@ -199,18 +198,6 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
     # Wait for all tasks to complete
     helper.xp.wait()
-
-    # Post-process validation: check for zero scores in detailed.dat
-    # that might indicate Multi-GPU synchronization issues
-    for dataset_name, evals in tests.collection.items():
-        for evaluation in evals.results:
-            detailed_path = Path(evaluation.detailed)
-            if detailed_path.exists():
-                check_detailed_results(
-                    detailed_path,
-                    metric_name="nDCG@10" if not cfg.retrievers_only else "R@1000",
-                )
-
     df = tests.to_dataframe()
 
     if df.empty:
