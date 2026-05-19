@@ -1,1 +1,1 @@
-from MICE.modeling.mice import mice_scorer  # noqa: F401
+from MICE.modeling import mice_scorer  # noqa: F401

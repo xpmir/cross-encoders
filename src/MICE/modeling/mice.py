@@ -209,7 +209,7 @@ class MICEQueryDocTokenizer(HFTokenizer):
 
 class MiceCrossEncoder(AbstractModuleScorer):
     """
-    Mice Cross Encoder base Architecture, with Cross-Attention in the top layers.
+    Base class for Mice Cross Encoder base Architecture, with Cross-Attention in the top layers.
     The bottom layers encode query and document independently, while the top layers
     allow the query to attend to the document via cross-attention mechanisms.
     """
@@ -399,6 +399,10 @@ class MiceCrossEncoder(AbstractModuleScorer):
 
     def get_document_encoder(self) -> TextEncoderBase:
         """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
+        raise NotImplementedError()
+
+    def encode_documents(self, input_ids, attention_mask) -> torch.Tensor:
+        """Encode inputs through bottom layers (independent encoding)"""
         raise NotImplementedError()
 
     def save_model(self, path: Path):
@@ -598,8 +602,8 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
             x = layer(x, ext_mask)
         return x
 
-    def encode_documents(self, input_ids, attention_mask):
-        """Compute bottom layers (independent encoding)"""
+    def encode_documents(self, input_ids, attention_mask) -> torch.Tensor:
+        """Encode inputs through bottom layers (independent encoding)"""
         x = self.embeddings(input_ids)
         # Standard BERT extended mask logic
         ext_mask = self.get_extended_attention_mask(attention_mask, x.dtype)

@@ -29,7 +29,7 @@ indexation:
   batch_size: 128
 
 retrieval:
-  requirements: duration=15h & cpu(cores=8, mem=10G) & cuda(mem=20G) * 2
+  requirements: duration=15h & cpu(cores=16, mem=10G) & cuda(mem=20G) * 4
   batch_size: 128
   k: 1000
 

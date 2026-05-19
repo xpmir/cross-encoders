@@ -1,7 +1,12 @@
+"""
+This script gathers utils for computing theoretical FLOPs for MICE and FrankenCrossScorer.
+It extracts model parameters, attention mask patterns, and calculates the FLOPs for each layer considering the masking density (alpha) and interaction patterns.
+The results are saved to a CSV file for analysis and comparison against baseline full cross-encoders.
+"""
+
 import torch
 import yaml
 import argparse
-import logging
 import sys
 import pandas as pd
 from pathlib import Path
@@ -9,17 +14,18 @@ from transformers import AutoConfig
 from MICE.modeling.mice import MiceCrossEncoder
 from models.franken import FrankenCrossScorer, AttentionPatch
 from models.mask_scorer import HFMaskedMiniLMCrossScorer, HFMaskedEttinCrossScorer
-
-# SRC_DIR is the directory containing this script (mice/)
-SRC_DIR = Path(__file__).parent
-
-# Add src to sys.path to import models
-sys.path.append(str(SRC_DIR / "src"))
-
+import logging
 
 # Setup logging
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
+
+# SRC_DIR is the directory containing this script (src/)
+SRC_DIR = Path(__file__).parent
+
+# Add src to sys.path to import models
+if str(SRC_DIR) not in sys.path:
+    sys.path.append(str(SRC_DIR))
 
 
 def get_transformer_params(hf_id):
@@ -268,14 +274,22 @@ def compute_mice_config_flops(config_path, query_len, max_seq_len):
             f"n_interaction_layers or n_contextualization_layers not found in config {config_path}"
         )
 
+    n_docs_ctx_layers = cfg.get("n_docs_ctx_layers", n_contextualization_layers)
+    extra_attn_bias = cfg.get("extra_attn_bias", False)
+
+    mice_cfg = MiceCrossEncoder.C(
+        n_contextualization_layers=n_contextualization_layers,
+        n_interaction_layers=n_interaction_layers,
+        n_docs_ctx_layers=n_docs_ctx_layers,
+        extra_attn_bias=extra_attn_bias,
+    )
     total_flops, baseline_flops = compute_flops_mice(
-        MiceCrossEncoder.C(
-            n_contextualization_layers=n_contextualization_layers,
-            n_interaction_layers=n_interaction_layers,
-        ),
+        mice_cfg,
         d,
         d_ff,
         nlayers,
+        seq_len=max_seq_len,
+        query_len=query_len,
     )
 
     return (
@@ -285,6 +299,60 @@ def compute_mice_config_flops(config_path, query_len, max_seq_len):
         xp_id,
         1.0,
     )  # avg_alpha is 1.0 for MICE since we don't apply masking in the same way
+
+
+def compute_prettr_config_flops(config_path, query_len, max_seq_len):
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    xp_id = cfg.get("id", config_path.stem)
+    hf_id = cfg.get("base")
+    if hf_id == "" or hf_id is None:
+        raise ValueError(f"HF ID not found in config {config_path}")
+
+    d, d_ff, nlayers = get_transformer_params(hf_id)
+
+    join_layer = cfg.get("join_layer")
+    if join_layer is None:
+        raise ValueError(f"join_layer not found in config {config_path}")
+
+    total_flops, baseline_flops = compute_flops_prettr(
+        join_layer,
+        d,
+        d_ff,
+        nlayers,
+        seq_len=max_seq_len,
+        query_len=query_len,
+    )
+
+    return total_flops, baseline_flops, hf_id, xp_id, 1.0
+
+
+def compute_flops_prettr(
+    join_layer,
+    d,
+    d_ff,
+    nlayers,
+    seq_len=512,
+    query_len=32,
+):
+    doc_len = seq_len - query_len - 3  # [CLS] q [SEP] doc [SEP]
+
+    total_flops = 0
+    # Layers < join_layer: independent encoding (masked joint)
+    for _ in range(join_layer):
+        # compute as if computations are done separately for query and document.
+        total_flops += compute_flops_transformer_layer(d, d_ff, query_len, alpha=1.0)
+        total_flops += compute_flops_transformer_layer(d, d_ff, doc_len, alpha=1.0)
+
+    # Layers >= join_layer: full joint self-attention
+    for _ in range(join_layer, nlayers):
+        total_flops += compute_flops_transformer_layer(d, d_ff, seq_len, alpha=1.0)
+
+    # Baseline: Full cross-encoder
+    baseline_flops = nlayers * compute_flops_transformer_layer(d, d_ff, seq_len, 1.0)
+
+    return total_flops, baseline_flops
 
 
 def compute_flops_mice(
@@ -301,42 +369,37 @@ def compute_flops_mice(
     if n_docs_ctx_layers is None:
         n_docs_ctx_layers = n_contextualization_layers
 
-    # Max layers to iterate
-    max_layers_to_iterate = max(
-        n_contextualization_layers + n_interaction_layers, n_docs_ctx_layers
-    )
-
+    extra_attn_bias = getattr(mice_cfg, "extra_attn_bias", False)
     doc_len = seq_len - query_len - 3
 
     total_flops = 0
-    for layer in range(max_layers_to_iterate):
-        if layer >= nlayers:
-            break
 
-        is_query_ctx = layer < n_contextualization_layers
-        is_doc_ctx = layer < n_docs_ctx_layers
-        is_interaction = layer >= n_contextualization_layers and layer < (
-            n_contextualization_layers + n_interaction_layers
-        )
+    # 1. Query Contextualization
+    for _ in range(n_contextualization_layers):
+        total_flops += compute_flops_transformer_layer(d, d_ff, query_len)
 
-        if is_query_ctx:
-            # 1. query encoding layers: full attention but only on query tokens for linear layers
-            total_flops += compute_flops_transformer_layer(
-                d, d_ff, query_len, alpha=1.0
-            )
+    # 2. Document Contextualization
+    for _ in range(n_docs_ctx_layers):
+        total_flops += compute_flops_transformer_layer(d, d_ff, doc_len)
 
-        if is_doc_ctx:
-            # 2. document encoding
-            total_flops += compute_flops_transformer_layer(
-                d, d_ff, doc_len, alpha=1.0
-            )  # no alpha for contextualization layers in MICE
+    # 3. Interaction Layers
+    for _ in range(n_interaction_layers):
+        # Self-Attention on Query tokens
+        total_flops += compute_flops_self_attention(d, d_ff, query_len)
+        total_flops += compute_flops_cross_attn_layer(d, query_len, doc_len)
 
-        if is_interaction:
-            # interaction layers: full attention but only on query tokens for linear layers, plus cross-attention between query and document tokens
-            total_flops += compute_flops_self_attention(d, d_ff, query_len)
-            total_flops += compute_flops_cross_attn_layer(d, query_len, doc_len)
+        # MLP on Query tokens
+        total_flops += MLP_flops(d, d_ff, query_len)
 
-    # Baseline: Full cross-encoder (L layers, alpha=1.0, full linear for all tokens)
+        # Extra Attention Bias (if enabled)
+        if extra_attn_bias:
+            # v_proj(m) + out_proj(n) + SDPA(n*m*d)
+            bias_linear = 2 * (query_len + doc_len) * (d**2)
+            bias_attn = 2 * query_len * doc_len * d
+            total_flops += bias_linear + bias_attn
+
+    # Baseline: Full cross-encoder (L layers, full linear for all tokens)
+    # Using seq_len as the baseline sequence length
     baseline_flops = nlayers * compute_flops_transformer_layer(d, d_ff, seq_len, 1.0)
 
     return total_flops, baseline_flops
@@ -350,9 +413,14 @@ def calculate_config_flops(config_path, query_len, max_seq_len):
     module = cfg.get("module", "")
     if "mice_training" in module:
         return compute_mice_config_flops(config_path, query_len, max_seq_len)
+    elif "prettr_training" in module:
+        return compute_prettr_config_flops(config_path, query_len, max_seq_len)
     elif "franken_cross_scorer" in module:
         return compute_franken_config_flops(config_path, query_len, max_seq_len)
     else:
+        # Check for MICE specific parameters if module is ambiguous
+        if "n_interaction_layers" in cfg or "n_contextualization_layers" in cfg:
+            return compute_mice_config_flops(config_path, query_len, max_seq_len)
         raise ValueError(f"Unknown module type in config {config_path}: {module}")
 
 

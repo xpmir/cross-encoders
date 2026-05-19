@@ -8,6 +8,8 @@ from typing import Optional, Sequence, Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 from xpmir.letor.records import PointwiseItems
+from xpmir.rankers.scorer import AbstractModuleScorer
+from xpm_torch.huggingface import TorchHFHub
 
 logger = logging.getLogger(__name__)
 try:
@@ -42,23 +44,19 @@ class DummyBatch:
 
 
 def benchmark_model(
-    model_name_or_path,
     batch,
+    tokenized=None,
     warmup_steps: int = 5,
     num_runs: int = 10,
     name: str = None,
+    model_name_or_path: str = None,
+    model: AbstractModuleScorer = None,
     model_cls=None,
     print_model_summary=False,
     doc_hidden_states: Optional[torch.Tensor] = None,
     verify_weights_fn: Optional[Callable] = None,
-    **model_kwargs,
+    model_kwargs=None,
 ):
-    if not name:
-        if Path(model_name_or_path).is_dir():
-            name = Path(model_name_or_path).name
-        else:
-            name = model_name_or_path
-
     logger.info(f"--- Benchmarking {name} ---")
     try:
         cuda_available = torch.cuda.is_available()
@@ -67,12 +65,30 @@ def benchmark_model(
         gc.collect()
         torch.cuda.empty_cache()
 
-        if model_cls is None:
-            from xpm_torch.huggingface import TorchHFHub
+        # 1. Model initialization and loading
+        if model is not None:
+            logger.info(f"Using provided model instance for {name}")
+            assert isinstance(model, AbstractModuleScorer), (
+                "Provided model must be an instance of AbstractModuleScorer"
+            )
+        elif model_name_or_path is not None:
+            if not name:
+                if Path(model_name_or_path).is_dir():
+                    name = Path(model_name_or_path).name
+                else:
+                    name = model_name_or_path
 
-            model = TorchHFHub.from_pretrained(model_name_or_path)
+            loader_cfg = TorchHFHub.pretrained_loader(
+                model_name_or_path, as_instance=False
+            )
+            loader = loader_cfg.instance()
+            loader.execute()
+            model = loader.model
 
-        else:
+        elif model_cls is not None:
+            logger.info(
+                f"Instantiating model from class {model_cls.__name__} for {name}"
+            )
             # deprecated - use TorchHFHub.from_pretrained
             if hasattr(model_cls, "from_kwargs"):
                 model = model_cls.from_kwargs(
@@ -87,6 +103,10 @@ def benchmark_model(
                     hf_id=model_name_or_path,
                     **model_kwargs,
                 ).instance()
+        else:
+            raise ValueError(
+                "Must provide either model instance, model_name_or_path, or model_cls"
+            )
 
         # Verify weights before moving to device (or after, just need to be careful with cpu/cuda)
         if verify_weights_fn:
@@ -95,35 +115,33 @@ def benchmark_model(
         if cuda_available:
             model.to(device)
         else:
-            print("[warn] CUDA not available, running on CPU may be slow.")
+            logger.warning("[warn] CUDA not available, running on CPU may be slow.")
             # We continue even if CPU, but warn.
 
         model.eval()
 
         if print_model_summary:
-            logger.info(f"Model Summary for {name}:")
-            print(model.__repr__())
+            num_params = sum(p.numel() for p in model.parameters())
+            logger.info(f"Model Summary for {name}:\n - Parameters: {num_params:,}")
 
-        num_params = sum(p.numel() for p in model.parameters())
-        logger.info(f"{name} Parameters: {num_params:,}")
-
-        # Try to detect attention implementation
-        attn_impl = "N/A"
-        try:
-            if hasattr(model, "config") and hasattr(
-                model.config, "_attn_implementation"
-            ):
-                attn_impl = model.config._attn_implementation
-            elif (
-                hasattr(model, "bottom_layers")
-                and hasattr(model.bottom_layers, "config")
-                and hasattr(model.bottom_layers.config, "_attn_implementation")
-            ):
-                attn_impl = model.bottom_layers.config._attn_implementation
-            # Special case for some HF models that store it in a different place or wrappers
-        except Exception:
-            pass
-        logger.info(f"{name} Attention Implementation: {attn_impl}")
+            # Try to detect attention implementation
+            attn_impl = "N/A"
+            try:
+                if hasattr(model, "config") and hasattr(
+                    model.config, "_attn_implementation"
+                ):
+                    attn_impl = model.config._attn_implementation
+                elif (
+                    hasattr(model, "bottom_layers")
+                    and hasattr(model.bottom_layers, "config")
+                    and hasattr(model.bottom_layers.config, "_attn_implementation")
+                ):
+                    attn_impl = model.bottom_layers.config._attn_implementation
+                # Special case for some HF models that store it in a different place or wrappers
+            except Exception:
+                pass
+            logger.info(f"{name} Attention Implementation: {attn_impl}")
+            logger.info(model.__repr__())
 
         gc.collect()
         torch.cuda.empty_cache()
@@ -135,11 +153,12 @@ def benchmark_model(
             mem_after_loading = torch.cuda.memory_allocated()
             torch.cuda.reset_peak_memory_stats()
 
-        kwargs = (
-            {"doc_hidden_states": doc_hidden_states}
-            if doc_hidden_states is not None
-            else {}
-        )
+        kwargs = {}
+        if doc_hidden_states is not None:
+            kwargs["doc_hidden_states"] = doc_hidden_states
+        if tokenized is not None:
+            kwargs["tokenized"] = tokenized
+
         with torch.no_grad():
             if warmup_steps > 0:
                 logger.info(f"{name} warmup iterations: {warmup_steps}")

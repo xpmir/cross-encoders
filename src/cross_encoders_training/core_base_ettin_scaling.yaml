@@ -20,9 +20,10 @@ retrieval:
     k: 1000
 
 evaluation:
-    all_datasets: false
-    in_domain: true
-    beir13: true
+    all_datasets: true
+    # in_domain: true
+    # beir13: true
+    # robust04: true
 
 
 #### Params that are grid searched

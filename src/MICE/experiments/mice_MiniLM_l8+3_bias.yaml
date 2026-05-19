@@ -1,4 +1,4 @@
-id: train_mice_miniLM_l8+3
+id: train_mice_miniLM_l8+3_bias
 title: "Mice-MiniLM Training"
 description:
     Compare mice using 4 or 8 layers
@@ -14,6 +14,7 @@ nb_repetitions: 2
 base: microsoft/MiniLM-L12-H384-uncased
 n_interaction_layers: 3
 n_contextualization_layers: 8
+extra_attn_bias: true
 
 evaluation: #default = Minified tests
     all_datasets: false
