@@ -55,13 +55,14 @@ class TestMiceForwardTask(LightweightTask):
     "model_id",
     [
         "google/electra-small-discriminator",  # Electra
-        # "jhu-clsp/ettin-encoder-68m",  # ModernBERT
+        "jhu-clsp/ettin-encoder-68m",  # ModernBERT
         # "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
         # "Qwen/Qwen2.5-0.5B-Instruct",           # Qwen
     ],
 )
 @pytest.mark.parametrize("cross_attn_first", [True, False])
 @pytest.mark.parametrize("mask_cls_to_doc", [False])
+@pytest.mark.parametrize("extra_attn_bias", [True, False])
 @pytest.mark.parametrize(
     "n_contextualization_layers, n_docs_ctx_layers, bound_bottom_layers",
     [
@@ -76,6 +77,7 @@ def test_mice(
     n_docs_ctx_layers,
     cross_attn_first: bool,
     mask_cls_to_doc: bool,
+    extra_attn_bias: bool,
     bound_bottom_layers,
 ):
     """Tests MICE loading, forward pass, and weight persistence across a grid of parameters."""
@@ -89,6 +91,7 @@ def test_mice(
         cross_attn_first=cross_attn_first,
         bound_bottom_layers=bound_bottom_layers,
         mask_cls_to_doc=mask_cls_to_doc,
+        extra_attn_bias=extra_attn_bias,
     )
 
     # Create and run the forward pass task

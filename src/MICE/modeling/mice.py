@@ -1027,6 +1027,17 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
             ),
         )
 
+        if self.extra_attn_bias:
+            self.add_module(
+                "exact_match_heads",
+                nn.ModuleList(
+                    [
+                        ExactMatchAttentionHead(self.config.hidden_size)
+                        for _ in range(num_top)
+                    ]
+                ),
+            )
+
         self.add_module("final_norm", temp_model.model.final_norm)
         self.add_module("head", temp_model.head)
         self.dropout_layer = nn.Dropout(self.config.classifier_dropout)
@@ -1037,11 +1048,17 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 torch.randn(1, 1, self.config.hidden_size) * 0.02
             )
 
-    def forward_vanilla_transformer(self, x_q, x_d, q_self, cross_mask, q_pos_embeds):
+    def forward_vanilla_transformer(
+        self, x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask=None
+    ):
         """Vanilla transformer architecture: Self-Attention followed by Cross-Attention."""
         pm = self.pooling_method or getattr(self.config, "classifier_pooling", "cls")
         num_top = len(self.top_layers)
         for i, layer in enumerate(self.top_layers):
+            if self.extra_attn_bias and exact_match_mask is not None:
+                exact_match_out = self.exact_match_heads[i](x_d, exact_match_mask)
+                x_q = x_q + exact_match_out
+
             if i == num_top - 1 and pm == "cls":
                 # Optimized last layer: Self-Attention on full sequence,
                 # then slice to CLS for Cross-Attention and MLP.
@@ -1079,13 +1096,19 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 )
         return x_q
 
-    def forward_inverted_transformer(self, x_q, x_d, q_self, cross_mask, q_pos_embeds):
+    def forward_inverted_transformer(
+        self, x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask=None
+    ):
         """Inverted transformer architecture: Cross-Attention followed by Self-Attention."""
 
         pm = self.pooling_method or getattr(self.config, "classifier_pooling", "cls")
         num_top = len(self.top_layers)
 
         for i, layer in enumerate(self.top_layers):
+            if self.extra_attn_bias and exact_match_mask is not None:
+                exact_match_out = self.exact_match_heads[i](x_d, exact_match_mask)
+                x_q = x_q + exact_match_out
+
             # 1. Cross-attn residual (Full)
             cross_out = layer.crossattention(
                 query=layer.attn_norm(x_q),
@@ -1191,13 +1214,18 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         q_self = self.get_self_attention_mask(query_mask, x_q.dtype)
         cross_mask = self.get_cross_attention_mask(query_mask, doc_mask, x_q.dtype)
 
+        if self.extra_attn_bias:
+            exact_match_mask = compute_mask(query_ids, doc_ids)
+        else:
+            exact_match_mask = None
+
         if self.cross_attn_first:
             x_q = self.forward_inverted_transformer(
-                x_q, x_d, q_self, cross_mask, q_pos_embeds
+                x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask
             )
         else:
             x_q = self.forward_vanilla_transformer(
-                x_q, x_d, q_self, cross_mask, q_pos_embeds
+                x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask
             )
 
         x_q = self.final_norm(x_q)

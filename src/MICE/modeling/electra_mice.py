@@ -94,6 +94,19 @@ class ElectraMiceCrossEncoder(BertMiceCrossEncoder):
             nn.ModuleList([ElectraLayer(self.head_config) for _ in range(num_top)]),
         )
 
+        if self.extra_attn_bias:
+            from .mice import ExactMatchAttentionHead
+
+            self.add_module(
+                "exact_match_heads",
+                nn.ModuleList(
+                    [
+                        ExactMatchAttentionHead(self.head_config.hidden_size)
+                        for _ in range(num_top)
+                    ]
+                ),
+            )
+
         # Standard BertMice components (pooler, classifier, dropout)
         self.pooler = getattr(temp_model, "pooler", None)
         if self.pooler:

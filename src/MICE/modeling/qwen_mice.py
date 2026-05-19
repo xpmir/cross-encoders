@@ -312,6 +312,19 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
             ),
         )
 
+        if self.extra_attn_bias:
+            from .mice import ExactMatchAttentionHead
+
+            self.add_module(
+                "exact_match_heads",
+                nn.ModuleList(
+                    [
+                        ExactMatchAttentionHead(self.config.hidden_size)
+                        for _ in range(num_top)
+                    ]
+                ),
+            )
+
         self.add_module("final_norm", temp_model.model.norm)
 
         if self.global_cls_token:
@@ -333,11 +346,15 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         self.classifier = nn.Linear(self.config.hidden_size, 1)
 
     def forward_vanilla_transformer(
-        self, x_q, x_d, cross_mask, q_pos, q_position_embeddings
+        self, x_q, x_d, cross_mask, q_pos, q_position_embeddings, exact_match_mask=None
     ):
         """Vanilla transformer architecture: Self-Attention followed by Cross-Attention."""
         num_top = len(self.top_layers)
         for i, layer in enumerate(self.top_layers):
+            if self.extra_attn_bias and exact_match_mask is not None:
+                exact_match_out = self.exact_match_heads[i](x_d, exact_match_mask)
+                x_q = x_q + exact_match_out
+
             if i == num_top - 1 and self.pooling_method == "cls":
                 # Optimized last layer: Self-Attention on full sequence,
                 # then slice to CLS for Cross-Attention and MLP.
@@ -383,11 +400,15 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         return x_q
 
     def forward_inverted_transformer(
-        self, x_q, x_d, cross_mask, q_pos, q_position_embeddings
+        self, x_q, x_d, cross_mask, q_pos, q_position_embeddings, exact_match_mask=None
     ):
         """Inverted transformer architecture: Cross-Attention followed by Self-Attention."""
         num_top = len(self.top_layers)
         for i, layer in enumerate(self.top_layers):
+            if self.extra_attn_bias and exact_match_mask is not None:
+                exact_match_out = self.exact_match_heads[i](x_d, exact_match_mask)
+                x_q = x_q + exact_match_out
+
             if i == num_top - 1 and self.pooling_method == "cls":
                 # Optimized last layer: Cross-Attention on full sequence,
                 # then Self-Attention, then slice to CLS for MLP.
@@ -528,13 +549,20 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         # Mask for Cross-Attention (Query attending to Doc) shape [batch, 1, seq_len_query, seq_len_doc]
         cross_mask = self.get_cross_attention_mask(query_mask, doc_mask, x_q.dtype)
 
+        if self.extra_attn_bias:
+            from .mice import compute_mask
+
+            exact_match_mask = compute_mask(query_ids, doc_ids)
+        else:
+            exact_match_mask = None
+
         if self.cross_attn_first:
             x_q = self.forward_inverted_transformer(
-                x_q, x_d, cross_mask, q_pos, q_position_embeddings
+                x_q, x_d, cross_mask, q_pos, q_position_embeddings, exact_match_mask
             )
         else:
             x_q = self.forward_vanilla_transformer(
-                x_q, x_d, cross_mask, q_pos, q_position_embeddings
+                x_q, x_d, cross_mask, q_pos, q_position_embeddings, exact_match_mask
             )
 
         x_q = self.final_norm(x_q)

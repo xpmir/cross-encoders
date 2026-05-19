@@ -4,7 +4,6 @@ description:
     Mice Training wit all left layers
 
 module: MICE.experiments.mice_training
-pre_experiment: pre_experiment
 parent: ./mice_MiniLM_l4.yaml
 
 n_interaction_layers: 8
