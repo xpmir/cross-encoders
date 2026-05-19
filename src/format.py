@@ -9,7 +9,7 @@ from tests import NANO_BEIR_KEYS
 loss_names = {
     "bce": "BCE",
     "hingeLoss": "Hinge",
-    "infoNCE_Colbertv2Neg_norm_size=True": "InfoNCE",
+    "infoNCE_Colbertv2Neg": "InfoNCE",
     "marginMSE": "MarginMSE",
     "distillRankNET": "DistillRankNET",
     "ADR_MSE": "ADR-MSE",
