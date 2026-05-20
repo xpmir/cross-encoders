@@ -328,6 +328,17 @@ def compute_prettr_config_flops(config_path, query_len, max_seq_len):
     return total_flops, baseline_flops, hf_id, xp_id, 1.0
 
 
+def compute_flops_CrossEncoder(
+    d,
+    d_ff,
+    nlayers,
+    seq_len=512,
+):
+    baseline_flops = nlayers * compute_flops_transformer_layer(d, d_ff, seq_len, 1.0)
+
+    return baseline_flops, baseline_flops
+
+
 def compute_flops_prettr(
     join_layer,
     d,
@@ -364,6 +375,7 @@ def compute_flops_mice(
     nlayers,
     seq_len=512,
     query_len=32,
+    precompute_docs=False,
 ):
     n_contextualization_layers = mice_cfg.n_contextualization_layers
     n_interaction_layers = mice_cfg.n_interaction_layers
@@ -381,8 +393,9 @@ def compute_flops_mice(
         total_flops += compute_flops_transformer_layer(d, d_ff, query_len)
 
     # 2. Document Contextualization
-    for _ in range(n_docs_ctx_layers):
-        total_flops += compute_flops_transformer_layer(d, d_ff, doc_len)
+    if not precompute_docs:
+        for _ in range(n_docs_ctx_layers):
+            total_flops += compute_flops_transformer_layer(d, d_ff, doc_len)
 
     # 3. Interaction Layers
     for _ in range(n_interaction_layers):

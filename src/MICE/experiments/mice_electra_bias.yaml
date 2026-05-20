@@ -5,7 +5,7 @@ description:
     we run additional trainings validating on nanobeir to see the impact on OOD.
 
 module: MICE.experiments.mice_training
-parent: mice_electra.yaml
+parent: mice_training_base.yaml
 # pre_experiment: pre_experiment
 
 retrieval:
