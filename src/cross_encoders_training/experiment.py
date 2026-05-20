@@ -124,11 +124,12 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             test_retrievers_factory,
             launcher=launcher_evaluate,
             init_tasks=retriever_init_tasks,
-            with_run=True,
+            with_run=cfg.precompute_first_stage,
         )
-        test_run_retriever_factory = MultiRunRetrieverFactory.from_results(
-            retriever_tag, test_runs
-        )
+        if cfg.precompute_first_stage:
+            test_run_retriever_factory = MultiRunRetrieverFactory.from_results(
+                retriever_tag, test_runs
+            )
 
         ### Validation ###
         validation_set = ValidationSet.load(cfg, launcher_preprocessing)
@@ -142,9 +143,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             init_tasks=retriever_init_tasks,
             with_run=True,
         )
-        val_run_retriever_factory = MultiRunRetrieverFactory.from_results(
-            retriever_tag, val_runs
-        )
+        if cfg.precompute_first_stage:
+            val_run_retriever_factory = MultiRunRetrieverFactory.from_results(
+                retriever_tag, val_runs
+            )
 
         ### TRAINING CROSS ENCODER
 
@@ -170,7 +172,11 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             # on the validation set
             validations, tracked_validations = validation_set.build_listeners(
                 scorer_model,
-                val_run_retriever_factory,
+                (
+                    val_run_retriever_factory
+                    if cfg.precompute_first_stage
+                    else val_retrievers_factory
+                ),
                 retriever_tag,
             )
 
@@ -226,7 +232,11 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                         partial(
                             scorer_retriever,
                             scorer=scorer_model,
-                            retrievers=test_run_retriever_factory,
+                            retrievers=(
+                                test_run_retriever_factory
+                                if cfg.precompute_first_stage
+                                else test_retrievers_factory
+                            ),
                             batch_size=cfg.retrieval.batch_size,
                         ),
                         launcher_evaluate,
