@@ -1,15 +1,12 @@
-id: train_mice_miniLM_l4
-title: "Mice-MiniLM Training"
-description:
-    Base Training for MiniLM-based MICE model.
+# Base Training for Mini MICE model.
+# This config can't be run on its own, but it is used as a parent for all the Mini MICE training configs,
+# which share the same training hyperparameters.
 
 module: MICE.experiments.mice_training
 # pre_experiment: pre_experiment
 
-seed: 12 # To mimick the HF xp
+seed: 12
 nb_repetitions: 3
-
-
 retriever: ""
 
 preprocessing:
@@ -50,8 +47,3 @@ evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
     beir13: true
-
-base: microsoft/MiniLM-L12-H384-uncased
-n_contextualization_layers: 4
-n_interaction_layers: 3
-mask_cls_to_doc: false

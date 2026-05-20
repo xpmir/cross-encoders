@@ -335,6 +335,7 @@ def compute_flops_prettr(
     nlayers,
     seq_len=512,
     query_len=32,
+    precompute_docs=False,
 ):
     doc_len = seq_len - query_len - 3  # [CLS] q [SEP] doc [SEP]
 
@@ -343,7 +344,8 @@ def compute_flops_prettr(
     for _ in range(join_layer):
         # compute as if computations are done separately for query and document.
         total_flops += compute_flops_transformer_layer(d, d_ff, query_len, alpha=1.0)
-        total_flops += compute_flops_transformer_layer(d, d_ff, doc_len, alpha=1.0)
+        if not precompute_docs:
+            total_flops += compute_flops_transformer_layer(d, d_ff, doc_len, alpha=1.0)
 
     # Layers >= join_layer: full joint self-attention
     for _ in range(join_layer, nlayers):

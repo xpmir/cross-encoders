@@ -5,8 +5,8 @@ description:
     Serving as a baseline for assessing their performance.
 
 module: cross_encoders_training.experiment
-pre_experiment: pre_experiment
-export_trained_models: false
+export_trained_models: true
+# pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 3

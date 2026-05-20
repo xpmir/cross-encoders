@@ -1,15 +1,13 @@
-id: train_mice_electra_l8+3
-title: "Try to train a mice electra with 4 and 8 contextualization layers"
-description:
-    Using the best parameters from the grid search,
-    we run additional trainings validating on nanobeir to see the impact on OOD.
+# Base Training for Mini MICE model.
+# This config can't be run on its own, but it is used as a parent for all the Mini MICE training configs,
+# which share the same training hyperparameters.
 
 module: MICE.experiments.mice_training
 # pre_experiment: pre_experiment
 
-seed: 12 # To mimick the HF xp
+seed: 12
 nb_repetitions: 3
-
+retriever: ""
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
@@ -36,7 +34,7 @@ learner:
     checkpoint_interval: 100
     validation_interval: 50
     validation_top_k: 100
-    validation: nanobeir
+    validation: nanobeir11
     requirements: duration=12h & cpu(cores=16) & cuda(mem=40G)
 
 
@@ -49,7 +47,3 @@ evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
     beir13: true
-
-base: google/electra-base-discriminator
-n_contextualization_layers: 8
-n_interaction_layers: 3

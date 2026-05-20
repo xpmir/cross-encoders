@@ -1,4 +1,4 @@
-id: train_mice_electra_l8+3
+id: train_mice_electra_l48+3
 title: "Try to train a mice electra with 4 and 8 contextualization layers"
 description:
     Using the best parameters from the grid search,
@@ -51,5 +51,13 @@ evaluation: #default = Minified tests
     beir13: true
 
 base: google/electra-base-discriminator
-n_contextualization_layers: 8
+n_contextualization_layers: 4
 n_interaction_layers: 3
+
+
+#### Params that are grid searched
+grid_search:
+    n_contextualization_layers:
+        values_list:
+            - 4
+            - 8 # 12 layers

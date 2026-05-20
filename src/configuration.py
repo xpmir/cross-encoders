@@ -323,6 +323,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     retriever: str = ""
     """Identifier for the retriever model. If empty, uses BM25."""
 
+    precompute_first_stage: bool = True
+    """If true, will save the run for the first stage - just reload it for evaluation rather than recomputing"""
+
     ## Cross Encoder Model
     base: str = ""
     """Identifier for the base model"""

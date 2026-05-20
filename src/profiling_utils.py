@@ -130,7 +130,7 @@ def benchmark_model(
             verify_weights_fn(model, model_name_or_path, name)
 
         if cuda_available:
-            model.to(device)
+            model.cuda()
         else:
             logger.warning("[warn] CUDA not available, running on CPU may be slow.")
             # We continue even if CPU, but warn.

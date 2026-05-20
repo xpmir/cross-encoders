@@ -1,4 +1,4 @@
-id: train_mice_ettin68m_l8+all
+id: train_mice_ettin68m_l10+4_bias
 title: "Mice-Ettin-68m Training"
 description:
     Base Training for Ettin-68m-based MICE model.
@@ -6,7 +6,8 @@ description:
 module: MICE.experiments.mice_training
 parent: ./mice_ettin_68m.yaml
 
-#TODO
+
+max_length: 1024
+n_contextualization_layers: 10
 n_interaction_layers: 4
 extra_attn_bias: true
-max_length: 1024

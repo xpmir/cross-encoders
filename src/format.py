@@ -41,7 +41,7 @@ backbone_names_lower = {
 
 backbone_nlayers = {
     "jhu-clsp/ettin-encoder-17m": 7,
-    "jhu-clsp/ettin-encoder-32m": 12,
+    "jhu-clsp/ettin-encoder-32m": 10,
     "microsoft/MiniLM-L12-H384-uncased": 12,
     "jhu-clsp/ettin-encoder-68m": 19,
     "bert-base-uncased": 12,

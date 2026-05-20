@@ -19,6 +19,8 @@ extra_attn_bias: true
 #### Params that are grid searched
 grid_search:
     n_contextualization_layers:
-        values_range:
-            - 0
-            - 17
+        values_list:
+            - 7
+            - 8
+            - 9
+            - 13
