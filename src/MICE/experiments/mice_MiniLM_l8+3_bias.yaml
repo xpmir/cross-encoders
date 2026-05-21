@@ -8,7 +8,7 @@ parent: ./mice_MiniLM_l4.yaml
 # pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
-nb_repetitions: 2
+nb_repetitions: 3
 
 
 base: microsoft/MiniLM-L12-H384-uncased
