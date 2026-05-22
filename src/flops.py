@@ -368,6 +368,36 @@ def compute_flops_prettr(
     return total_flops, baseline_flops
 
 
+def compute_flops_colbert(
+    d,
+    d_ff,
+    nlayers,
+    seq_len=512,
+    query_len=32,
+    precompute_docs=False,
+):
+    doc_len = seq_len - query_len - 3  # [CLS] q [SEP] doc [SEP]
+
+    total_flops = 0
+    # 1. Query Encoding (independent)
+    for _ in range(nlayers):
+        total_flops += compute_flops_transformer_layer(d, d_ff, query_len)
+
+    # 2. Document Encoding (independent)
+    if not precompute_docs:
+        for _ in range(nlayers):
+            total_flops += compute_flops_transformer_layer(d, d_ff, doc_len)
+
+    # 3. MaxSim operation
+    # dot product: 2 * d * query_len * doc_len
+    total_flops += 2 * d * query_len * doc_len
+
+    # Baseline: Full cross-encoder
+    baseline_flops = nlayers * compute_flops_transformer_layer(d, d_ff, seq_len, 1.0)
+
+    return total_flops, baseline_flops
+
+
 def compute_flops_mice(
     mice_cfg: MiceCrossEncoder,
     d,
