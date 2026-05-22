@@ -853,7 +853,7 @@ requires-dist = [
     { name = "sentence-transformers", marker = "extra == 'neural'", specifier = ">=5.4.0" },
     { name = "tensorboard", marker = "extra == 'neural'" },
     { name = "toma" },
-    { name = "torch", marker = "extra == 'neural'", specifier = ">=1.12" },
+    { name = "torch", marker = "extra == 'neural'", specifier = ">=2.10" },
     { name = "transformers", specifier = ">=5.8.1" },
     { name = "transformers", marker = "extra == 'neural'" },
     { name = "xpm-torch", editable = "experimaestro-ir/xpm-torch" },
