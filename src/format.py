@@ -18,12 +18,12 @@ loss_names = {
 backbone_names = {
     "jhu-clsp/ettin-encoder-17m": "Ettin-17M",
     "jhu-clsp/ettin-encoder-32m": "Ettin-32M",
-    "microsoft/MiniLM-L12-H384-uncased": "MiniLM-L12 (33M)",
     "jhu-clsp/ettin-encoder-68m": "Ettin-68M",
-    "bert-base-uncased": "BERT-Base (110M)",
-    "google/electra-base-discriminator": "ELECTRA (110M)",
-    "FacebookAI/roberta-base": "RoBERTa (125M)",
     "jhu-clsp/ettin-encoder-150m": "Ettin-150M",
+    "microsoft/MiniLM-L12-H384-uncased": "MiniLM-L12 (33M)",
+    "google/electra-base-discriminator": "ELECTRA (110M)",
+    "bert-base-uncased": "BERT-Base (110M)",
+    "FacebookAI/roberta-base": "RoBERTa (125M)",
     "microsoft/deberta-v3-base": "DeBERTav3 (184M)",
 }
 
