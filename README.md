@@ -16,7 +16,7 @@
 
 This anonymous repo provides:
 - All training configurations avalable as yaml files.
+- Implementation of Mice models can be found in `src/MICE/modeling`
 - Paper experiments configurations are gathered by model size in `src/MICE/experiments/*yaml` while the main experimental pipeline is written in `src/MICE/mice_training.py`
-- The full experiments results processing Notebook `MiceResults.py` with the figures generated for the preprint.
 
 _Because we use an internal and non-anonymous library to conduct experiments, we were forced to anonimize it in the code, making it unusable in this anonymized repository._
