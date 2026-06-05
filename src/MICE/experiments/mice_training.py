@@ -15,7 +15,7 @@ from functools import partial
 from typing import Optional, Callable, List, Tuple
 import numpy as np
 
-from experimaestro import setmeta, stop_tags, LightweightTask
+from experimaestro import setmeta, stop_tags, LightweightTask, RunMode
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch import Random
@@ -306,7 +306,8 @@ def TrainEvaluateLateInteractionScorer(
                 init_tasks=model_init_tasks,
             )
             # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
-            helper.tensorboard_service.add(learner, learner.logpath)
+            if helper.xp.run_mode == RunMode.NORMAL:
+                helper.tensorboard_service.add(learner, learner.logpath)
 
             # Evaluate each model on test collections
             for name, tracked_validation in tracked_validations.items():
@@ -410,16 +411,19 @@ def TrainEvaluateLateInteractionScorer(
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
 
-    process_experiment_results(
-        tests=tests,
-        all_tags=all_tags,
-        config_map=config_map,
-        cfg=cfg,
-        helper=helper,
-        learners=learners,
-        all_weights=all_weights,
-        get_name_fn=partial(get_model_name_fn, cfg=all_configs[0]),
-    )
+    if helper.xp.run_mode == RunMode.NORMAL:
+        process_experiment_results(
+            tests=tests,
+            all_tags=all_tags,
+            config_map=config_map,
+            cfg=cfg,
+            helper=helper,
+            learners=learners,
+            all_weights=all_weights,
+            get_name_fn=partial(get_model_name_fn, cfg=all_configs[0]),
+        )
+    else:
+        logging.info("Dry-run mode: skipping results processing")
 
 
 @learning_experiment()

@@ -8,3 +8,6 @@
 [submodule "datamaestro-ir"]
 	path = datamaestro-ir
 	url = git@github.com:xpmir/datamaestro_ir.git
+[submodule "xpm-torch"]
+	path = xpm-torch
+	url = https://github.com/experimaestro/xpm-torch.git

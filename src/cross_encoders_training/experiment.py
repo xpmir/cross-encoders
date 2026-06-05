@@ -12,7 +12,7 @@ import logging
 from functools import partial
 import numpy as np
 
-from experimaestro import setmeta, stop_tags
+from experimaestro import setmeta, stop_tags, RunMode
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch import Random
@@ -214,7 +214,12 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 init_tasks=scorer_hf_init_tasks,
             )
             # this links the tensorboard run dir to in the xp/results/run folder, so that we can access it easily.
-            helper.tensorboard_service.add(learner, learner.logpath)
+            if helper.xp.run_mode == RunMode.NORMAL:
+                helper.tensorboard_service.add(learner, learner.logpath)
+            else:
+                logging.debug(
+                    "Skipping TensorBoard service registration in dry-run mode"
+                )
 
             # Evaluate each model on test collections
             for name, tracked_validation in tracked_validations.items():
@@ -280,6 +285,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
     # Process Results shared
-    process_experiment_results(
-        tests, all_tags, config_map, cfg, helper, learners, all_weights, get_ce_name
-    )
+    if helper.xp.run_mode == RunMode.NORMAL:
+        process_experiment_results(
+            tests, all_tags, config_map, cfg, helper, learners, all_weights, get_ce_name
+        )
+    else:
+        logging.info("Dry-run mode: skipping results processing")
