@@ -13,7 +13,7 @@ nb_repetitions: 3
 
 base: microsoft/MiniLM-L12-H384-uncased
 n_interaction_layers: 3
-n_contextualization_layers: 8
+n_contextualization_layers: 4
 extra_attn_bias: true
 
 evaluation: #default = Minified tests
