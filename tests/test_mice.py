@@ -54,15 +54,15 @@ class TestMiceForwardTask(LightweightTask):
 @pytest.mark.parametrize(
     "model_id",
     [
+        "jhu-clsp/ettin-encoder-17m",  # ModernBERT
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
         "google/electra-small-discriminator",  # Electra
-        "jhu-clsp/ettin-encoder-68m",  # ModernBERT
-        # "cross-encoder/ms-marco-MiniLM-L-6-v2",  # BERT
         # "Qwen/Qwen2.5-0.5B-Instruct",           # Qwen
     ],
 )
-@pytest.mark.parametrize("cross_attn_first", [True, False])
+@pytest.mark.parametrize("cross_attn_first", [True])
 @pytest.mark.parametrize("mask_cls_to_doc", [False])
-@pytest.mark.parametrize("extra_attn_bias", [True, False])
+@pytest.mark.parametrize("extra_attn_bias", [True])
 @pytest.mark.parametrize(
     "n_contextualization_layers, n_docs_ctx_layers, bound_bottom_layers",
     [

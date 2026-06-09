@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, List
 
-from experimaestro import Param
+from experimaestro import field, Param
 from transformers import AutoModelForSequenceClassification
 from xpm_torch import Module
 from xpmir.text.encoders import (
@@ -200,7 +200,7 @@ class HFMaskedEttinCrossScorer(HFMaskedScorer):
     Based on Huggingface `AutoModelForSequenceClassification` architecture with a masked Ettin backbone
     """
 
-    pooling_method: Param[Optional[str]] = None
+    pooling_method: Param[Optional[str]] = field(default=None, ignore_default=True)
     """Pooling method to use for the Ettin based scorer: cls or mean.
     Leave it to None for models coming from the Hub, as it will be inferred from the model config."""
 

@@ -3,7 +3,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from experimaestro import Constant, Param
+from experimaestro import field, Constant, Param
 from datamaestro_text.data.ir import TextItem
 from transformers import GradientCheckpointingLayer
 from xpmir.learning.context import TrainerContext
@@ -50,31 +50,31 @@ class MidFusionCrossEncoder(xpmTorchHubModule, LearnableScorer):
     allow the query to attend to the document via cross-attention mechanisms.
     """
 
-    hf_id: Param[str] = "bert-base-uncased"
+    hf_id: Param[str] = field(default="bert-base-uncased", ignore_default=True)
     """Hugging Face checkpoint identifier that provides weights and config. Must be a BERT-like model."""
 
-    n_contextualization_layers: Param[int] = 6
+    n_contextualization_layers: Param[int] = field(default=6, ignore_default=True)
     """Mid-fusion index: encoder layers are split into bottom (independent) and top (cross-attention)"""
 
-    drop_layer: Param[int] = 0
+    drop_layer: Param[int] = field(default=0, ignore_default=True)
     """Layer at which to drop backbone layers"""
 
-    mask_cls_to_doc: Param[bool] = True
+    mask_cls_to_doc: Param[bool] = field(default=True, ignore_default=True)
     """Whether to mask the [CLS] token from attending to document tokens."""
 
-    mask_query_to_cls: Param[bool] = True
+    mask_query_to_cls: Param[bool] = field(default=True, ignore_default=True)
     """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
 
-    use_self_attention: Param[bool] = True
+    use_self_attention: Param[bool] = field(default=True, ignore_default=True)
     """Whether to use self-attention in the top layers along with cross-attention."""
 
-    freeze_base: Param[bool] = False
+    freeze_base: Param[bool] = field(default=False, ignore_default=True)
     """Whether to freeze the bottom layers during finetuning"""
 
-    random_top_layers: Param[bool] = False
+    random_top_layers: Param[bool] = field(default=False, ignore_default=True)
     """Whether to initialize top layers randomly instead of copying from backbone"""
 
-    compress_dim: Param[float] = 1.0
+    compress_dim: Param[float] = field(default=1.0, ignore_default=True)
     """Factor by which to divide the hidden dimensions of the top layers"""
 
     _version: Constant[int] = 2
@@ -737,7 +737,7 @@ class EttinMidFusionCrossEncoder(MidFusionCrossEncoder):
     Mid-Fusion Cross Encoder based on ModernBERT Architecture.
     """
 
-    pooling_method: Param[Optional[str]] = None
+    pooling_method: Param[Optional[str]] = field(default=None, ignore_default=True)
     """Pooling method to use for the Ettin based scorer: cls or mean.
     Leave it to None for models coming from the Hub, as it will be inferred from the model config."""
 

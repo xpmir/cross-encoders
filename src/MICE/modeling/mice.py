@@ -1,5 +1,6 @@
 from enum import Enum
-from typing import List, Tuple, Optional, NamedTuple
+from copy import deepcopy
+from typing import List, Tuple, Optional, NamedTuple, Union
 from datamaestro_ir.data.base import IDTextRecord
 import torch
 import torch.nn as nn
@@ -7,6 +8,7 @@ import logging
 from pathlib import Path
 
 from experimaestro import Param, LightweightTask, Constant, field
+from xpm_torch.huggingface import TorchHFHub
 from xpmir.text import TokenizedTexts
 from xpmir.letor.records import BaseItems
 from xpmir.rankers import AbstractModuleScorer
@@ -21,7 +23,6 @@ from xpmir.text.encoders import (
 )
 from xpmir.text.huggingface.tokenizers import HFTokenizer
 from xpmir.text.tokenizers import TokenizerOptions
-
 
 # Configuration and common types
 
@@ -222,13 +223,15 @@ class MiceCrossEncoder(AbstractModuleScorer):
     tokenizer: Param[MICEQueryDocTokenizer]
     """The tokenizer for independent Q/D processing"""
 
-    n_contextualization_layers: Param[int] = 6
+    n_contextualization_layers: Param[int] = field(default=6, ignore_default=True)
     """Number of bottom encoder layers that process query and document independently"""
 
     n_docs_ctx_layers: Param[Optional[int]] = field(default=None, ignore_default=True)
     """Number of bottom encoder layers for the document. If None, use n_contextualization_layers."""
 
-    n_interaction_layers: Param[Optional[int]] = None
+    n_interaction_layers: Param[Optional[int]] = field(
+        default=None, ignore_default=True
+    )
     """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
     bound_bottom_layers: Param[bool] = field(default=True, ignore_default=True)
@@ -237,16 +240,16 @@ class MiceCrossEncoder(AbstractModuleScorer):
     cross_attn_first: Param[bool] = field(default=True, ignore_default=True)
     """Whether to perform cross-attention before self-attention in the top layers."""
 
-    mask_cls_to_doc: Param[bool] = False
+    mask_cls_to_doc: Param[bool] = field(default=False, ignore_default=True)
     """Whether to mask the [CLS] token from attending to document tokens."""
 
-    mask_query_to_cls: Param[bool] = True
+    mask_query_to_cls: Param[bool] = field(default=True, ignore_default=True)
     """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
 
-    freeze_base: Param[bool] = False
+    freeze_base: Param[bool] = field(default=False, ignore_default=True)
     """Whether to freeze the bottom layers during finetuning"""
 
-    random_top_layers: Param[bool] = False
+    random_top_layers: Param[bool] = field(default=False, ignore_default=True)
     """Whether to initialize top layers randomly instead of copying from backbone"""
 
     global_cls_token: Param[bool] = field(default=False, ignore_default=True)
@@ -255,7 +258,7 @@ class MiceCrossEncoder(AbstractModuleScorer):
     extra_attn_bias: Param[bool] = field(default=False, ignore_default=True)
     """Whether to add an exact match cross-attention bias head."""
 
-    compress_dim: Param[float] = 1.0
+    compress_dim: Param[float] = field(default=1.0, ignore_default=True)
     """Factor by which to divide the hidden dimensions of the top layers"""
 
     doc: Param[Optional[str]] = field(overrides=True)
@@ -278,18 +281,62 @@ class MiceCrossEncoder(AbstractModuleScorer):
     top_layers: nn.ModuleList
     """Top layers: cross-attention encoding"""
 
+    _contextualization_config_path: str = "contextualization_layers"
+
+    _interaction_config_path: str = "interaction_layers"
+
+    def _fetch_backbone_configs(self):
+        """Helper to load the backbone config and head config from Hugging Face,
+        used when initializing the model structure if local configs have not been loaded. (init from hf_id)
+        """
+        if (
+            hasattr(self, "config")
+            and self.config is not None
+            and hasattr(self, "head_config")
+            and self.head_config is not None
+        ):
+            return  # Configs already set (possibly loaded locally), no need to fetch from HF
+
+        logger.warning(
+            "Fetching backbone configs from Hugging Face for hf_id: %s", self.hf_id
+        )
+
+        base_config = AutoConfig.from_pretrained(self.hf_id)
+
+        # 1. base config (used for the bottom layers, which follow the original backbone architecture more closely)
+        self.config = deepcopy(base_config)
+        # Ensure _attn_implementation is not None to avoid warnings
+        # Configs should be set by InitTask or manually before calling initialize()
+        if (
+            not hasattr(self.config, "_attn_implementation")
+            or self.config._attn_implementation is None
+        ):
+            self.config._attn_implementation = "eager"
+
+        # 2. head config (used for the top layers, which may have different settings like cross-attention)
+        self.head_config = deepcopy(base_config)
+        self.head_config.is_decoder = True
+        self.head_config.add_cross_attention = True
+
+        if (
+            not hasattr(self.head_config, "_attn_implementation")
+            or self.head_config._attn_implementation is None
+        ):
+            self.head_config._attn_implementation = getattr(
+                self.config, "_attn_implementation", "eager"
+            )
+
     def __initialize__(self):
         """Instanciates the Config and skeleton of the model"""
         super().__initialize__()
         self.tokenizer.initialize()
 
-        # Ensure configs are available
-        # TODO we should fetch the head_config file if available
-        # (if we need to instanciate from a pretrained Mice model)
-        self.config = AutoConfig.from_pretrained(self.hf_id)
+        # Ensure configs are loaded before accessing them
+        self._fetch_backbone_configs()
 
         # Check that we don't exceed the number of layers in the backbone
         num_backbone_layers = getattr(self.config, "num_hidden_layers", 0)
+
         if num_backbone_layers > 0:
             if self.n_contextualization_layers > num_backbone_layers:
                 raise ValueError(
@@ -314,26 +361,6 @@ class MiceCrossEncoder(AbstractModuleScorer):
                         f"layers ({num_backbone_layers}) for {self.hf_id}. "
                         f"(n_ctx={self.n_contextualization_layers}, n_inter={self.n_interaction_layers})"
                     )
-
-        self.head_config = AutoConfig.from_pretrained(self.hf_id)
-        self.head_config.is_decoder = True
-        self.head_config.add_cross_attention = True
-
-        # Ensure _attn_implementation is not None to avoid warnings
-        # Configs should be set by InitTask or manually before calling initialize()
-        if (
-            not hasattr(self.config, "_attn_implementation")
-            or self.config._attn_implementation is None
-        ):
-            self.config._attn_implementation = "eager"
-
-        if (
-            not hasattr(self.head_config, "_attn_implementation")
-            or self.head_config._attn_implementation is None
-        ):
-            self.head_config._attn_implementation = getattr(
-                self.config, "_attn_implementation", "eager"
-            )
 
     @property
     def dimension(self):
@@ -410,22 +437,103 @@ class MiceCrossEncoder(AbstractModuleScorer):
         from safetensors.torch import save_file
 
         path.mkdir(parents=True, exist_ok=True)
+        assert path.is_dir(), f"Save path '{path}' must be a directory"
+
         # Save model weights
         save_file(self.state_dict(), str(path / "model.safetensors"))
         # Save tokenizer
-        if hasattr(self.tokenizer, "tokenizer"):
+        if (
+            hasattr(self.tokenizer, "tokenizer")
+            and self.tokenizer.tokenizer is not None
+        ):
             self.tokenizer.tokenizer.save_pretrained(path)
+
+        # Save head config
+        if hasattr(self, "head_config") and self.head_config:
+            self.head_config.save_pretrained(path / self._interaction_config_path)
+        else:
+            logger.warning("No head config found to save for MICE model.")
         # Save configs
         if hasattr(self, "config") and self.config:
-            self.config.save_pretrained(path)
-        if hasattr(self, "head_config") and self.head_config:
-            self.head_config.save_pretrained(path / "head")
+            self.config.save_pretrained(path / self._contextualization_config_path)
+        else:
+            logger.warning("No base config found to save for MICE model.")
+
+    def save_pretrained(self, path: Union[str, Path]):
+        """Allows direct saving from Module"""
+
+        loader = self.loader_config(Path(path))
+        TorchHFHub(loader).save_pretrained(path)
+
+    def write_hub_extras(self, save_directory: Path):
+        """Called by TorchHFHub to save additional files."""
+        if hasattr(self, "config") and self.config is not None:
+            self.config.save_pretrained(save_directory)
+        if hasattr(self, "head_config") and self.head_config is not None:
+            (save_directory / "head").mkdir(exist_ok=True)
+            self.head_config.save_pretrained(save_directory / "head")
+        if (
+            hasattr(self.tokenizer, "tokenizer")
+            and self.tokenizer.tokenizer is not None
+        ):
+            self.tokenizer.tokenizer.save_pretrained(save_directory)
 
     def load_model(self, path: Path):
-        """Load from the directory."""
+        """Load from given directory, prioritizing local configs if available."""
+        from transformers import AutoConfig
 
-        # fow now we just load the checkpoint
-        # will need to fetch the head_config as well later
+        assert path.exists(), f"Model path '{path}' does not exist"
+
+        if path.is_file() and path.suffix in [".safetensors", ".pt", ".pth"]:
+            path = path.parent
+
+        # 1. Attempt to load head config locally
+        head_config_path = path / self._interaction_config_path / "config.json"
+        if head_config_path.exists():
+            logger.info(f"Loading local head config from {head_config_path}")
+            self.head_config = AutoConfig.from_pretrained(
+                str(path / self._interaction_config_path)
+            )
+        else:
+            logger.info(
+                "Local head config not found, falling back to base/hf_id config."
+            )
+            if not hasattr(self, "head_config") or self.head_config is None:
+                self.head_config = AutoConfig.from_pretrained(self.hf_id)
+                self.head_config.is_decoder = True
+                self.head_config.add_cross_attention = True
+
+        # 2. Attempt to load base config locally
+        config_path = path / self._contextualization_config_path / "config.json"
+        if config_path.exists():
+            logger.info(f"Loading local base config from {config_path}")
+            self.config = AutoConfig.from_pretrained(
+                str(path / self._contextualization_config_path)
+            )
+        else:
+            logger.info(f"Local base config not found, relying on hf_id: {self.hf_id}")
+            if not hasattr(self, "config") or self.config is None:
+                self.config = AutoConfig.from_pretrained(self.hf_id)
+
+        # Ensure _attn_implementation is set (similar to __initialize__)
+        if (
+            not hasattr(self.config, "_attn_implementation")
+            or self.config._attn_implementation is None
+        ):
+            self.config._attn_implementation = "eager"
+
+        if (
+            not hasattr(self.head_config, "_attn_implementation")
+            or self.head_config._attn_implementation is None
+        ):
+            self.head_config._attn_implementation = getattr(
+                self.config, "_attn_implementation", "eager"
+            )
+
+        # 2. Initialize the model structure based on the config (weights will be loaded in the next step)
+        self.initialize()
+
+        # 3. Load weights (via state_dict)
         super().load_model(path)
 
     def loader_config(self, path: Path, *, settings=None) -> "SimpleModuleLoader":
@@ -950,7 +1058,7 @@ class ModernBertCrossAttentionLayer(nn.Module):
 class ModernBertMiceCrossEncoder(MiceCrossEncoder):
     """Mice Cross Encoder based on ModernBERT Architecture."""
 
-    pooling_method: Param[Optional[str]] = None
+    pooling_method: Param[Optional[str]] = field(default=None, ignore_default=True)
     """Pooling method to use for the ModernBert based scorer: cls or mean.
     Leave it to None for models coming from the Hub, as it will be inferred from the model config."""
 

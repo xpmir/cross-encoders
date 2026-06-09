@@ -3,7 +3,7 @@ from torch import nn
 from typing import Optional
 from transformers import AutoModelForCausalLM
 
-from experimaestro import Param, LightweightTask
+from experimaestro import field, Param, LightweightTask
 from xpm_torch.utils import to_device
 from xpmir.letor.records import BaseItems
 
@@ -240,7 +240,7 @@ class QwenCrossAttentionLayer(nn.Module):
 class QwenMiceCrossEncoder(MiceCrossEncoder):
     """Mid-Fusion Cross Encoder based on Qwen Architecture."""
 
-    pooling_method: Param[Optional[str]] = "cls"
+    pooling_method: Param[Optional[str]] = field(default="cls", ignore_default=True)
     """Pooling method to use: cls or mean."""
 
     def __initialize__(self):

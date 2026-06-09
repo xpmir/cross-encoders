@@ -3,7 +3,7 @@ from typing import List, Optional
 from transformers import AutoConfig
 from functools import lru_cache
 
-from experimaestro import Config, Constant, Param
+from experimaestro import field, Config, Constant, Param
 from datamaestro_ir.data.base import TextItem, TextRecord
 from xpmir.rankers import AbstractModuleScorer
 
@@ -99,13 +99,17 @@ class AttentionPatch(Config):
     in layers from `start_layer` to `end_layer`
     """
 
-    mask_attention_from: Param[Optional[List[str]]] = None
+    mask_attention_from: Param[Optional[List[str]]] = field(
+        default=None, ignore_default=True
+    )
 
-    mask_attention_to: Param[Optional[List[str]]] = None
+    mask_attention_to: Param[Optional[List[str]]] = field(
+        default=None, ignore_default=True
+    )
 
-    start_layer: Param[int] = 0
+    start_layer: Param[int] = field(default=0, ignore_default=True)
 
-    end_layer: Param[int] = -1
+    end_layer: Param[int] = field(default=-1, ignore_default=True)
 
 
 class FrankenCrossScorer(AbstractModuleScorer):
@@ -116,7 +120,9 @@ class FrankenCrossScorer(AbstractModuleScorer):
     """an encoder for encoding the concatenated query-document tokens which
     doesn't contains the final linear layer"""
 
-    attention_patches: Param[Optional[List[AttentionPatch]]] = None
+    attention_patches: Param[Optional[List[AttentionPatch]]] = field(
+        default=None, ignore_default=True
+    )
     """List of attention patches to apply during the forward pass, can be None if no patching is needed (baseline standard behavior)"""
 
     version: Constant[int] = 2
