@@ -385,12 +385,22 @@ def export_model(
             tb_symlink_path.symlink_to(tb_path)
 
     if card_template_txt and best_cfg:
+        # Choose the right template
+        if "mice" in model_name.lower():
+            mice_template_path = Path(__file__).parent / "MiceCard.md"
+            if mice_template_path.exists():
+                card_template_txt = mice_template_path.read_text()
+
         template = Template(card_template_txt)
         card = template.render(
             base=best_cfg.base,
             k=best_cfg.retrieval.k,
             retriever=best_cfg.retriever if best_cfg.retriever else "BM25",
             model_id=model_name,
+            n_contextualization_layers=best_tags.get("n_contextualization_layers")
+            or best_tags.get("scorer.n_contextualization_layers", "N/A"),
+            n_interaction_layers=best_tags.get("n_interaction_layers")
+            or best_tags.get("scorer.n_interaction_layers", "N/A"),
             training_data="MS MARCO Passage",
             dataset="msmarco",
             loss=best_tags.get("learner.loss") or best_tags.get("loss", ""),

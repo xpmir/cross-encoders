@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import logging
 from pathlib import Path
+from jinja2 import Template
 
 from experimaestro import Param, LightweightTask, Constant, field
 from xpm_torch.huggingface import TorchHFHub
@@ -477,6 +478,29 @@ class MiceCrossEncoder(AbstractModuleScorer):
             and self.tokenizer.tokenizer is not None
         ):
             self.tokenizer.tokenizer.save_pretrained(save_directory)
+
+        # Write model card (README.md)
+        try:
+            template_path = Path(__file__).parent / "MiceCard.md"
+            if template_path.exists():
+                template = Template(template_path.read_text())
+                # Use getattr with defaults to be robust
+                card = template.render(
+                    base=getattr(self, "hf_id", "unknown"),
+                    model_id=save_directory.name,
+                    n_contextualization_layers=self.n_contextualization_layers,
+                    n_interaction_layers=self.n_interaction_layers
+                    or (len(self.top_layers) if hasattr(self, "top_layers") else "N/A"),
+                    loss=getattr(self, "loss_name", "Unknown"),
+                    k=getattr(self, "top_k", "100"),
+                    retriever=getattr(self, "retriever_name", "BM25"),
+                    results=getattr(self, "eval_results", "Results not available yet."),
+                )
+                with open(save_directory / "README.md", "w") as f:
+                    f.write(card)
+                logger.info(f"Model card written to {save_directory / 'README.md'}")
+        except Exception as e:
+            logger.warning(f"Could not write model card for MICE: {e}")
 
     def load_model(self, path: Path):
         """Load from given directory, prioritizing local configs if available."""
