@@ -24,6 +24,9 @@ validation:
     # Use 500 topics for validation
     size: 500
 
+base:
+    - cross-encoder/ms-marco-MiniLM-L12-v2
+    - cross-encoder/ettin-reranker-150m-v1
 
 evaluation:
     # test_max_topics: 100

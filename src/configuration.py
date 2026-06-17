@@ -1,5 +1,6 @@
 from enum import Enum
 import copy
+import attr
 from attrs import Factory, field
 from typing import (
     Any,
@@ -13,7 +14,9 @@ from typing import (
     get_args,
     get_origin,
     get_type_hints,
+    Annotated,
 )
+from pydantic import BeforeValidator
 from xpm_torch.experiments.configuration import TransformerOptimization, Fabric
 from xpmir.papers import configuration
 from xpmir.experiments.helpers import LauncherSpecification
@@ -103,6 +106,11 @@ class GenericParams:
     values_list: Optional[List[Any]] = None
     values_range: Optional[Tuple[int, int]] = None
 
+    @property
+    def is_grid(self) -> bool:
+        """Returns True if this defines a search space (multiple values)"""
+        return len(self.as_list()) > 1
+
     def as_list(self) -> List[Any]:
         if self.values_list:
             return list(self.values_list)
@@ -167,7 +175,44 @@ class GenericParams:
                 ),
             )
 
-        return cls(value=obj)
+        return cls(value=converter(obj))
+
+
+def _coerce_to_generic_params(v: Any) -> Any:
+    if isinstance(v, GenericParams):
+        return v
+    return GenericParams.from_any(v)
+
+
+GridSearch = Annotated[
+    Union[T, GenericParams],
+    BeforeValidator(_coerce_to_generic_params),
+]
+"""
+Type alias for configuration fields supporting inline grid search.
+
+This type allows a configuration field to accept either a single scalar value
+or a grid search definition (e.g., list of values) directly in the YAML.
+These values are automatically coerced into a `GenericParams` object during
+Pydantic validation, and later unpacked into scalar values during grid generation.
+
+Example Usage in a Configuration Class:
+    @configuration()
+    class MyConfig(Config):
+        # Default scalar value
+        learning_rate: GridSearch[float] = 1e-5
+        batch_size: GridSearch[int] = 32
+
+Example Usage in YAML:
+    # 1. Scalar value (no grid search, regular run)
+    learning_rate: 1e-5
+
+    # 2. Inline grid search (will generate 2 separate experiment configurations)
+    learning_rate: [1e-5, 2e-5]
+
+    # 3. Range-based grid search (using GenericParams dict structure)
+    batch_size: {"values_range": [16, 64]}
+"""
 
 
 @configuration()
@@ -181,8 +226,8 @@ class Indexation(LauncherSpecification):
 
 @configuration()
 class Retrieval:
-    k: int = 1000
-    batch_size: int = 128
+    k: GridSearch[int] = 1000
+    batch_size: GridSearch[int] = 128
     requirements: str = "duration=2 days & cuda(mem=24G)"
 
 
@@ -222,32 +267,32 @@ class Evaluation:
 
 @configuration()
 class xpm_torch_Learner:
-    validation_interval: int = field(default=32)
+    validation_interval: GridSearch[int] = field(default=32)
 
-    validation_top_k: int = 1000
+    validation_top_k: GridSearch[int] = 1000
 
-    checkpoint_interval: int = field(default=32)
+    checkpoint_interval: GridSearch[int] = field(default=32)
 
     optimization: TransformerOptimization = Factory(TransformerOptimization)
 
     requirements: str = "duration=4 days & cuda(mem=24G) * 2"
 
-    sample_rate: float = 1.0
+    sample_rate: GridSearch[float] = 1.0
     """Sample rate for triplets"""
 
-    sample_max: int = 0
+    sample_max: GridSearch[int] = 0
     """Maximum number of samples considered (before shuffling). 0 for no limit."""
 
-    max_grad_norm: float = 0.0
+    max_grad_norm: GridSearch[float] = 0.0
     """Maximum gradient norm (0 for no clipping)"""
 
-    loss: str = Losses.marginMSE.value
+    loss: GridSearch[str] = Losses.marginMSE.value
     """Loss function to use"""
 
-    validation: str = Validation.NanoBEIR.value
+    validation: GridSearch[str] = Validation.NanoBEIR.value
     """ The validation subset to use """
 
-    early_stop_epochs: int = 0
+    early_stop_epochs: GridSearch[int] = 0
     """ number of **epochs** without improvements before early stopping based on validation"""
 
     fabric: Fabric = Factory(Fabric)
@@ -326,7 +371,7 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     """If true, will save the run for the first stage - just reload it for evaluation rather than recomputing"""
 
     ## Cross Encoder Model
-    base: str = ""
+    base: GridSearch[str] = ""
     """Identifier for the base model"""
 
     max_length: Optional[int] = None
@@ -354,7 +399,7 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     normalize_docs_per_batch: bool = True
     """whether to normalize documents per batch for listwise losses"""
 
-    grid_search: Dict[str, GenericParams] = field(factory=dict)
+    grid_search: Dict[str, GridSearch[Any]] = field(factory=dict)
     """
     Grid search parameters. Maps a dot-separated parameter path to a GenericParams object.
     Example in YAML:
@@ -406,6 +451,31 @@ def get_nested_attr_type(obj: Any, path: str) -> Any:
         return Any
 
 
+def discover_grid_params(obj: Any, prefix: str = "") -> Dict[str, GenericParams]:
+    """Recursively find all GenericParams instances in an attrs object"""
+    found = {}
+    if attr.has(type(obj)):
+        for f in attr.fields(type(obj)):
+            val = getattr(obj, f.name)
+            path = f"{prefix}.{f.name}" if prefix else f.name
+            if isinstance(val, GenericParams) and val.is_grid:
+                found[path] = val
+            elif val is not None and not isinstance(val, (str, int, float, bool, Enum)):
+                found.update(discover_grid_params(val, path))
+    return found
+
+
+def finalize_config(obj: Any):
+    """Recursively convert all non-grid GenericParams to scalars"""
+    if attr.has(type(obj)):
+        for f in attr.fields(type(obj)):
+            val = getattr(obj, f.name)
+            if isinstance(val, GenericParams) and not val.is_grid:
+                setattr(obj, f.name, val.value)
+            elif val is not None and not isinstance(val, (str, int, float, bool, Enum)):
+                finalize_config(val)
+
+
 def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
     """
     Generates a list of configuration permutations for a grid search, based
@@ -427,12 +497,23 @@ def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
         {"learner.optimization.lr": 2e-5, "pooling_method": "cls"}
      ]
     """
-    # If grid_search is not present or empty, just return the original config.
-    if not hasattr(cfg, "grid_search") or not cfg.grid_search:
-        logger.info("no params to grid search, returning raw config")
-        return [cfg], [{}]
+    # 1. Discover inline grid parameters
+    grid_params = discover_grid_params(cfg)
 
-    grid_params = cfg.grid_search
+    # 2. Merge with explicit grid_search block
+    if hasattr(cfg, "grid_search") and cfg.grid_search:
+        for path, gp in cfg.grid_search.items():
+            if isinstance(gp, GenericParams):
+                grid_params[path] = gp
+            else:
+                grid_params[path] = GenericParams.from_any(gp)
+
+    # If no grid parameters found, just return the original config.
+    if not grid_params:
+        logger.info("no params to grid search, returning raw config")
+        new_cfg = copy.deepcopy(cfg)
+        finalize_config(new_cfg)
+        return [new_cfg], [{}]
 
     param_paths = list(grid_params.keys())
 
@@ -489,6 +570,10 @@ def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
         for path, value in zip(param_paths, combination):
             cfg_tags[path] = value
             set_nested_attr(new_cfg, path, value)
+
+        # Convert any remaining single-value GenericParams to scalars
+        finalize_config(new_cfg)
+
         output_configs.append(new_cfg)
         tags.append(cfg_tags)
 

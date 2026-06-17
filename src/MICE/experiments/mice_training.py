@@ -35,7 +35,7 @@ from xpmir.papers import configuration
 from MICE.modeling.mice import mice_scorer, MiceCrossEncoder
 from retrievers import splade_retriever, bm25_retriever, MicePlaidRetrieverFactory
 from validations import ValidationSet
-from configuration import generate_grid, CE_FineTuning
+from configuration import generate_grid, CE_FineTuning, GridSearch
 from tests import build_tests
 from format import (
     loss_names,
@@ -53,40 +53,40 @@ logging.basicConfig(level=logging.INFO)
 @configuration()
 class Mice_FineTuning(CE_FineTuning):
     ## MICE specific configuration
-    n_contextualization_layers: int = 6
+    n_contextualization_layers: GridSearch[int] = 6
     """Number of bottom encoder layers that process query and document independently"""
 
-    n_docs_ctx_layers: Optional[int] = None
+    n_docs_ctx_layers: GridSearch[Optional[int]] = None
     """Number of bottom encoder layers for the document. If None, use n_contextualization_layers."""
 
-    n_interaction_layers: Optional[int] = None
+    n_interaction_layers: GridSearch[Optional[int]] = None
     """Number of top encoder layers with cross-attention. If None, use all remaining layers from the backbone."""
 
-    bound_bottom_layers: Optional[bool] = True
+    bound_bottom_layers: GridSearch[Optional[bool]] = True
     """whether to bound bottom query and document encoding layers"""
 
-    cross_attn_first: bool = True
+    cross_attn_first: GridSearch[bool] = True
     """Whether to perform cross-attention before self-attention in the top layers."""
 
-    mask_cls_to_doc: bool = True
+    mask_cls_to_doc: GridSearch[bool] = True
     """Whether to mask the [CLS] token from attending to document tokens."""
 
-    mask_query_to_cls: bool = True
+    mask_query_to_cls: GridSearch[bool] = True
     """Whether to mask query tokens from attending to the [CLS] token (using it as a sink)"""
 
-    freeze_base: bool = False
+    freeze_base: GridSearch[bool] = False
     """Whether to freeze the bottom layers during finetuning"""
 
-    random_top_layers: bool = False
+    random_top_layers: GridSearch[bool] = False
     """Whether to initialize top layers randomly instead of copying from backbone"""
 
-    global_cls_token: bool = False
+    global_cls_token: GridSearch[bool] = False
     """Whether to add a fresh [CLS] token before the top layers."""
 
-    extra_attn_bias: bool = False
+    extra_attn_bias: GridSearch[bool] = False
     """Whether to add an exact match cross-attention bias head."""
 
-    compress_dim: float = 1.0
+    compress_dim: GridSearch[float] = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
 
 
