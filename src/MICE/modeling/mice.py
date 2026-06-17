@@ -10,13 +10,12 @@ from jinja2 import Template
 
 from experimaestro import Param, LightweightTask, Constant, field
 from xpm_torch.huggingface import TorchHFHub
-from xpmir.text import TokenizedTexts
-from xpmir.letor.records import BaseItems
-from xpmir.rankers import AbstractModuleScorer
 from xpm_torch.utils import to_device
 from xpm_torch.module import SimpleModuleLoader
-
+from xpmir.letor.records import BaseItems
+from xpmir.rankers import AbstractModuleScorer
 from xpmir.text.encoders import (
+    TokenizedTexts,
     EncoderOutput,
     TextEncoderBase,
     TokensEncoderOutput,
