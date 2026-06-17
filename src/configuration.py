@@ -20,7 +20,6 @@ from xpmir.experiments.helpers import LauncherSpecification
 from xpmir.datasets.msmarco import RerankerMSMarcoV1Configuration
 from itertools import product
 import logging
-from omegaconf import DictConfig
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +88,7 @@ T = TypeVar("T", int, str, float)
 
 
 def to_params(obj: Any) -> Any:
-    if isinstance(obj, (dict, DictConfig)):
+    if isinstance(obj, dict):
         # If it looks like a GenericParams dict, convert it.
         # A simple heuristic: check for 'value', 'values_list', or 'values_range'.
         d = dict(obj)
@@ -148,8 +147,8 @@ class GenericParams:
         if isinstance(obj, (list, tuple)):
             return cls(values_list=[converter(v) for v in obj])
 
-        # 4. It's a dict or DictConfig
-        if isinstance(obj, (dict, DictConfig)):
+        # 4. It's a dict
+        if isinstance(obj, dict):
             d = dict(obj)
             value = d.get("value")
             values_list = d.get("values_list")
@@ -376,7 +375,7 @@ def set_nested_attr(obj: Any, path: str, value: Any):
     setattr(current, keys[-1], value)
 
 
-def get_nested_attr_type(obj: Any, path: str) -> Type:
+def get_nested_attr_type(obj: Any, path: str) -> Any:
     """
     Traverses a nested object to find the type hint of the final attribute.
     Raises ValueError if the path is invalid.
