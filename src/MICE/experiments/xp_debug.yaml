@@ -25,8 +25,8 @@ validation:
     size: 500
 
 base:
-    - cross-encoder/ms-marco-MiniLM-L12-v2
-    - cross-encoder/ettin-reranker-150m-v1
+    - microsoft/MiniLM-L12-H384-uncased
+    - google/electra-base-discriminator
 
 evaluation:
     # test_max_topics: 100

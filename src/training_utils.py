@@ -41,8 +41,11 @@ from xpmir.letor.distillation.pairwise import (
     DistillationPairwiseTrainer,
     MSEDifferenceLoss,
 )
-
-
+from pointwise_distillation import (
+    PointwiseDistillationSampler,
+    PointwiseDistillationTrainer,
+)
+from samplers import prepare_collection
 from configuration import Losses, CE_FineTuning
 from samplers import msmarco_rankdistillm_sampled_colbert50
 from format import (
@@ -195,6 +198,30 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             lossfn=SoftmaxCrossEntropy.C(),
             batch_size=batch_size,
             hooks=[],
+        )
+
+    elif loss_member is Losses.MSE_mixedbread_large:
+        # Load the Ettin v1 training configurations
+        from datamaestro_ir.config.cross_encoder.ettin_reranker_v1_data import CONFIGS
+
+        # Filter out excluded subsets
+        excluded = set(cfg.ettin_subset_exclude)
+        selected_configs = [name for name in CONFIGS if name not in excluded]
+
+        if not selected_configs:
+            raise ValueError("All Ettin subsets are excluded. Nothing to train on!")
+
+        # Using streaming=false to download and cache the data locally as requested
+        samples_list = []
+        for name in selected_configs:
+            dataset_id = (
+                f"cross_encoder.ettin_reranker_v1_data[name={name},streaming=false]"
+            )
+            samples_list.append(prepare_collection(dataset_id))
+
+        return PointwiseDistillationTrainer.C(
+            sampler=PointwiseDistillationSampler.C(samples=samples_list),
+            batch_size=cfg.learner.optimization.batch_size,
         )
 
     else:

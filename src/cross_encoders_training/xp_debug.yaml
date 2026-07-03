@@ -14,7 +14,8 @@ nb_repetitions: 1
 base: "microsoft/MiniLM-L12-H384-uncased"
 max_length: 1024
 
-# microsoft/MiniLM-L12-H384-uncased # jhu-clsp/ettin-encoder-32m  microsoft/MiniLM-L12-H384-uncased
+# Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
+ettin_subset_exclude: []
 
 retriever: "naver/splade-v3-distilbert" #BM25
 
@@ -66,21 +67,12 @@ evaluation:
 grid_search:
     base:
         values_list:
-            - jhu-clsp/ettin-encoder-32m
-            - microsoft/MiniLM-L12-H384-uncased
-            # - microsoft/deberta-v3-base
-            # - jhu-clsp/ettin-encoder-17m
-            # - jhu-clsp/ettin-encoder-68m
+            - jhu-clsp/ettin-encoder-68m
+            # - jhu-clsp/ettin-encoder-32m
+            # - microsoft/MiniLM-L12-H384-uncased
 
     learner.loss:
         values_list:
-            # - bce
-            # - hingeLoss
-            # - marginMSE
-            # - ADR_MSE
-            # - hingeLoss_Colbertv2Neg
-            # - BCE_Colbertv2Neg
-            # - hingeLoss
-            # - distillRankNET
-            - infoNCE_Colbertv2Neg
-            - infoNCE_RankDistiLLM
+            - MSE_mixedbread_large
+            # - infoNCE_Colbertv2Neg
+            # - infoNCE_RankDistiLLM

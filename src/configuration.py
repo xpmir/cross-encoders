@@ -60,6 +60,9 @@ class Losses(str, Enum):
     ADR_MSE = "ADR_MSE"
     """Listwise distillation loss proposed by Schlatt et al. 2025"""
 
+    MSE_mixedbread_large = "MSE_mixedbread_large"
+    """Plain pointwise MSE loss on cross-encoder/ettin-reranker-v1-data teacher scores"""
+
 
 class PoolingMethod(str, Enum):
     """Possible pooling methods"""
@@ -351,6 +354,9 @@ class PlaidConfiguration:
 class CE_FineTuning(RerankerMSMarcoV1Configuration):
     nb_repetitions: int = field(default=1)
     """Number of repetitions of the training process"""
+
+    ettin_subset_exclude: List[str] = field(factory=list)
+    """The subset config names of cross_encoder.ettin_reranker_v1_data to exclude from training"""
 
     indexation: Indexation = Factory(Indexation)
     retrieval: Retrieval = Factory(Retrieval)
