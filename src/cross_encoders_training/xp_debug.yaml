@@ -14,8 +14,46 @@ nb_repetitions: 1
 base: "microsoft/MiniLM-L12-H384-uncased"
 max_length: 1024
 
-# Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
-ettin_subset_exclude: []
+# Subsets of the ettin-reranker-v1-data dataset to exclude (only keeping rerank_msmarco for debug speed)
+ettin_subset_exclude:
+  - agnews
+  - altlex
+  - amazon_qa
+  - amazon_reviews
+  - arxiv_title_abstract
+  - beir_dbpedia
+  - biorxiv_title_abstract
+  - cc_news_en
+  - cnn_dailymail
+  - fw_edu
+  - gooaq_qa
+  - medrxiv_title_abstract
+  - msmarco
+  - mtp
+  - npr
+  - paq
+  - quora
+  - reddit
+  - reddit_body_comment
+  - rerank_fever
+  - rerank_fiqa
+  - rerank_hotpotqa
+  - rerank_nq
+  - rerank_squadv2
+  - rerank_trivia
+  - s2orc_abstract_citation
+  - s2orc_citation_titles
+  - s2orc_title_abstract
+  - stackexchange_body_body
+  - stackexchange_duplicate_questions
+  - stackexchange_qa
+  - stackexchange_title_body
+  - stackoverflow_title_body
+  - wikianswers
+  - wikihow
+  - yahoo_answer
+  - yahoo_qa
+  - yahoo_question_body
 
 retriever: "naver/splade-v3-distilbert" #BM25
 

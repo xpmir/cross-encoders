@@ -16,6 +16,17 @@ learner:
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 ettin_subset_exclude: []
 
+
+evaluation:
+    all_datasets: false
+    in_domain: true
+    beir13: false
+    datasets:
+        - arguana
+        - touche
+        - nfcorpus
+    # nanobeir: true
+
 #### Params that are grid searched
 grid_search:
     base:
@@ -24,3 +35,4 @@ grid_search:
     learner.loss:
         values_list:
             - MSE_mixedbread_large
+            - marginMSE

@@ -44,6 +44,7 @@ from xpmir.letor.distillation.pairwise import (
 from pointwise_distillation import (
     PointwiseDistillationSampler,
     PointwiseDistillationTrainer,
+    PointwiseMSELoss,
 )
 from samplers import prepare_collection
 from configuration import Losses, CE_FineTuning
@@ -217,10 +218,22 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             dataset_id = (
                 f"cross_encoder.ettin_reranker_v1_data[name={name},streaming=false]"
             )
-            samples_list.append(prepare_collection(dataset_id))
+            dataset_config = prepare_collection(dataset_id)
+
+            # Force instantiation and access .data on login node to trigger HF download/cache
+            try:
+                logger.info(f"Ensuring Ettin subset '{name}' is cached locally...")
+                _ = dataset_config.instance().data
+            except Exception as e:
+                logger.warning(
+                    f"Could not pre-download/cache Ettin subset '{name}': {e}"
+                )
+
+            samples_list.append(dataset_config)
 
         return PointwiseDistillationTrainer.C(
             sampler=PointwiseDistillationSampler.C(samples=samples_list),
+            lossfn=PointwiseMSELoss.C(),
             batch_size=cfg.learner.optimization.batch_size,
         )
 
