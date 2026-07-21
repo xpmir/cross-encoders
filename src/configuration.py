@@ -355,6 +355,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     nb_repetitions: int = field(default=1)
     """Number of repetitions of the training process"""
 
+    attn_implementation: Optional[str] = field(default=None)
+    """Attention implementation for HuggingFace models (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
+
     ettin_subset_exclude: List[str] = field(factory=list)
     """The subset config names of cross_encoder.ettin_reranker_v1_data to exclude from training"""
 
