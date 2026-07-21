@@ -515,7 +515,7 @@ dependencies = [
     { name = "tiktoken", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform == 'darwin'" },
     { name = "torch", version = "2.11.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "sys_platform == 'linux'" },
-    { name = "transformers", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "transformers", extra = ["kernels"], marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "xpm-torch", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
@@ -558,7 +558,7 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "torch", marker = "sys_platform != 'darwin'", index = "https://download.pytorch.org/whl/cu126" },
     { name = "torch", marker = "sys_platform == 'darwin'" },
-    { name = "transformers", specifier = ">=5.0.0" },
+    { name = "transformers", extras = ["kernels"], specifier = ">=5.0.0" },
     { name = "xpm-torch", editable = "xpm-torch" },
 ]
 
@@ -1743,6 +1743,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d6/2c/90153f189e421e93c4bb4f9e3f59802a1f01abd2ac5cf40b152d7f735232/jupyterlab_server-2.28.0.tar.gz", hash = "sha256:35baa81898b15f93573e2deca50d11ac0ae407ebb688299d3a5213265033712c", size = 76996, upload-time = "2025-10-22T13:59:18.37Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/07/a000fe835f76b7e1143242ab1122e6362ef1c03f23f83a045c38859c2ae0/jupyterlab_server-2.28.0-py3-none-any.whl", hash = "sha256:e4355b148fdcf34d312bbbc80f22467d6d20460e8b8736bf235577dd18506968", size = 59830, upload-time = "2025-10-22T13:59:16.767Z" },
+]
+
+[[package]]
+name = "kernels"
+version = "0.12.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "packaging", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "pyyaml", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b3/84/9f68f355f6ce99e977872021fbdbafadcf2820f51d3f7bd697ec3801cb7a/kernels-0.12.3.tar.gz", hash = "sha256:87e29716578e7e71dc5a7578e0132bfdae305bedaeb602698f87c88ca6c60e32", size = 57407, upload-time = "2026-03-20T10:20:42.166Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/3e/778e4a86830e9139df2d16d86c4488fce426ec19daa83cbd2854ef389030/kernels-0.12.3-py3-none-any.whl", hash = "sha256:5d1d33fcb774e03bb7f0688ac24d91ef6b963692f80f0a85ddd2286e69f3cf2f", size = 55501, upload-time = "2026-03-20T10:20:40.643Z" },
 ]
 
 [[package]]
@@ -4174,6 +4188,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e7/e6/4134ea2fbea322cddc7ffc94a0d8ee47fe32ce8e876b320cd37d88edfc4d/transformers-5.8.1.tar.gz", hash = "sha256:4dd5b6de4105725104d84fd6abd74b305f4debfc251b38c648ee5dd087cf543b", size = 8532019, upload-time = "2026-05-13T03:21:57.234Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fc/b1/8be7e7ef0b5200491312201918b6125ef9c9df9dd0f0240ccef9ac824e6b/transformers-5.8.1-py3-none-any.whl", hash = "sha256:5340fb95962162cdfdae5cc91d7f8fedd92ed75216c1154c5e1f590fcf56dd0e", size = 10632882, upload-time = "2026-05-13T03:21:52.876Z" },
+]
+
+[package.optional-dependencies]
+kernels = [
+    { name = "kernels", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [[package]]

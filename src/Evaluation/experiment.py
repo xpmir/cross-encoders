@@ -24,6 +24,8 @@ from functools import partial
 import pandas as pd
 
 from experimaestro.launcherfinder import find_launcher
+from experimaestro.experiments.grid import generate_grid
+
 from xpm_torch.huggingface import prepare_hf_model
 
 from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
@@ -74,6 +76,16 @@ class BaselinesConfig(NeuralIRExperiment):
 
 @ir_experiment()
 def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
+    configs, tags = generate_grid(cfg)
+
+    if len(configs) > 1:
+        raise ValueError(
+            f"Evaluation script does not support grid search, but {len(configs)} "
+            "configurations were generated. Please remove multiple values from your YAML."
+        )
+
+    cfg = configs[0]
+
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
@@ -107,6 +119,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                         retriever_hf_id,
                         splade_encoder,
                         launcher_index=launcher_index,
+                        topk=cfg.retrieval.k,
                         init_tasks=retriever_init_tasks,
                     ),
                     retriever_init_tasks,

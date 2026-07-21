@@ -35,9 +35,9 @@ ettin_subset_exclude:
   - quora
   - reddit
   - reddit_body_comment
-  - rerank_fever
 #   - rerank_msmarco
 #   - rerank_squadv2
+  - rerank_fever
   - rerank_fiqa
   - rerank_hotpotqa
   - rerank_nq
@@ -57,6 +57,8 @@ ettin_subset_exclude:
   - yahoo_question_body
 
 retriever: "naver/splade-v3-distilbert" #BM25
+use_st_scorer: false # Use HFCrossScorer instead of STCrossEncoder
+
 
 preprocessing:
     requirements: duration=8h & cpu(cores=16, mem=10G)

@@ -1,27 +1,16 @@
 from enum import Enum
-import copy
-import attr
 from attrs import Factory, field
 from typing import (
     Any,
     Dict,
     List,
     Optional,
-    Tuple,
-    TypeVar,
-    Union,
-    Type,
-    get_args,
-    get_origin,
-    get_type_hints,
-    Annotated,
 )
-from pydantic import BeforeValidator
+from experimaestro.experiments.grid import GridSearch
 from xpm_torch.experiments.configuration import TransformerOptimization, Fabric
 from xpmir.papers import configuration
 from xpmir.experiments.helpers import LauncherSpecification
 from xpmir.datasets.msmarco import RerankerMSMarcoV1Configuration
-from itertools import product
 import logging
 
 logger = logging.getLogger(__name__)
@@ -88,134 +77,6 @@ class Validation(str, Enum):
 
     ALL = "all"
     """ Both Nano MSMARCO and NanoBEIR validations"""
-
-
-T = TypeVar("T", int, str, float)
-
-
-def to_params(obj: Any) -> Any:
-    if isinstance(obj, dict):
-        # If it looks like a GenericParams dict, convert it.
-        # A simple heuristic: check for 'value', 'values_list', or 'values_range'.
-        d = dict(obj)
-        if any(k in d for k in ["value", "values_list", "values_range"]):
-            return GenericParams.from_any(d)
-    return obj
-
-
-@configuration()
-class GenericParams:
-    value: Any = None
-    values_list: Optional[List[Any]] = None
-    values_range: Optional[Tuple[int, int]] = None
-
-    @property
-    def is_grid(self) -> bool:
-        """Returns True if this defines a search space (multiple values)"""
-        return len(self.as_list()) > 1
-
-    def as_list(self) -> List[Any]:
-        if self.values_list:
-            return list(self.values_list)
-        if self.values_range:
-            return list(range(self.values_range[0], self.values_range[1]))
-        if self.value is not None:
-            return [self.value]
-        return []
-
-    @classmethod
-    def from_any(cls, obj: Any, target_type: Type = Any) -> "GenericParams":
-        def converter(value: Any) -> Any:
-            """Attempts to convert a value to the target_type."""
-            if target_type is Any:
-                return value
-
-            types_to_try = []
-            if get_origin(target_type) is Union:
-                types_to_try.extend(get_args(target_type))
-            else:
-                types_to_try.append(target_type)
-
-            for t in types_to_try:
-                if t is type(None):
-                    continue
-                try:
-                    return t(value)
-                except (ValueError, TypeError):
-                    continue
-
-            return value
-
-        # 1. Already the right type
-        if isinstance(obj, cls):
-            return obj
-
-        # 2. It's a raw value
-        if isinstance(obj, (str, int, float, bool)):
-            return cls(value=converter(obj))
-
-        # 3. It's a list
-        if isinstance(obj, (list, tuple)):
-            return cls(values_list=[converter(v) for v in obj])
-
-        # 4. It's a dict
-        if isinstance(obj, dict):
-            d = dict(obj)
-            value = d.get("value")
-            values_list = d.get("values_list")
-
-            if value is not None:
-                value = converter(value)
-
-            if values_list is not None:
-                values_list = [converter(v) for v in values_list]
-
-            return cls(
-                value=value,
-                values_list=values_list,
-                values_range=(
-                    tuple(d.get("values_range")) if "values_range" in d else None
-                ),
-            )
-
-        return cls(value=converter(obj))
-
-
-def _coerce_to_generic_params(v: Any) -> Any:
-    if isinstance(v, GenericParams):
-        return v
-    return GenericParams.from_any(v)
-
-
-GridSearch = Annotated[
-    Union[T, GenericParams],
-    BeforeValidator(_coerce_to_generic_params),
-]
-"""
-Type alias for configuration fields supporting inline grid search.
-
-This type allows a configuration field to accept either a single scalar value
-or a grid search definition (e.g., list of values) directly in the YAML.
-These values are automatically coerced into a `GenericParams` object during
-Pydantic validation, and later unpacked into scalar values during grid generation.
-
-Example Usage in a Configuration Class:
-    @configuration()
-    class MyConfig(Config):
-        # Default scalar value
-        learning_rate: GridSearch[float] = 1e-5
-        batch_size: GridSearch[int] = 32
-
-Example Usage in YAML:
-    # 1. Scalar value (no grid search, regular run)
-    learning_rate: 1e-5
-
-    # 2. Inline grid search (will generate 2 separate experiment configurations)
-    learning_rate: [1e-5, 2e-5]
-
-    # 3. Range-based grid search (using GenericParams dict structure)
-    batch_size: {"values_range": [16, 64]}
-"""
 
 
 @configuration()
@@ -358,6 +219,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     attn_implementation: Optional[str] = field(default=None)
     """Attention implementation for HuggingFace models (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
 
+    use_st_scorer: bool = field(default=True)
+    """Use sentence-transformers STCrossEncoder instead of HFCrossScorer"""
+
     ettin_subset_exclude: List[str] = field(factory=list)
     """The subset config names of cross_encoder.ettin_reranker_v1_data to exclude from training"""
 
@@ -418,174 +282,3 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
       pooling_method:
         value: "cls"
     """
-
-
-def set_nested_attr(obj: Any, path: str, value: Any):
-    """Sets a nested attribute on an object."""
-    keys = path.split(".")
-    current = obj
-    for key in keys[:-1]:
-        current = getattr(current, key)
-    setattr(current, keys[-1], value)
-
-
-def get_nested_attr_type(obj: Any, path: str) -> Any:
-    """
-    Traverses a nested object to find the type hint of the final attribute.
-    Raises ValueError if the path is invalid.
-    """
-    keys = path.split(".")
-    current_obj = obj
-    for i, key in enumerate(keys[:-1]):
-        if not hasattr(current_obj, key):
-            raise ValueError(
-                f"Invalid grid search path '{path}': "
-                f"'{key}' not found in {type(current_obj).__name__} "
-                f"(at level {'.'.join(keys[:i]) if i > 0 else 'root'})"
-            )
-        current_obj = getattr(current_obj, key)
-
-    last_key = keys[-1]
-    if not hasattr(current_obj, last_key):
-        raise ValueError(
-            f"Invalid grid search path '{path}': "
-            f"'{last_key}' not found in {type(current_obj).__name__} "
-            f"(at level {'.'.join(keys[:-1]) if len(keys) > 1 else 'root'})"
-        )
-
-    try:
-        type_hints = get_type_hints(type(current_obj))
-        return type_hints.get(last_key, Any)
-    except Exception:
-        return Any
-
-
-def discover_grid_params(obj: Any, prefix: str = "") -> Dict[str, GenericParams]:
-    """Recursively find all GenericParams instances in an attrs object"""
-    found = {}
-    if attr.has(type(obj)):
-        for f in attr.fields(type(obj)):
-            val = getattr(obj, f.name)
-            path = f"{prefix}.{f.name}" if prefix else f.name
-            if isinstance(val, GenericParams) and val.is_grid:
-                found[path] = val
-            elif val is not None and not isinstance(val, (str, int, float, bool, Enum)):
-                found.update(discover_grid_params(val, path))
-    return found
-
-
-def finalize_config(obj: Any):
-    """Recursively convert all non-grid GenericParams to scalars"""
-    if attr.has(type(obj)):
-        for f in attr.fields(type(obj)):
-            val = getattr(obj, f.name)
-            if isinstance(val, GenericParams) and not val.is_grid:
-                setattr(obj, f.name, val.value)
-            elif val is not None and not isinstance(val, (str, int, float, bool, Enum)):
-                finalize_config(val)
-
-
-def generate_grid(cfg: Any) -> Tuple[List, List[dict]]:
-    """
-    Generates a list of configuration permutations for a grid search, based
-    on a `grid_search` dictionary in the main configuration object.
-
-    The `grid_search` dictionary should map dot-separated attribute paths
-    to a list of values or a GenericParams-style object.
-
-    Example `grid_search` in config:
-    {
-        "learner.optimization.lr": [1e-5, 2e-5],
-        "pooling_method": {"value": "cls"}
-    }
-    returns:
-     configs: List[Configs] the list of all configs
-     tags: a list of dicts with the same length as configs, where each dict contains the parameter values that were set for that config. For example:
-     [
-        {"learner.optimization.lr": 1e-5, "pooling_method": "cls"},
-        {"learner.optimization.lr": 2e-5, "pooling_method": "cls"}
-     ]
-    """
-    # 1. Discover inline grid parameters
-    grid_params = discover_grid_params(cfg)
-
-    # 2. Merge with explicit grid_search block
-    if hasattr(cfg, "grid_search") and cfg.grid_search:
-        for path, gp in cfg.grid_search.items():
-            if isinstance(gp, GenericParams):
-                grid_params[path] = gp
-            else:
-                grid_params[path] = GenericParams.from_any(gp)
-
-    # If no grid parameters found, just return the original config.
-    if not grid_params:
-        logger.info("no params to grid search, returning raw config")
-        new_cfg = copy.deepcopy(cfg)
-        finalize_config(new_cfg)
-        return [new_cfg], [{}]
-
-    param_paths = list(grid_params.keys())
-
-    value_options = []
-    for path in param_paths:
-        # get target type for this parameter from the config class using the path
-        # raises an error if the attribute is invalid
-        target_type = get_nested_attr_type(cfg, path)
-
-        # This converter is defined locally to have access to the target_type
-        def converter(value: Any) -> Any:
-            if target_type is Any:
-                return value
-            types_to_try = [
-                t
-                for t in (
-                    get_args(target_type)
-                    if get_origin(target_type) is Union
-                    else [target_type]
-                )
-                if t is not type(None)
-            ]
-            for t in types_to_try:
-                try:
-                    return t(value)
-                except (ValueError, TypeError):
-                    continue
-            return value
-
-        # The framework likely pre-instantiates GenericParams, so we get the object,
-        # extract its raw values, and convert them just-in-time.
-        gp_from_framework = (
-            grid_params[path]
-            if isinstance(grid_params[path], GenericParams)
-            else GenericParams.from_any(grid_params[path])
-        )
-        raw_values = gp_from_framework.as_list()
-        converted_values = [converter(v) for v in raw_values]
-        value_options.append(converted_values)
-
-    # Generate Cartesian product of all parameter values
-    grid_combinations = product(*value_options)
-
-    output_configs = []
-    tags = []
-    # Create a base configuration to be copied for each permutation
-    # and clear its grid_search to make generated configs clean.
-    base_cfg = copy.deepcopy(cfg)
-    base_cfg.grid_search = {}
-    logger.info("Building grid search configs")
-    for combination in grid_combinations:
-        cfg_tags = {}
-        new_cfg = copy.deepcopy(base_cfg)
-        for path, value in zip(param_paths, combination):
-            cfg_tags[path] = value
-            set_nested_attr(new_cfg, path, value)
-
-        # Convert any remaining single-value GenericParams to scalars
-        finalize_config(new_cfg)
-
-        output_configs.append(new_cfg)
-        tags.append(cfg_tags)
-
-    # If the product is empty (e.g., one of the value lists was empty),
-    # this will correctly return an empty list.
-    return output_configs, tags

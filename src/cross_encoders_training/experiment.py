@@ -14,6 +14,7 @@ import numpy as np
 
 from experimaestro import setmeta, stop_tags, RunMode
 from experimaestro.launcherfinder import find_launcher
+from experimaestro.experiments.grid import generate_grid
 
 from xpm_torch import Random
 from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_experiment
@@ -26,10 +27,11 @@ from xpmir.neural.huggingface import hf_cross_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
+from xpmir.neural.sentence_transformers import st_cross_scorer
 
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
-from configuration import CE_FineTuning, generate_grid
+from configuration import CE_FineTuning
 from tests import build_tests
 from format import loss_names, backbone_names_lower
 
@@ -153,12 +155,19 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
         ce_trainer: LossTrainer = build_trainer(cfg)
 
         # Build the model
-        scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
-            hf_id=cfg.base,
-            max_length=cfg.max_length,
-            max_query_length=cfg.max_query_length,
-            max_doc_length=cfg.max_doc_length,
-        )
+        if getattr(cfg, "use_st_scorer", False):
+            scorer_model, scorer_hf_init_tasks = st_cross_scorer(
+                model_id=cfg.base,
+                max_length=cfg.max_length,
+                attn_implementation=getattr(cfg, "attn_implementation", None),
+            )
+        else:
+            scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
+                hf_id=cfg.base,
+                max_length=cfg.max_length,
+                max_query_length=cfg.max_query_length,
+                max_doc_length=cfg.max_doc_length,
+            )
 
         for k, v in cfg_tags.items():
             scorer_model.tag(k, v)
