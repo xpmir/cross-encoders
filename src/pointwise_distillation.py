@@ -43,6 +43,23 @@ def pointwise_distillation_collate(
     )
 
 
+class PreShuffledPointwiseDataset(ShardedIterableDataset):
+    def __init__(self, combined_hf, sample_builder):
+        super().__init__()
+        self.hf_data = combined_hf
+        self.sample_builder = sample_builder
+
+    def iter_shard(
+        self, shard_id: int, num_shards: int
+    ) -> Iterator[PointwiseDistillationSample]:
+        # Use contiguous=True to guarantee sequential disk reads for the worker
+        shard = self.hf_data.shard(
+            num_shards=num_shards, index=shard_id, contiguous=True
+        )
+        for row in shard:
+            yield self.sample_builder._build_sample(row)
+
+
 class PointwiseDistillationSampler(Sampler):
     """Sampler wrapper for pointwise distillation datasets"""
 
@@ -50,24 +67,29 @@ class PointwiseDistillationSampler(Sampler):
 
     def initialize(self, random: np.random.RandomState):
         super().initialize(random)
+        self.rng = random
 
     def as_dataset(self) -> ShardedIterableDataset:
-        class PointwiseSamplesDataset(ShardedIterableDataset):
-            def __init__(self, samples_list):
-                super().__init__()
-                self.samples_list = samples_list
+        from datasets import concatenate_datasets
 
-            def iter_shard(
-                self, shard_id: int, num_shards: int
-            ) -> Iterator[PointwiseDistillationSample]:
-                idx = 0
-                for samples in self.samples_list:
-                    for sample in samples:
-                        if idx % num_shards == shard_id:
-                            yield sample
-                        idx += 1
+        hf_datasets = []
+        for s in self.samples:
+            if not hasattr(s, "data"):
+                raise ValueError(
+                    "All samples must be HuggingFace datasets with a .data property for pre-shuffling."
+                )
+            hf_datasets.append(s.data)
 
-        return InfiniteDataset(PointwiseSamplesDataset(self.samples))
+        # Concatenate, shuffle (with fixed seed across ranks to avoid fingerprint mismatch), and flatten to disk cache
+        seed = self.rng.randint(0, 2**32 - 1)
+        combined_hf = (
+            concatenate_datasets(hf_datasets).shuffle(seed=seed).flatten_indices()
+        )
+
+        # Pass the first sample config as the builder (assumes identical schemas)
+        return InfiniteDataset(
+            PreShuffledPointwiseDataset(combined_hf, self.samples[0])
+        )
 
 
 class DistillationPointwiseLoss(Config, nn.Module):

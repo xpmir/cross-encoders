@@ -16,6 +16,7 @@ max_length: 1024
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (only keeping rerank_msmarco for debug speed)
 ettin_subset_exclude:
+#   - rerank_msmarco
   - agnews
   - altlex
   - amazon_qa
@@ -71,8 +72,7 @@ validation:
 learner:
     optimization:
         steps_per_epoch: 100
-        batch_size: 32
-        max_epochs: 300 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        max_epochs: 400 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
         num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
         lr: 7e-6
@@ -82,7 +82,7 @@ learner:
     # sample_max: 2_000_000
     max_grad_norm: 1.0
     checkpoint_interval: 50
-    validation_interval: 10
+    validation_interval: 20
     validation_top_k: 100
     validation: nanobeir11
     requirements: duration=20h & cpu(cores=4) & cuda(mem=40G)
@@ -94,11 +94,13 @@ retrieval:
 
 evaluation:
     test_max_topics: 100
-    in_domain: false
     beir13: false
+    in_domain: true
     datasets:
         - arguana
         - touche
+        - nfcorpus
+
     # nanobeir: true
 
 #### Params that are grid searched
@@ -112,5 +114,16 @@ grid_search:
     learner.loss:
         values_list:
             - MSE_mixedbread_large
+            # - marginMSE
+
+    learner.optimization.lr:
+        values_list:
+            - 7e-6
+            - 3e-5 #tom aarsen value
+
+    learner.optimization.batch_size:
+        values_list:
+            - 64
+            # - 128
             # - infoNCE_Colbertv2Neg
             # - infoNCE_RankDistiLLM

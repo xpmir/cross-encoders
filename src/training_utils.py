@@ -219,16 +219,6 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
                 f"cross_encoder.ettin_reranker_v1_data[name={name},streaming=false]"
             )
             dataset_config = prepare_collection(dataset_id)
-
-            # Force instantiation and access .data on login node to trigger HF download/cache
-            try:
-                logger.info(f"Ensuring Ettin subset '{name}' is cached locally...")
-                _ = dataset_config.instance().data
-            except Exception as e:
-                logger.warning(
-                    f"Could not pre-download/cache Ettin subset '{name}': {e}"
-                )
-
             samples_list.append(dataset_config)
 
         return PointwiseDistillationTrainer.C(
