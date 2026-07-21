@@ -221,8 +221,17 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             dataset_config = prepare_collection(dataset_id)
             samples_list.append(dataset_config)
 
+        from pointwise_distillation import FlattenAndShuffleDataset
+
+        # Submit the preprocessing task to the indexing launcher
+        launcher_indexing = find_launcher(cfg.preprocessing.requirements)
+        seed = getattr(cfg, "seed", 42)
+        shuffled_dataset_config = FlattenAndShuffleDataset.C(
+            samples=samples_list, seed=seed
+        ).submit(launcher=launcher_indexing)
+
         return PointwiseDistillationTrainer.C(
-            sampler=PointwiseDistillationSampler.C(samples=samples_list),
+            sampler=PointwiseDistillationSampler.C(dataset=shuffled_dataset_config),
             lossfn=PointwiseMSELoss.C(),
             batch_size=cfg.learner.optimization.batch_size,
         )

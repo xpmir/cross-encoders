@@ -2,13 +2,14 @@
 
 from typing import List, TypedDict, Iterator
 from typing_extensions import ReadOnly
+from pathlib import Path
 import sys
 import numpy as np
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from experimaestro import Param, field, Config
+from experimaestro import Param, field, Config, Task, Meta, PathGenerator
 from xpm_torch.trainers import LossTrainer, TrainerContext
 from xpm_torch.losses import Loss
 from xpm_torch.datasets import ShardedIterableDataset, InfiniteDataset
@@ -43,10 +44,50 @@ def pointwise_distillation_collate(
     )
 
 
+class FlattenAndShuffleDataset(Task):
+    """Concatenate, shuffle, and flatten HuggingFace datasets on a CPU node."""
+
+    samples: Param[list[PointwiseDistillationSamples]]
+    seed: Param[int]
+
+    output_dir: Meta[Path] = field(default_factory=PathGenerator("shuffled_dataset"))
+
+    def execute(self):
+        import os
+        from datasets import concatenate_datasets
+
+        hf_datasets = [s.data for s in self.samples]
+
+        combined_hf = concatenate_datasets(hf_datasets)
+        shuffled = combined_hf.shuffle(seed=self.seed)
+
+        # Maximize speed by using all allocated CPUs
+        num_proc = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+
+        # Multiprocessing flatten with larger batches to reduce I/O overhead
+        flattened = shuffled.flatten_indices(num_proc=num_proc, writer_batch_size=10000)
+
+        # Save to the task's output directory concurrently
+        flattened.save_to_disk(self.output_dir, num_proc=num_proc)
+
+    def __submit__(self, dep, add_action, **kwargs):
+        first = self.samples[0]
+
+        # Generically extract all parameters from the original config
+        params = {k: getattr(first, k) for k in first.__xpmtype__.arguments.keys()}
+
+        # Override the path and streaming behavior
+        params["local_path"] = self.output_dir
+        params["streaming"] = False
+
+        # Returns a new config of the EXACT SAME CLASS
+        return dep(first.__class__.C(**params))
+
+
 class PreShuffledPointwiseDataset(ShardedIterableDataset):
-    def __init__(self, combined_hf, sample_builder):
+    def __init__(self, hf_data, sample_builder):
         super().__init__()
-        self.hf_data = combined_hf
+        self.hf_data = hf_data
         self.sample_builder = sample_builder
 
     def iter_shard(
@@ -63,33 +104,25 @@ class PreShuffledPointwiseDataset(ShardedIterableDataset):
 class PointwiseDistillationSampler(Sampler):
     """Sampler wrapper for pointwise distillation datasets"""
 
-    samples: Param[list[PointwiseDistillationSamples]]
+    dataset: Param[PointwiseDistillationSamples]
 
     def initialize(self, random: np.random.RandomState):
         super().initialize(random)
-        self.rng = random
 
     def as_dataset(self) -> ShardedIterableDataset:
-        from datasets import concatenate_datasets
+        from datasets import load_from_disk
+        from pathlib import Path
 
-        hf_datasets = []
-        for s in self.samples:
-            if not hasattr(s, "data"):
-                raise ValueError(
-                    "All samples must be HuggingFace datasets with a .data property for pre-shuffling."
-                )
-            hf_datasets.append(s.data)
+        # Experimaestro might pass local_path as a string or Path
+        local_path = getattr(self.dataset, "local_path", None)
+        if local_path and (Path(local_path) / "dataset_info.json").exists():
+            # The dataset was saved by our task using save_to_disk()
+            hf_dataset = load_from_disk(str(local_path))
+        else:
+            # Fall back to default load_dataset logic
+            hf_dataset = self.dataset.data
 
-        # Concatenate, shuffle (with fixed seed across ranks to avoid fingerprint mismatch), and flatten to disk cache
-        seed = self.rng.randint(0, 2**32 - 1)
-        combined_hf = (
-            concatenate_datasets(hf_datasets).shuffle(seed=seed).flatten_indices()
-        )
-
-        # Pass the first sample config as the builder (assumes identical schemas)
-        return InfiniteDataset(
-            PreShuffledPointwiseDataset(combined_hf, self.samples[0])
-        )
+        return InfiniteDataset(PreShuffledPointwiseDataset(hf_dataset, self.dataset))
 
 
 class DistillationPointwiseLoss(Config, nn.Module):
@@ -133,7 +166,7 @@ class PointwiseMSELoss(DistillationPointwiseLoss):
     def compute(
         self, student_scores: Tensor, teacher_scores: Tensor, context: TrainerContext
     ) -> Tensor:
-        return self.loss(student_scores, teacher_scores)
+        return self.loss(student_scores.view(-1), teacher_scores.view(-1))
 
 
 class PointwiseDistillationTrainer(LossTrainer):

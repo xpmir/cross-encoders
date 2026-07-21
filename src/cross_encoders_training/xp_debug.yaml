@@ -16,7 +16,6 @@ max_length: 1024
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (only keeping rerank_msmarco for debug speed)
 ettin_subset_exclude:
-#   - rerank_msmarco
   - agnews
   - altlex
   - amazon_qa
@@ -37,10 +36,11 @@ ettin_subset_exclude:
   - reddit
   - reddit_body_comment
   - rerank_fever
+#   - rerank_msmarco
+#   - rerank_squadv2
   - rerank_fiqa
   - rerank_hotpotqa
   - rerank_nq
-  - rerank_squadv2
   - rerank_trivia
   - s2orc_abstract_citation
   - s2orc_citation_titles
@@ -59,11 +59,11 @@ ettin_subset_exclude:
 retriever: "naver/splade-v3-distilbert" #BM25
 
 preprocessing:
-    requirements: duration=8h & cpu(cores=4)
+    requirements: duration=8h & cpu(cores=16, mem=10G)
 
 indexation:
     batch_size: 128
-    requirements: duration=20h & cpu(cores=4, mem=10G) & cuda(mem=24G)
+    requirements: duration=20h & cpu(cores=8, mem=10G) & cuda(mem=24G)
 
 validation:
     size: 500 # Use 500 topics for validation
@@ -118,7 +118,7 @@ grid_search:
 
     learner.optimization.lr:
         values_list:
-            - 7e-6
+            # - 7e-6
             - 3e-5 #tom aarsen value
 
     learner.optimization.batch_size:
