@@ -106,6 +106,8 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
             logging.info(f"Instantiating retriever {retriever_hf_id} ")
 
+            prepare_hf_model(retriever_hf_id)
+
             splade_encoder, retriever_init_tasks = splade_encoder_from_pretrained_hf(
                 retriever_hf_id
             )

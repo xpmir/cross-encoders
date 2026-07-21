@@ -35,13 +35,6 @@ ettin_subset_exclude:
   - quora
   - reddit
   - reddit_body_comment
-#   - rerank_msmarco
-#   - rerank_squadv2
-  - rerank_fever
-  - rerank_fiqa
-  - rerank_hotpotqa
-  - rerank_nq
-  - rerank_trivia
   - s2orc_abstract_citation
   - s2orc_citation_titles
   - s2orc_title_abstract
@@ -55,6 +48,13 @@ ettin_subset_exclude:
   - yahoo_answer
   - yahoo_qa
   - yahoo_question_body
+#   - rerank_msmarco
+#   - rerank_squadv2
+  - rerank_trivia
+  - rerank_fever
+  - rerank_fiqa
+  - rerank_hotpotqa
+  - rerank_nq
 
 retriever: "naver/splade-v3-distilbert" #BM25
 use_st_scorer: false # Use HFCrossScorer instead of STCrossEncoder
