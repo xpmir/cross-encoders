@@ -27,7 +27,6 @@ from xpmir.neural.huggingface import hf_cross_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
-from xpmir.neural.sentence_transformers import st_cross_scorer
 
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
@@ -37,7 +36,81 @@ from format import loss_names, backbone_names_lower
 
 from training_utils import build_trainer, process_experiment_results
 
+from typing import Optional
+from experimaestro import LightweightTask, Param
+from xpmir.neural.sentence_transformers import STCrossEncoder
+from sentence_transformers import CrossEncoder
+from sentence_transformers.cross_encoder import CrossEncoderModelCardData
+from sentence_transformers.models import Transformer, Pooling, Dense, LayerNorm
+from torch import nn
+
 logging.basicConfig(level=logging.INFO)
+
+
+class InitDistilledSTCrossEncoder(LightweightTask):
+    """Initializes the STCrossEncoder with a custom distillation architecture."""
+
+    model: Param[STCrossEncoder]
+    pref_attn_implementation: Param[Optional[str]] = None
+
+    def execute(self):
+        # Initialize basic component properties without triggering the default CrossEncoder load
+        super(STCrossEncoder, self.model).__initialize__()
+        # Mark as initialized so the framework doesn't try to call __initialize__ again later
+        self.model._initialized = True
+
+        encoder_size = self.model.model_id.split("-")[-1]
+
+        transformer = Transformer(
+            self.model.model_id,
+            max_seq_length=self.model.max_length,
+            model_kwargs={"attn_implementation": self.pref_attn_implementation},
+        )
+        transformer.model.config.num_labels = 1
+        embedding_dimension = transformer.get_embedding_dimension()
+
+        pooling = Pooling(embedding_dimension=embedding_dimension, pooling_mode="cls")
+        dense_inner = Dense(
+            in_features=embedding_dimension,
+            out_features=embedding_dimension,
+            bias=False,
+            activation_function=nn.GELU(),
+            module_input_name="sentence_embedding",
+            module_output_name="sentence_embedding",
+        )
+        norm = LayerNorm(dimension=embedding_dimension)
+        dense_score = Dense(
+            in_features=embedding_dimension,
+            out_features=1,
+            bias=True,
+            activation_function=nn.Identity(),
+            module_input_name="sentence_embedding",
+            module_output_name="scores",
+        )
+
+        # Override the native CrossEncoder with our custom pipeline
+        self.model.st_model = CrossEncoder(
+            modules=[transformer, pooling, dense_inner, norm, dense_score],
+            num_labels=1,
+            activation_fn=nn.Identity(),
+            model_card_data=CrossEncoderModelCardData(
+                model_name=f"Ettin Reranker {encoder_size} distilled from mxbai-rerank-large-v2",
+                language="en",
+                license="apache-2.0",
+            ),
+        )
+
+
+def build_STCrossEncoder(cfg) -> tuple[STCrossEncoder, list]:
+    """Helper factory to build the distilled STCrossEncoder."""
+    attn_impl = getattr(cfg, "pref_attn_implementation", "sdpa")
+    scorer = STCrossEncoder.C(
+        model_id=cfg.base, max_length=cfg.max_length, pref_attn_implementation=attn_impl
+    )
+    init_task = InitDistilledSTCrossEncoder.C(
+        model=scorer, pref_attn_implementation=attn_impl
+    )
+    return scorer, [init_task]
 
 
 def get_ce_name(model_tags: dict) -> str:
@@ -156,11 +229,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
         # Build the model
         if getattr(cfg, "use_st_scorer", False):
-            scorer_model, scorer_hf_init_tasks = st_cross_scorer(
-                model_id=cfg.base,
-                max_length=cfg.max_length,
-                attn_implementation=getattr(cfg, "attn_implementation", None),
-            )
+            scorer_model, scorer_hf_init_tasks = build_STCrossEncoder(cfg)
         else:
             scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
                 hf_id=cfg.base,

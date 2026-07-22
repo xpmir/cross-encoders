@@ -11,9 +11,6 @@ gpu: true
 seed: 12 # To mimick the HF xp
 nb_repetitions: 1
 
-base: "microsoft/MiniLM-L12-H384-uncased"
-max_length: 1024
-
 # Subsets of the ettin-reranker-v1-data dataset to exclude (only keeping rerank_msmarco for debug speed)
 ettin_subset_exclude:
   - agnews
@@ -56,8 +53,6 @@ ettin_subset_exclude:
   - yahoo_qa
   - yahoo_question_body
 
-retriever: "naver/splade-v3-distilbert" #BM25
-
 preprocessing:
     requirements: duration=8h & cpu(cores=16, mem=10G)
 
@@ -67,6 +62,11 @@ indexation:
 
 validation:
     size: 500 # Use 500 topics for validation
+
+retriever: "naver/splade-v3-distilbert" #BM25
+
+base: jhu-clsp/ettin-encoder-68m
+max_length: 1024
 
 # This set of hyperparameters follows: https://github.com/huggingface/sentence-transformers/blob/9f76b5790fa8f0175ccdc27e41f9ae348f557144/examples/training/ms_marco/train_cross-encoder-v2.py
 learner:
@@ -85,7 +85,7 @@ learner:
     validation_interval: 20
     validation_top_k: 100
     validation: nanobeir11
-    requirements: duration=2h & cpu(cores=8) & cuda(mem=40G)
+    requirements: duration=5h & cpu(cores=8) & cuda(mem=40G)
 
 retrieval:
     requirements: duration=20h & cpu(cores=8) & cuda(mem=20G)
@@ -105,10 +105,6 @@ evaluation:
 
 #### Params that are grid searched
 grid_search:
-    base:
-        values_list:
-            - jhu-clsp/ettin-encoder-68m
-
     learner.loss:
         values_list:
             - MSE_mixedbread_large
@@ -118,3 +114,8 @@ grid_search:
         values_list:
             - 64
             - 128
+
+    pref_attn_implementation:
+        values_list:
+            - flash_attention_2
+            - sdpa

@@ -216,7 +216,7 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     nb_repetitions: int = field(default=1)
     """Number of repetitions of the training process"""
 
-    attn_implementation: Optional[str] = field(default=None)
+    pref_attn_implementation: Optional[str] = field(default=None)
     """Attention implementation for HuggingFace models (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
 
     use_st_scorer: bool = field(default=True)

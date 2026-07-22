@@ -6,12 +6,12 @@ description:
 module: cross_encoders_training.experiment
 # pre_experiment: pre_experiment
 seed: 12 # To mimick the HF xp
-nb_repetitions: 3
+nb_repetitions: 2
 max_length: 1024
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 retriever: "naver/splade-v3-distilbert" #BM25
-use_st_scorer: false # Use HFCrossScorer instead of STCrossEncoder
+use_st_scorer: true # Use HFCrossScorer instead of STCrossEncoder
 base: jhu-clsp/ettin-encoder-68m
 
 preprocessing:
@@ -65,7 +65,9 @@ evaluation:
 grid_search:
     learner.optimization.batch_size:
         values_list:
-            - 64
             - 128
-            # - infoNCE_Colbertv2Neg
-            # - infoNCE_RankDistiLLM
+
+    pref_attn_implementation:
+        values_list:
+            - flash_attention_2
+            - sdpa
