@@ -8,7 +8,8 @@ from pathlib import Path
 from huggingface_hub import HfApi
 from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer
 
-logging.basicConfig(level=logging.INFO)
+from logging_utils import setup_logging
+setup_logging(level=logging.INFO)
 logger = logging.getLogger()
 
 

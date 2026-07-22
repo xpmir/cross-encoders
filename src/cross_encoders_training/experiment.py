@@ -44,7 +44,9 @@ from sentence_transformers.cross_encoder import CrossEncoderModelCardData
 from sentence_transformers.models import Transformer, Pooling, Dense, LayerNorm
 from torch import nn
 
-logging.basicConfig(level=logging.INFO)
+from logging_utils import setup_logging
+
+setup_logging(level=logging.INFO)
 
 
 class InitDistilledSTCrossEncoder(LightweightTask):

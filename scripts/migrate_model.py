@@ -5,7 +5,8 @@ import logging, shutil
 from pathlib import Path
 from experimaestro import Config
 
-logging.basicConfig(level=logging.INFO)
+from logging_utils import setup_logging
+setup_logging(level=logging.INFO)
 
 xps_root = Path.home() / "code" / "experiments" / "JZ"
 model_path = "train_mice_ettin32m_l4+4/20260521_194044/results/models/Mice-l4+4-ettin-32m"

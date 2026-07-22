@@ -3,7 +3,8 @@ import logging
 from transformers import AutoModel, AutoModelForSequenceClassification
 from MICE.modeling.mice import mice_scorer
 
-logging.basicConfig(level=logging.INFO)
+from logging_utils import setup_logging
+setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+from logging_utils import setup_logging
+setup_logging(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 class ExactMatchAttentionHead(nn.Module):

@@ -36,7 +36,8 @@ class TestMiceForwardTask(LightweightTask):
 
 
 def test_global_cls_token_all():
-    logging.basicConfig(level=logging.INFO)
+    from logging_utils import setup_logging
+setup_logging(level=logging.INFO)
 
     model_ids = [
         "cross-encoder/ms-marco-MiniLM-L-6-v2",

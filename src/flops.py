@@ -17,7 +17,9 @@ from models.mask_scorer import HFMaskedMiniLMCrossScorer, HFMaskedEttinCrossScor
 import logging
 
 # Setup logging
-logging.basicConfig(level=logging.WARNING)
+from logging_utils import setup_logging
+
+setup_logging(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # SRC_DIR is the directory containing this script (src/)

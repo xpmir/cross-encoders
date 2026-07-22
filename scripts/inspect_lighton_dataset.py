@@ -10,7 +10,8 @@ import sys
 from datamaestro import prepare_dataset
 
 # Set up logging to print to stderr/stdout nicely
-logging.basicConfig(
+from logging_utils import setup_logging
+setup_logging(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],

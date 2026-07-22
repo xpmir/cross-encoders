@@ -3,7 +3,8 @@ import logging
 from xpmir.text.huggingface.tokenizers import HFTokenizer
 from format import aggregations
 
-logging.basicConfig(level=logging.INFO)
+from logging_utils import setup_logging
+setup_logging(level=logging.INFO)
 
 if __name__ == '__main__':
     hf_id = "microsoft/MiniLM-L12-H384-uncased"

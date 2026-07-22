@@ -2,7 +2,8 @@ import torch
 from src.MICE.modeling.mice import mice_scorer
 import logging
 
-logging.basicConfig(level=logging.INFO)
+from logging_utils import setup_logging
+setup_logging(level=logging.INFO)
 
 
 def test_qwen_full_mice():

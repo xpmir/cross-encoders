@@ -21,7 +21,9 @@ from tests import minified_tests, paper_tests
 from configuration import Retrieval, Indexation, Preprocessing, Evaluation
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
-logging.basicConfig(level=logging.INFO)
+from logging_utils import setup_logging
+
+setup_logging(level=logging.INFO)
 
 
 @configuration()

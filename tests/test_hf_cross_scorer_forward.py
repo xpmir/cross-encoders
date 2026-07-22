@@ -9,7 +9,8 @@ from experimaestro import LightweightTask, Param
 from xpmir.neural.huggingface import hf_cross_scorer, HFCrossScorer
 
 # Set up logging to see what's happening
-logging.basicConfig(level=logging.INFO)
+from logging_utils import setup_logging
+setup_logging(level=logging.INFO)
 
 
 class TestHFForwardTask(LightweightTask):

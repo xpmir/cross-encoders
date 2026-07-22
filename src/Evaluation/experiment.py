@@ -45,7 +45,9 @@ from training_utils import add_dataset_aggregations
 
 import logging
 
-logging.basicConfig(level=logging.INFO)
+from logging_utils import setup_logging
+
+setup_logging(level=logging.INFO)
 
 
 @configuration()
