@@ -35,7 +35,8 @@ from xpmir.papers import configuration
 from MICE.modeling.mice import mice_scorer, MiceCrossEncoder
 from retrievers import splade_retriever, bm25_retriever, MicePlaidRetrieverFactory
 from validations import ValidationSet
-from configuration import generate_grid, CE_FineTuning, GridSearch
+from experimaestro.experiments.grid import generate_grid, GridSearch
+from configuration import CE_FineTuning
 from tests import build_tests
 from format import (
     loss_names,

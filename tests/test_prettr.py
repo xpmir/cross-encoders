@@ -4,7 +4,7 @@ Tests for the PreTTR model using the MICE test framework.
 
 import torch
 import pytest
-from MICE.experiments.baselines.prettr_mice import prettr_scorer, PreTTRCrossEncoder
+from MICE.modeling.prettr_mice import prettr_scorer, PreTTRCrossEncoder
 from xpmir.letor.records import PointwiseItems
 from experimaestro import LightweightTask, Param
 

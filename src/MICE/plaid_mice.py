@@ -21,12 +21,14 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 
 logger = logging.getLogger(__name__)
 
+
 class MicePlaidRetriever(Retriever):
     """Implements Plaid retrieval using a MICE BERT model.
-    At the moment, the PLAID index is only used for compressing documents, 
-    retrieval is run with a sparse retriever and documents are gathered with the 
+    At the moment, the PLAID index is only used for compressing documents,
+    retrieval is run with a sparse retriever and documents are gathered with the
     `get_document_tokens()` method of the index.
     """
+
     scorer: Param[AbstractModuleScorer]
     """The appropriate Mice scorer."""
 
@@ -43,7 +45,7 @@ class MicePlaidRetriever(Retriever):
         default_factory=FabricConfiguration.C
     )
     """Control the device for the model encoding and fast-plaid index."""
-    
+
     def initialize(self):
         super().initialize()
         if not self.index.compress_only:
@@ -62,7 +64,6 @@ class MicePlaidRetriever(Retriever):
             self.scorer = fabric.setup(self.scorer)
             self.scorer.eval()
 
-
     def _store(self):
         return self.index.documents
 
@@ -74,7 +75,9 @@ class MicePlaidRetriever(Retriever):
         doc_list: list = []
         for doc_id in scoredDocuments:
             token_embeddings = self.index.get_document_tokens(doc_id)
-            doc_list.append(token_embeddings.to(self.scorer.device)) # Move token embeddings to scorer device
+            doc_list.append(
+                token_embeddings.to(self.scorer.device)
+            )  # Move token embeddings to scorer device
 
         # Tokenize the queries
         tokenized_queries = self.scorer.batch_tokenize(
@@ -84,19 +87,22 @@ class MicePlaidRetriever(Retriever):
         with torch.no_grad():
             # Pass the tokenized queries and the doc embeddings through the MICE encoder to get the scores
             results = self.scorer(
-                tokenized=MICETokenizedTexts(tokenized_q=tokenized_queries, tokenized_docs=None),
+                tokenized=MICETokenizedTexts(
+                    tokenized_q=tokenized_queries, tokenized_docs=None
+                ),
                 doc_hidden_states=doc_list,
             )
-            
+
         single = results[0] if results else []
         out: List[ScoredDocument] = []
         for doc_index, score in single:
             out.append(
                 ScoredDocument(self._store().document_int(int(doc_index)), float(score))
             )
-        
+
         out.sort(reverse=True)
         return out[: (self.top_k or len(out))]
+
 
 class PlaidReRankingDataset(ShardedIterableDataset):
     """A dataset that yields PointwiseItem records for re-ranking"""
@@ -126,8 +132,8 @@ class PlaidReRankingDataset(ShardedIterableDataset):
             for sd in scored_docs:
                 yield PointwiseItem(query, sd.document, sd.score)
 
-class MicePlaidRetrieverv2(TwoStageRetriever):
 
+class MicePlaidRetrieverv2(TwoStageRetriever):
     index: Param[PlaidIndex]
     """The fast-plaid index to search."""
 
@@ -141,11 +147,13 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
         # get underlying module if wrapped (e.g. Fabric)
         scorer = self.scorer.module if hasattr(self.scorer, "module") else self.scorer
 
-        def tokenization_fn(records: List[IDTextRecord]) -> Optional[MICETokenizedTexts]:
+        def tokenization_fn(
+            records: List[IDTextRecord],
+        ) -> Optional[MICETokenizedTexts]:
             doc_list: list = []
             queries_list: list = []
             for record in records:
-                doc_list.append(record.document['id'])
+                doc_list.append(record.document["id"])
                 queries_list.append(record.topic)
 
             if issubclass(type(scorer), AbstractModuleScorer):
@@ -156,7 +164,9 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
 
         def collate_fn(batch: List[PointwiseItem]) -> RerankingInputs:
             inputs = reranking_collate(batch)
-            inputs["tokenized_queries"], inputs['doc_ids'] = tokenization_fn(inputs["records"])
+            inputs["tokenized_queries"], inputs["doc_ids"] = tokenization_fn(
+                inputs["records"]
+            )
             return inputs
 
         dataloader = StatefulDataLoader(
@@ -172,7 +182,6 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
             dataloader = fabric.setup_dataloaders(dataloader)
 
         return dataloader
-
 
     @torch.no_grad()
     def retrieve_all(
@@ -245,8 +254,10 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
 
                 scores = (
                     self.scorer(
-                        batch_items, 
-                        tokenized=MICETokenizedTexts(tokenized_q=tokenized_queries, tokenized_docs=None),
+                        batch_items,
+                        tokenized=MICETokenizedTexts(
+                            tokenized_q=tokenized_queries, tokenized_docs=None
+                        ),
                         doc_hidden_states=doc_token_embeddings,
                     )
                     .cpu()

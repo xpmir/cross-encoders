@@ -10,7 +10,7 @@ from xpmir.index.bow import BOWRetriever, BOWSparseRetrieverIndexBuilder
 from xpmir.evaluation import EvaluationsCollection, RetrieverFactory
 from xpmir.index.plaid import PlaidIndexBuilder
 
-from MICE.experiments.plaid_mice import MicePlaidRetrieverv2
+from MICE.plaid_mice import MicePlaidRetrieverv2
 from configuration import CE_FineTuning, PlaidConfiguration
 from index_utils import get_splade_index
 import logging

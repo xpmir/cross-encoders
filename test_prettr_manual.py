@@ -1,6 +1,6 @@
 import torch
 import pytest
-from src.MICE.experiments.baselines.prettr_mice import prettr_scorer, PreTTRCrossEncoder
+from MICE.modeling.prettr_mice import prettr_scorer, PreTTRCrossEncoder
 from xpmir.letor.records import PointwiseItems
 from experimaestro import LightweightTask, Param
 

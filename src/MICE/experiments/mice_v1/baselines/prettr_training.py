@@ -18,7 +18,7 @@ from xpmir.text.huggingface.tokenizers import get_default_max_len
 from xpmir.papers import configuration
 
 from MICE.experiments.mice_training import TrainEvaluateLateInteractionScorer
-from MICE.experiments.baselines.prettr_mice import prettr_scorer
+from MICE.modeling.prettr_mice import prettr_scorer
 from configuration import CE_FineTuning
 from format import (
     loss_names,

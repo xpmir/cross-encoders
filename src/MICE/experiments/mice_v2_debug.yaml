@@ -1,0 +1,51 @@
+id: debug_mice_v2_training
+title: "Debugging Mice V2 training"
+description:
+    💡 Debug config for ModernBERT Mice V2 training using ettin-encoder-17m
+
+module: MICE.experiments.micev2_training
+export_trained_models: false
+
+seed: 12
+nb_repetitions: 1
+
+preprocessing:
+    requirements: duration=1h & cpu(cores=4)
+
+indexation:
+    batch_size: 16
+    requirements: duration=1h & cpu(cores=4) & cuda(mem=10G)
+
+validation:
+    size: 20
+
+base:
+    - jhu-clsp/ettin-encoder-17m
+
+n_contextualization_layers: 2
+
+learner:
+    optimization:
+        steps_per_epoch: 5
+        batch_size: 8
+        max_epochs: 2
+        num_warmup_steps: 2
+        weight_decay: 0.00
+        lr: 1e-5
+    loss: marginMSE
+    max_grad_norm: 1.0
+    checkpoint_interval: 1
+    validation_interval: 1
+    validation_top_k: 10
+    requirements: duration=1h & cpu(cores=4) & cuda(mem=10G)
+
+retrieval:
+    requirements: duration=1h & cpu(cores=4) & cuda(mem=10G)
+    k: 10
+    batch_size: 8
+
+evaluation:
+    all_datasets: false
+    in_domain: true
+    datasets:
+        - nfcorpus
