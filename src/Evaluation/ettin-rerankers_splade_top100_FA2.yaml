@@ -7,11 +7,12 @@ pre_experiment: ../pre_experiment.py
 
 gpu: true
 
+attn_implementation: flash_attention_2
 max_length: 1024
 scorers_st_id:
-  - cross-encoder/ettin-reranker-17m-v1
   - cross-encoder/ettin-reranker-32m-v1
-  # - cross-encoder/ettin-reranker-68m-v1
+  - cross-encoder/ettin-reranker-68m-v1
+  # - cross-encoder/ettin-reranker-17m-v1
   # - cross-encoder/ettin-reranker-150m-v1
   # - cross-encoder/ettin-reranker-400m-v1
 
@@ -25,11 +26,12 @@ indexation:
   batch_size: 128
 
 retrieval:
-  requirements: duration=19h & cpu(cores=4, mem=10G) & cuda(mem=20G) * 2
+  # FA2 Runs only on h100
+  requirements: duration=19h & cpu(cores=4, mem=10G) & cuda(mem=80G)
   batch_size: 64
   k: 100
 
 evaluation:
-  #just for debugging
+  beir13: false
+  #just in domain to see if FA2
   in_domain: true
-  beir13: true

@@ -59,6 +59,9 @@ class BaselinesConfig(NeuralIRExperiment):
     scorers_hf_id: List[str] = []
     scorers_st_id: List[str] = []
 
+    attn_implementation: Optional[str] = None
+    """Preferred attention implementation (e.g. 'flash_attention_2', 'sdpa')"""
+
     max_length: Optional[int] = None
     """Maximum length for cross-encoders"""
 
@@ -188,14 +191,19 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                     max_length=cfg.max_length,
                     max_doc_length=cfg.max_doc_length,
                     max_query_length=cfg.max_query_length,
+                    pref_attn_implementation=cfg.attn_implementation,
                 )
             else:
                 scorer, ce_init_tasks = st_cross_scorer(
-                    model_id=scorer_id, max_length=cfg.max_length
+                    model_id=scorer_id,
+                    max_length=cfg.max_length,
+                    pref_attn_implementation=cfg.attn_implementation,
                 )
 
             scorer.tag("scorer", scorer_id)
             scorer.tag("scorer_type", scorer_type)
+            if cfg.attn_implementation:
+                scorer.tag("attn_implementation", cfg.attn_implementation)
 
             # Build the two stage retriever with the run_retriever
             two_stage_retriever_factory = partial(

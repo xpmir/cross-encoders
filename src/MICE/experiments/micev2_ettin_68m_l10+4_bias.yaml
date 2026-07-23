@@ -1,10 +1,11 @@
-id: train_micev2_ettin68m_l10+4_bias
+id: train_micev2_ettin68m_l10+4_lex_attn_implem
 title: "Mice-Ettin-68m Training"
 description:
     Base Training for Ettin-68m-based MICE model.
 
 module: MICE.experiments.micev2_training
 parent: ./mice_v1/mice_ettin_68m.yaml
+nb_repetitions: 2
 
 # This set of hyperparameters follows: https://github.com/huggingface/sentence-transformers/blob/9f76b5790fa8f0175ccdc27e41f9ae348f557144/examples/training/ms_marco/train_cross-encoder-v2.py
 learner:
@@ -15,3 +16,10 @@ max_length: 1024
 n_contextualization_layers: 10
 n_interaction_layers: 4
 extra_attn_bias: true
+
+#### Params that are grid searched
+grid_search:
+    attn_implementation:
+        values_list:
+            - sdpa
+            - flash_attention_2
