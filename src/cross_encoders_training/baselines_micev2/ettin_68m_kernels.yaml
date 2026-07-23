@@ -1,5 +1,5 @@
-id: baseline_ettin_68m_mse
-title: "Training Ettin-68m Reranker with MSE"
+id: baseline_ettin68_fa2_sdpa
+title: "Training Ettin-68m - Comparison of FlashAttention2 and SDPA"
 description:
     Configuration for training an ettin-68m model with the MSE_mixedbread_large loss on cross_encoder.ettin_reranker_v1_data.
 
@@ -52,7 +52,7 @@ retrieval:
     k: 100
 
 evaluation:
-    beir13: false
+    beir13: true
     in_domain: true
     datasets:
         - arguana
