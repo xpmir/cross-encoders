@@ -38,6 +38,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     bound_bottom_layers: GridSearch[bool] = True
     """Whether to bound bottom query and document encoding layers"""
 
+    attn_implementation: GridSearch[Optional[str]] = None
+    """Attention implementation (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
+
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
@@ -55,6 +58,7 @@ def build_mice_v2(
         n_docs_ctx_layers=cfg.n_docs_ctx_layers,
         n_interaction_layers=cfg.n_interaction_layers,
         bound_bottom_layers=cfg.bound_bottom_layers,
+        attn_implementation=cfg.attn_implementation,
         max_length=max_len,
     )
 
@@ -70,12 +74,15 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     n_docs_layers = model_tags.get("n_docs_ctx_layers", cfg.n_docs_ctx_layers)
     doc_suffix = f"-d{n_docs_layers}" if n_docs_layers is not None else ""
 
+    attn_impl = model_tags.get("attn_implementation", cfg.attn_implementation)
+    attn_suffix = f"-{attn_impl}" if attn_impl else ""
+
     loss = model_tags.get("loss", "")
     loss = loss_names.get(loss, loss).replace("/", "-")
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{attn_suffix}-{base}{loss}"
 
 
 @learning_experiment()

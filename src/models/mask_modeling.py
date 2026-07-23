@@ -197,7 +197,9 @@ class CustomMaskBertModel(BertModel, CustomMaskModel):
             else self.config.output_hidden_states
         )
         return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
+            return_dict
+            if return_dict is not None
+            else getattr(self.config, "return_dict", True)
         )
 
         if self.config.is_decoder:
@@ -380,7 +382,9 @@ class CustomMaskModernBertModel(ModernBertModel, CustomMaskModel):
             else self.config.output_hidden_states
         )
         return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
+            return_dict
+            if return_dict is not None
+            else getattr(self.config, "return_dict", True)
         )
 
         if (input_ids is None) ^ (inputs_embeds is not None):

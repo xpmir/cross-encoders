@@ -5,47 +5,62 @@ description:
 
 module: MICE.experiments.micev2_training
 export_trained_models: false
-
+parent: ./xp_debug.yaml
 seed: 12
 nb_repetitions: 1
 
+
 preprocessing:
-    requirements: duration=1h & cpu(cores=4)
+    requirements: duration=8h & cpu(cores=8)
 
 indexation:
-    batch_size: 16
-    requirements: duration=1h & cpu(cores=4) & cuda(mem=10G)
+    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
 
 validation:
-    size: 20
+    # Use 500 topics for validation
+    size: 500
 
-base:
-    - jhu-clsp/ettin-encoder-17m
-
-n_contextualization_layers: 2
-
+# Shared Training hyperparameters for all the Mini Mice Models
 learner:
     optimization:
-        steps_per_epoch: 5
-        batch_size: 8
-        max_epochs: 2
-        num_warmup_steps: 2
+        steps_per_epoch: 100
+        batch_size: 32
+        max_epochs: 100 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        num_warmup_steps: 5000 # Follows the original setup
         weight_decay: 0.00
-        lr: 1e-5
+        lr: 7e-6
+        eps: 1.0e-8
+    fabric:
+        precision: bf16-mixed
+    # sample_max: 2_000_000
     loss: marginMSE
     max_grad_norm: 1.0
-    checkpoint_interval: 1
-    validation_interval: 1
-    validation_top_k: 10
-    requirements: duration=1h & cpu(cores=4) & cuda(mem=10G)
+    checkpoint_interval: 100
+    validation_interval: 50
+    validation_top_k: 100
+    validation: nanobeir11
+    requirements: duration=2h & cpu(cores=16) & cuda(mem=80G)
 
 retrieval:
-    requirements: duration=1h & cpu(cores=4) & cuda(mem=10G)
-    k: 10
-    batch_size: 8
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
+    k: 100
+    batch_size: 64
 
 evaluation:
     all_datasets: false
     in_domain: true
     datasets:
         - nfcorpus
+
+
+base: jhu-clsp/ettin-encoder-68m
+max_length: 1024
+n_contextualization_layers: 10
+n_interaction_layers: 4
+
+#### Params that are grid searched
+grid_search:
+    attn_implementation:
+        values_list:
+            - sdpa
+            - flash_attention_2

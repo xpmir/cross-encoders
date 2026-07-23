@@ -3,10 +3,11 @@ ModernBERT MICE HuggingFace Implementation.
 Custom PreTrainedModel and Modules supporting SDPA, Flash Attention 2, and ST export.
 """
 
+import logging
 from typing import Optional, Tuple, Union
-
 import torch
 import torch.nn as nn
+
 from transformers import AutoConfig, AutoModel, AutoModelForSequenceClassification
 from transformers.models.modernbert.configuration_modernbert import ModernBertConfig
 
@@ -17,6 +18,7 @@ from transformers.models.modernbert.modeling_modernbert import (
     ModernBertPreTrainedModel,
     eager_attention_forward,
 )
+from transformers.masking_utils import create_bidirectional_mask
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
@@ -24,6 +26,8 @@ try:
     from transformers.modeling_flash_attention_utils import _unpad_input, _pad_input
 except ImportError:
     _unpad_input, _pad_input = None, None
+
+logger = logging.getLogger(__name__)
 
 
 class ModernBertMiceConfig(ModernBertConfig):
@@ -39,6 +43,11 @@ class ModernBertMiceConfig(ModernBertConfig):
         num_labels: int = 1,
         **kwargs,
     ):
+        if num_labels == 1:
+            kwargs.pop("id2label", None)
+            kwargs.pop("label2id", None)
+            kwargs["id2label"] = {0: "LABEL_0"}
+            kwargs["label2id"] = {"LABEL_0": 0}
         super().__init__(num_labels=num_labels, **kwargs)
         self.n_contextualization_layers = n_contextualization_layers
         self.n_docs_ctx_layers = n_docs_ctx_layers
@@ -61,6 +70,7 @@ class ModernBertMiceCrossAttention(nn.Module):
         self.head_dim = config.hidden_size // config.num_attention_heads
         self.num_heads = config.num_attention_heads
         self.attention_dropout = config.attention_dropout
+        self.is_causal = False
         self.deterministic_flash_attn = getattr(
             config, "deterministic_flash_attn", False
         )
@@ -104,15 +114,20 @@ class ModernBertMiceCrossAttention(nn.Module):
         key_states = d_qkv[:, :, 1].transpose(1, 2)  # [B, heads, d_len, head_dim]
         value_states = d_qkv[:, :, 2].transpose(1, 2)  # [B, heads, d_len, head_dim]
 
-        attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
+        if q_mask is None:
+            q_mask = torch.ones(
+                (batch_size, q_len), dtype=torch.bool, device=q_hidden.device
+            )
+        if d_mask is None:
+            d_mask = torch.ones(
+                (batch_size, d_len), dtype=torch.bool, device=d_hidden.device
+            )
 
-        if (
-            attn_impl == "flash_attention_2"
-            and _unpad_input is not None
-            and q_mask is not None
-            and d_mask is not None
-        ):
-            # FA2 varlen path
+        attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
+        is_flash_impl = "flash" in str(attn_impl).lower()
+
+        if is_flash_impl and _unpad_input is not None and _pad_input is not None:
+            # FlashAttention varlen path (supports flash_attention_2 and kernels-community/flash-attn2)
             q_unpadded, indices_q, cu_seqlens_q, max_seqlen_q, _ = _unpad_input(
                 q_hidden, q_mask
             )
@@ -129,21 +144,22 @@ class ModernBertMiceCrossAttention(nn.Module):
             V_un = d_un_qkv[:, 2].unsqueeze(0)  # [1, total_d, heads, head_dim]
 
             attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
-                "flash_attention_2", eager_attention_forward
+                attn_impl, eager_attention_forward
             )
 
             attn_output, _ = attn_interface(
                 self,
-                Q_un.transpose(1, 2),
-                K_un.transpose(1, 2),
-                V_un.transpose(1, 2),
-                attention_mask=None,
+                Q_un.transpose(1, 2),  # [1, heads, total_q, head_dim]
+                K_un.transpose(1, 2),  # [1, heads, total_d, head_dim]
+                V_un.transpose(1, 2),  # [1, heads, total_d, head_dim]
+                attention_mask=None,  # Crucial: bypasses internal 2D _upad_input inside HF/kernels!
                 dropout=self.attention_dropout if self.training else 0.0,
                 scaling=self.head_dim**-0.5,
-                cu_seq_lens_q=cu_seqlens_q,
-                cu_seq_lens_k=cu_seqlens_d,
-                max_length_q=max_seqlen_q,
-                max_length_k=max_seqlen_d,
+                is_causal=False,
+                cu_seq_lens_q=cu_seqlens_q.to(torch.int32),
+                cu_seq_lens_k=cu_seqlens_d.to(torch.int32),
+                max_length_q=int(max_seqlen_q),
+                max_length_k=int(max_seqlen_d),
                 **kwargs,
             )
 
@@ -151,16 +167,22 @@ class ModernBertMiceCrossAttention(nn.Module):
             attn_output_flat = attn_output.reshape(-1, self.config.hidden_size)
             attn_output = _pad_input(attn_output_flat, indices_q, batch_size, q_len)
         else:
-            # SDPA / Eager path with 4D boolean cross-attention mask
-            cross_mask = None
-            if q_mask is not None and d_mask is not None:
-                # [B, 1, q_len, d_len]
-                cross_mask = (
-                    q_mask.unsqueeze(-1).bool() & d_mask.unsqueeze(1).bool()
-                ).unsqueeze(1)
+            if is_flash_impl:
+                logger.warning(
+                    f"[MICE CrossAttention] FlashAttention requested ('{attn_impl}'), but unpadding is unavailable "
+                    f"(_unpad_input={_unpad_input is not None}). Falling back to SDPA with 4D cross-mask."
+                )
 
+            # SDPA / Eager path with 4D boolean cross-attention mask
+            cross_mask = (
+                q_mask.unsqueeze(-1).bool() & d_mask.unsqueeze(1).bool()
+            ).unsqueeze(1)
+
+            # 4D cross-attention masks are ONLY supported by SDPA or Eager (NOT any FlashAttention variant).
+            # Force 'sdpa' (or 'eager') so FlashAttention interfaces are never called with 4D cross_mask tensors.
+            fallback_impl = "eager" if attn_impl == "eager" else "sdpa"
             attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
-                attn_impl, eager_attention_forward
+                fallback_impl, eager_attention_forward
             )
             attn_output, _ = attn_interface(
                 self,
@@ -170,6 +192,7 @@ class ModernBertMiceCrossAttention(nn.Module):
                 attention_mask=cross_mask,
                 dropout=self.attention_dropout if self.training else 0.0,
                 scaling=self.head_dim**-0.5,
+                is_causal=False,
                 **kwargs,
             )
             attn_output = attn_output.reshape(batch_size, q_len, -1).contiguous()
@@ -225,11 +248,7 @@ class ModernBertMiceTopLayer(nn.Module):
         self_out, _ = self.self_attn(
             self.self_attn_norm(q_hidden),
             position_embeddings=q_position_embeddings,
-            attention_mask=(
-                q_attn_mask
-                if q_attn_mask is not None
-                else (q_mask.bool() if q_mask is not None else None)
-            ),
+            attention_mask=q_attn_mask,
         )
         q_hidden = q_hidden + self_out
 
@@ -282,7 +301,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         **kwargs,
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
+            return_dict
+            if return_dict is not None
+            else getattr(self.config, "return_dict", True)
         )
 
         # Handle ST concatenated inputs if query_ids is not passed
@@ -345,7 +366,6 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         )
 
         # Prepare 4D bidirectional mask for self-attention
-        from transformers.masking_utils import create_bidirectional_mask
 
         q_attn_mask = None
         if query_mask is not None:

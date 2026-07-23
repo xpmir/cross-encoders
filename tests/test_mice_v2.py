@@ -13,6 +13,8 @@ from MICE.modeling.mice_v2.modernbert_xpm import mice_v2_scorer, ModernBertMiceS
 from xpmir.letor.records import PointwiseItems
 from experimaestro import LightweightTask, Param
 
+import logging
+logging.basicConfig(level=logging.INFO)
 
 class TestMiceV2ForwardTask(LightweightTask):
     """Tests Mice V2 Loading, scoring a PointWiseItem, and reload persistence"""
@@ -21,9 +23,12 @@ class TestMiceV2ForwardTask(LightweightTask):
 
     def execute(self):
         self.scorer.initialize()
-
-        queries = ["What is the capital of France?"]
-        documents = ["Paris is the capital and most populous city of France."]
+        logging.info(f"Initialized MICE V2 scorer: {self.scorer}")
+        queries = ["What is the capital of France?", "Where is Paris located?"]
+        documents = [
+            "Paris is the capital and most populous city of France.",
+            "Paris is located in northern central France on the Seine river.",
+        ]
         input_records = PointwiseItems.from_texts(topics=queries, documents=documents)
 
         self.scorer.eval()
@@ -31,7 +36,7 @@ class TestMiceV2ForwardTask(LightweightTask):
             output = self.scorer(input_records)
 
         assert isinstance(output, torch.Tensor), "Output should be a torch.Tensor"
-        assert output.shape == (1,), f"Expected output shape (1,), got {output.shape}"
+        assert output.shape == (2,), f"Expected output shape (2,), got {output.shape}"
 
 
 @pytest.mark.parametrize("model_id", ["jhu-clsp/ettin-encoder-17m"])

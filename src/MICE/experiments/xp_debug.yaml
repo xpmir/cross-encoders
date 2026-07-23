@@ -1,6 +1,5 @@
 id: debug_mice_training
 title: "Debugging Mice training"
-parent: mice_MiniLM_l4.yaml
 description:
     💡 this config load everything from core_base.yaml, and just overrides the base and learner.loss
     So that only ettin-150m is launched with infoNCE loss
@@ -8,39 +7,52 @@ description:
 module: MICE.experiments.mice_training
 pre_experiment: pre_experiment
 export_trained_models: false
-
 seed: 12 # To mimick the HF xp
-nb_repetitions: 1
+
 
 
 preprocessing:
     requirements: duration=8h & cpu(cores=8)
 
 indexation:
-    batch_size: 128
-    requirements: duration=20h & cpu(cores=4, mem=10G) & cuda(mem=40G)
+    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
 
 validation:
     # Use 500 topics for validation
     size: 500
 
-base:
-    - microsoft/MiniLM-L12-H384-uncased
-    - google/electra-base-discriminator
+# Shared Training hyperparameters for all the Mini Mice Models
+learner:
+    optimization:
+        steps_per_epoch: 100
+        batch_size: 32
+        max_epochs: 100 # Sum is 2_500_000. Multiplied by BS of 32, it gives 80M samples, which is a bit above the size of the dataset
+        num_warmup_steps: 5000 # Follows the original setup
+        weight_decay: 0.00
+        lr: 7e-6
+        eps: 1.0e-8
+    # sample_max: 2_000_000
+    loss: marginMSE
+    max_grad_norm: 1.0
+    checkpoint_interval: 100
+    validation_interval: 50
+    validation_top_k: 100
+    validation: nanobeir11
+    requirements: duration=2h & cpu(cores=16) & cuda(mem=80G)
 
-evaluation:
-    # test_max_topics: 100
+retrieval:
+    requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
+    k: 100
+    batch_size: 64
+
+evaluation: #default = Minified tests
     all_datasets: false
-    in_domain: false
-    datasets:
-        - arguana
-        - nfcorpus
-        # - fiqa
+    in_domain: true
+    beir13: false
 
-# plaid:
-#     use_plaid: true
-#     batch_size: 25_000
-#     n_bits: 4
-#     kmeans_niters: 4
-#     buffer_size: 5000
-#     compress_only: true
+retriever: ""
+base: microsoft/MiniLM-L12-H384-uncased
+n_contextualization_layers: 4
+n_interaction_layers: 3
+mask_cls_to_doc: false
+nb_repetitions: 3
