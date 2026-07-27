@@ -177,6 +177,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             input_records, options=options, input_nature=input_nature
         )
 
+    def get_tokenizer_fn(self):
+        return self.batch_tokenize
+
     def forward(
         self,
         inputs: Optional[BaseItems] = None,
