@@ -21,6 +21,7 @@ from transformers.models.modernbert.modeling_modernbert import (
 from transformers.masking_utils import create_bidirectional_mask
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+from transformers.utils import is_flash_attn_2_available
 
 try:
     from transformers.modeling_flash_attention_utils import _unpad_input, _pad_input
@@ -126,7 +127,12 @@ class ModernBertMiceCrossAttention(nn.Module):
         attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
         is_flash_impl = "flash" in str(attn_impl).lower()
 
-        if is_flash_impl and _unpad_input is not None and _pad_input is not None:
+        if (
+            is_flash_impl
+            and q_hidden.is_cuda
+            and _unpad_input is not None
+            and _pad_input is not None
+        ):
             # FlashAttention varlen path (supports flash_attention_2 and kernels-community/flash-attn2)
             q_unpadded, indices_q, cu_seqlens_q, max_seqlen_q, _ = _unpad_input(
                 q_hidden, q_mask
@@ -267,6 +273,16 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
     config_class = ModernBertMiceConfig
 
     def __init__(self, config: ModernBertMiceConfig):
+        attn_impl = getattr(config, "_attn_implementation", "sdpa")
+        if "flash" in str(attn_impl).lower():
+            if not is_flash_attn_2_available() or not torch.cuda.is_available():
+                logger.warning(
+                    f"Flash Attention 2 requested ('{attn_impl}'), but is not supported in this environment "
+                    f"(CUDA available: {torch.cuda.is_available()}, FA2 kernels available: {is_flash_attn_2_available()}). "
+                    f"Falling back to `_attn_implementation='sdpa'`."
+                )
+                config._attn_implementation = "sdpa"
+
         super().__init__(config)
         self.config = config
 

@@ -27,6 +27,7 @@ from experimaestro.launcherfinder import find_launcher
 from experimaestro.experiments.grid import generate_grid
 
 from xpm_torch.huggingface import prepare_hf_model
+from xpm_torch.configuration import FabricConfiguration
 
 from xpmir.experiments.ir import PaperResults, ir_experiment, IRExperimentHelper
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
@@ -62,6 +63,9 @@ class BaselinesConfig(NeuralIRExperiment):
     attn_implementation: Optional[str] = None
     """Preferred attention implementation (e.g. 'flash_attention_2', 'sdpa')"""
 
+    precision: Optional[str] = None
+    """Precision setting for evaluation (e.g. 'bf16-mixed')"""
+
     max_length: Optional[int] = None
     """Maximum length for cross-encoders"""
 
@@ -91,9 +95,26 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
     cfg = configs[0]
 
+    if cfg.attn_implementation and "flash" in str(cfg.attn_implementation).lower():
+        if not cfg.precision or cfg.precision not in (
+            "bf16-mixed",
+            "16-mixed",
+            "bf16",
+            "16",
+        ):
+            logging.info(
+                f"FlashAttention enabled for evaluation ('{cfg.attn_implementation}'): "
+                "Setting evaluation precision to 'bf16-mixed'"
+            )
+            cfg.precision = "bf16-mixed"
+
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+
+    fabric_config = (
+        FabricConfiguration.C(precision=cfg.precision) if cfg.precision else None
+    )
 
     # Built tests collections depending on config
     tests = build_tests(
@@ -152,6 +173,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             launcher=launcher_evaluate,
             init_tasks=retriever_init_tasks,
             with_run=True,
+            fabric_config=fabric_config,
         )
 
         # Create a MultiRunRetrieverFactory storing results from first stage
@@ -219,6 +241,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                 two_stage_retriever_factory,
                 launcher=launcher_evaluate,
                 init_tasks=ce_init_tasks,
+                fabric_config=fabric_config,
             )
 
     # Wait for all tasks to complete

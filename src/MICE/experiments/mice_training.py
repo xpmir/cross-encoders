@@ -178,6 +178,20 @@ def TrainEvaluateLateInteractionScorer(
     ):
         """Main process for one configuration of the late interaction model."""
 
+        attn_impl = getattr(cfg, "attn_implementation", None)
+        if attn_impl and "flash" in str(attn_impl).lower():
+            if hasattr(cfg, "learner") and hasattr(cfg.learner, "fabric"):
+                if cfg.learner.fabric.precision not in (
+                    "bf16-mixed",
+                    "16-mixed",
+                    "bf16",
+                    "16",
+                ):
+                    logging.info(
+                        f"FlashAttention enabled ('{attn_impl}'): Automatically overriding learner.fabric.precision to 'bf16-mixed'"
+                    )
+                    cfg.learner.fabric.precision = "bf16-mixed"
+
         if cfg.retriever:
             # We don't use BM25, but a given sparse retriever
             retriever_tag = cfg.retriever
@@ -341,6 +355,7 @@ def TrainEvaluateLateInteractionScorer(
                         model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
                         init_tasks=[load_model],
                         with_run=cfg.save_runs,
+                        fabric_config=cfg.learner.fabric.get_config(),
                     )
                     if cfg.plaid.use_plaid:
                         # tag with true now
@@ -375,6 +390,7 @@ def TrainEvaluateLateInteractionScorer(
                             model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}-Plaid",
                             init_tasks=[load_model],
                             with_run=cfg.save_runs,
+                            fabric_config=cfg.learner.fabric.get_config(),
                         )
 
     all_configs, all_tags = generate_grid(cfg)
