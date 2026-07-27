@@ -45,7 +45,9 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
 
         # 2. Bottom contextualization layers
         if hasattr(full_backbone.model, "layers"):
-            logger.info("Seeding bottom layers from backbone")
+            logger.info(
+                f"Seeding {scorer.n_contextualization_layers} bottom layers from backbone"
+            )
             for i in range(scorer.n_contextualization_layers):
                 if i < len(full_backbone.model.layers):
                     scorer.hf_model.model.layers[i].load_state_dict(
@@ -157,10 +159,12 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             logger.info(
                 f"Using Flash Attention 2 for MICE V2 ModernBERT (`{attn_impl}`)."
             )
-            logger.warning(
-                "FlashAttention only supports fp16 and bf16 data types. "
-                "Ensure your learner config specifies `fabric.precision: bf16-mixed` (or 16-mixed)."
-            )
+            model_dtype = getattr(hf_model, "dtype", None) or torch.get_default_dtype()
+            if model_dtype not in (torch.float16, torch.bfloat16):
+                logger.warning(
+                    f"FlashAttention only supports fp16 and bf16 data types (current dtype: {model_dtype}). "
+                    "Ensure your learner/evaluation config specifies `fabric.precision: bf16-mixed` (or 16-mixed)."
+                )
         else:
             logger.warning(
                 f"Flash Attention 2 is not enabled or available (using `{attn_impl}`). "
@@ -218,11 +222,16 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         self.hf_model.config.save_pretrained(path)
 
     def load_model(self, path: Path):
-        config = ModernBertMiceConfig.from_pretrained(path)
-        hf_model = ModernBertMiceForSequenceClassification(config)
-        state_dict = torch.load(path / "pytorch_model.bin", map_location="cpu")
-        hf_model.load_state_dict(state_dict)
-        self.add_module("hf_model", hf_model)
+        if not self._initialized:
+            self.initialize()
+
+        if (path / "model.safetensors").exists():
+            super().load_model(path)
+        elif (path / "pytorch_model.bin").exists():
+            state_dict = torch.load(path / "pytorch_model.bin", map_location="cpu")
+            self.hf_model.load_state_dict(state_dict)
+        else:
+            super().load_model(path)
 
     def loader_config(self, path: Path, *, settings=None) -> "SimpleModuleLoader":
         return SimpleModuleLoader.C(value=self, path=path, settings=settings)

@@ -95,19 +95,6 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
     cfg = configs[0]
 
-    if cfg.attn_implementation and "flash" in str(cfg.attn_implementation).lower():
-        if not cfg.precision or cfg.precision not in (
-            "bf16-mixed",
-            "16-mixed",
-            "bf16",
-            "16",
-        ):
-            logging.info(
-                f"FlashAttention enabled for evaluation ('{cfg.attn_implementation}'): "
-                "Setting evaluation precision to 'bf16-mixed'"
-            )
-            cfg.precision = "bf16-mixed"
-
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_index = find_launcher(cfg.indexation.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)

@@ -5,7 +5,7 @@ description:
 
 module: MICE.experiments.micev2_training
 parent: ./mice_v1/mice_ettin_68m.yaml
-nb_repetitions: 2
+nb_repetitions: 3
 
 # This set of hyperparameters follows: https://github.com/huggingface/sentence-transformers/blob/9f76b5790fa8f0175ccdc27e41f9ae348f557144/examples/training/ms_marco/train_cross-encoder-v2.py
 learner:

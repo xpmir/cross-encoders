@@ -31,6 +31,25 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def is_fa2_available() -> bool:
+    """Checks if FlashAttention 2 is available via either `flash_attn` package or `kernels` library."""
+    if is_flash_attn_2_available():
+        return True
+    try:
+        import kernels  # noqa - HuggingFace kernels library providing kernels-community/flash-attn2
+
+        return True
+    except ImportError:
+        pass
+    try:
+        import flash_attn  # noqa
+
+        return True
+    except ImportError:
+        pass
+    return False
+
+
 class ModernBertMiceConfig(ModernBertConfig):
     model_type = "modernbert_mice"
 
@@ -240,6 +259,7 @@ class ModernBertMiceTopLayer(nn.Module):
         d_mask: Optional[torch.Tensor] = None,
         q_attn_mask: Optional[torch.Tensor] = None,
         q_position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        is_last_layer: bool = False,
     ) -> torch.Tensor:
         # 1. Cross Attention
         cross_out = self.cross_attn(
@@ -258,7 +278,10 @@ class ModernBertMiceTopLayer(nn.Module):
         )
         q_hidden = q_hidden + self_out
 
-        # 3. MLP
+        # 3. MLP (Slice to CLS token on final top layer to optimize compute)
+        if is_last_layer:
+            q_hidden = q_hidden[:, 0:1, :]
+
         q_hidden = q_hidden + self.mlp(self.mlp_norm(q_hidden))
 
         return q_hidden
@@ -275,10 +298,11 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
     def __init__(self, config: ModernBertMiceConfig):
         attn_impl = getattr(config, "_attn_implementation", "sdpa")
         if "flash" in str(attn_impl).lower():
-            if not is_flash_attn_2_available() or not torch.cuda.is_available():
+            fa2_avail = is_fa2_available()
+            if not fa2_avail or not torch.cuda.is_available():
                 logger.warning(
                     f"Flash Attention 2 requested ('{attn_impl}'), but is not supported in this environment "
-                    f"(CUDA available: {torch.cuda.is_available()}, FA2 kernels available: {is_flash_attn_2_available()}). "
+                    f"(CUDA available: {torch.cuda.is_available()}, FA2 kernels available: {fa2_avail}). "
                     f"Falling back to `_attn_implementation='sdpa'`."
                 )
                 config._attn_implementation = "sdpa"
@@ -288,6 +312,15 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
 
         # Standard ModernBERT backbone for bottom layers & embeddings
         self.model = ModernBertModel(config)
+
+        # Prune bottom layers to n_contextualization_layers so bottom layers run only n_context layers
+        n_context = config.n_contextualization_layers
+        if n_context is not None and n_context < len(self.model.layers):
+            logger.info(
+                f"Pruning ModernBertModel bottom layers from {len(self.model.layers)} "
+                f"to n_contextualization_layers={n_context}"
+            )
+            self.model.layers = self.model.layers[:n_context]
 
         # Top interaction layers
         num_top = config.n_interaction_layers
@@ -392,7 +425,8 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
 
         # 2. Pass query hidden states through top layers with cross-attention to doc
-        for top_layer in self.top_layers:
+        num_top = len(self.top_layers)
+        for i, top_layer in enumerate(self.top_layers):
             q_hidden = top_layer(
                 q_hidden,
                 d_hidden,
@@ -400,6 +434,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 d_mask=doc_mask,
                 q_attn_mask=q_attn_mask,
                 q_position_embeddings=q_pos_emb,
+                is_last_layer=(i == num_top - 1),
             )
 
         # 3. Pooling (CLS token score)
