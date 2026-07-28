@@ -341,7 +341,7 @@ def TrainEvaluateLateInteractionScorer(
                         model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
                         init_tasks=[load_model],
                         with_run=cfg.save_runs,
-                        fabric_config=cfg.learner.fabric.get_config(),
+                        fabric_config=cfg.evaluation.fabric.get_config(),
                     )
                     if cfg.plaid.use_plaid:
                         # tag with true now
@@ -376,7 +376,7 @@ def TrainEvaluateLateInteractionScorer(
                             model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}-Plaid",
                             init_tasks=[load_model],
                             with_run=cfg.save_runs,
-                            fabric_config=cfg.learner.fabric.get_config(),
+                            fabric_config=cfg.evaluation.fabric.get_config(),
                         )
 
     all_configs, all_tags = generate_grid(cfg)

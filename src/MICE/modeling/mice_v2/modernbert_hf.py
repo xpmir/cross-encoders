@@ -32,7 +32,15 @@ logger = logging.getLogger(__name__)
 
 
 def is_fa2_available() -> bool:
-    """Checks if FlashAttention 2 is available via either `flash_attn` package or `kernels` library."""
+    """Checks if FlashAttention 2 is available and supported on the current CUDA GPU hardware (SM 8.0+)."""
+    if torch.cuda.is_available():
+        try:
+            major_cc, _ = torch.cuda.get_device_capability(0)
+            if major_cc < 8:
+                return False
+        except Exception:
+            pass
+
     if is_flash_attn_2_available():
         return True
     try:

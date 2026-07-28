@@ -328,7 +328,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                         model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
                         init_tasks=[load_model],
                         with_run=cfg.save_runs,
-                        fabric_config=cfg.learner.fabric.get_config(),
+                        fabric_config=cfg.evaluation.fabric.get_config(),
                     )
 
     all_configs, all_tags = generate_grid(cfg)

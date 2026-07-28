@@ -52,13 +52,15 @@ def build_mice_v2(
     else:
         max_len = default_max_len
 
+    attn_impl = cfg.attn_implementation or cfg.pref_attn_implementation
+
     return mice_v2_scorer(
         hf_id=cfg.base,
         n_contextualization_layers=cfg.n_contextualization_layers,
         n_docs_ctx_layers=cfg.n_docs_ctx_layers,
         n_interaction_layers=cfg.n_interaction_layers,
         bound_bottom_layers=cfg.bound_bottom_layers,
-        attn_implementation=cfg.attn_implementation,
+        attn_implementation=attn_impl,
         max_length=max_len,
     )
 

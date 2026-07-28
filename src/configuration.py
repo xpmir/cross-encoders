@@ -128,6 +128,9 @@ class Evaluation:
     datasets: List[str] = Factory(list)
     """List of specific datasets to evaluate on"""
 
+    fabric: Fabric = Factory(Fabric)
+    """Configuration for Fabric device management during evaluation"""
+
 
 @configuration()
 class xpm_torch_Learner:
