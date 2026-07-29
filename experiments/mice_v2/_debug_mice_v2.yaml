@@ -1,0 +1,40 @@
+id: debug_mice_v2_training
+title: "Debugging Mice V2 training"
+description:
+    💡 Debug config for ModernBERT Mice V2 training using ettin-encoder-17m
+
+module: MICE.experiments.micev2_training
+export_trained_models: false
+parent: ./_ettin68m.yaml
+
+
+nb_repetitions: 1
+
+# Shared Training hyperparameters for all the Mini Mice Models
+learner:
+    loss: MSE_mixedbread_large
+    optimization:
+        steps_per_epoch: 100
+        max_epochs: 100 #  x 128 x 100 = ~26M Samples < 145M in full dataset
+    # sample_max: 2_000_000
+    checkpoint_interval: 50
+    validation_interval: 20
+    requirements: duration=2h & cpu(cores=16) & cuda(mem=80G)
+
+evaluation:
+    all_datasets: false
+    in_domain: true
+    datasets:
+        - nfcorpus
+
+base: jhu-clsp/ettin-encoder-68m
+max_length: 1024
+n_contextualization_layers: 10
+n_interaction_layers: 4
+
+#### Params that are grid searched
+grid_search:
+    attn_implementation:
+        values_list:
+            - sdpa
+            - flash_attention_2
