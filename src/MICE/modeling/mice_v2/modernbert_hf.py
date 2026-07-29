@@ -58,6 +58,48 @@ def is_fa2_available() -> bool:
     return False
 
 
+def _unpad_input_with_posids(
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, int, torch.Tensor, torch.Tensor]:
+    """
+    Unpads 3D tensor [B, S, D] into 1D continuous token sequence [1, total_tokens, D].
+    Calculates cu_seqlens [B+1] (torch.int32), max_seqlen (int), indices [total_tokens],
+    and 1D position_ids [1, total_tokens] matching position indices within each sequence.
+    """
+    batch_size, seq_len, hidden_size = hidden_states.shape
+    if attention_mask is None:
+        attention_mask = torch.ones(
+            (batch_size, seq_len), dtype=torch.bool, device=hidden_states.device
+        )
+    else:
+        attention_mask = attention_mask.bool()
+
+    seqlens = attention_mask.sum(dim=1, dtype=torch.int32)
+    cu_seqlens = torch.cat(
+        [
+            torch.zeros(1, dtype=torch.int32, device=hidden_states.device),
+            torch.cumsum(seqlens, dim=0, dtype=torch.int32),
+        ]
+    )
+    max_seqlen = int(seqlens.max().item()) if len(seqlens) > 0 else 0
+
+    mask_flat = attention_mask.view(-1)
+    indices = torch.nonzero(mask_flat, as_tuple=False).squeeze(-1)
+
+    unpadded_flat = hidden_states.view(-1, hidden_size)[indices]
+    unpadded_hidden = unpadded_flat.unsqueeze(0)  # [1, total_tokens, hidden_size]
+
+    row_pos_ids = (
+        torch.arange(seq_len, device=hidden_states.device)
+        .unsqueeze(0)
+        .expand(batch_size, -1)
+    )
+    position_ids = row_pos_ids.reshape(-1)[indices].unsqueeze(0)  # [1, total_tokens]
+
+    return unpadded_hidden, cu_seqlens, max_seqlen, indices, position_ids
+
+
 class ModernBertMiceConfig(ModernBertConfig):
     model_type = "modernbert_mice"
 
@@ -124,8 +166,65 @@ class ModernBertMiceCrossAttention(nn.Module):
         d_hidden: torch.Tensor,
         q_mask: Optional[torch.Tensor] = None,
         d_mask: Optional[torch.Tensor] = None,
+        cu_seqlens_q: Optional[torch.Tensor] = None,
+        cu_seqlens_d: Optional[torch.Tensor] = None,
+        max_seqlen_q: Optional[int] = None,
+        max_seqlen_d: Optional[int] = None,
         **kwargs,
     ) -> torch.Tensor:
+        attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
+        is_flash_impl = "flash" in str(attn_impl).lower()
+
+        if (
+            cu_seqlens_q is not None
+            and cu_seqlens_d is not None
+            and is_flash_impl
+            and q_hidden.is_cuda
+        ):
+            # Unpadded FlashAttention 2 path
+            total_q = q_hidden.shape[1]
+            total_d = d_hidden.shape[1]
+
+            q_qkv = self.Wqkv(q_hidden).view(
+                1, total_q, 3, self.num_heads, self.head_dim
+            )
+            query_states = q_qkv[:, :, 0].transpose(
+                1, 2
+            )  # [1, heads, total_q, head_dim]
+
+            d_qkv = self.Wqkv(d_hidden).view(
+                1, total_d, 3, self.num_heads, self.head_dim
+            )
+            key_states = d_qkv[:, :, 1].transpose(1, 2)  # [1, heads, total_d, head_dim]
+            value_states = d_qkv[:, :, 2].transpose(
+                1, 2
+            )  # [1, heads, total_d, head_dim]
+
+            attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
+                attn_impl, eager_attention_forward
+            )
+
+            attn_output, _ = attn_interface(
+                self,
+                query_states,
+                key_states,
+                value_states,
+                attention_mask=None,  # Crucial: bypasses internal 2D _unpad_input
+                dropout=self.attention_dropout if self.training else 0.0,
+                scaling=self.head_dim**-0.5,
+                is_causal=False,
+                cu_seq_lens_q=cu_seqlens_q.to(torch.int32),
+                cu_seq_lens_k=cu_seqlens_d.to(torch.int32),
+                max_length_q=int(max_seqlen_q) if max_seqlen_q is not None else total_q,
+                max_length_k=int(max_seqlen_d) if max_seqlen_d is not None else total_d,
+                **kwargs,
+            )
+
+            attn_output = attn_output.reshape(1, total_q, -1).contiguous()
+            attn_output = self.out_drop(self.Wo(attn_output))
+            return attn_output
+
+        # Standard 3D Padded Path
         batch_size, q_len, _ = q_hidden.shape
         _, d_len, _ = d_hidden.shape
 
@@ -151,16 +250,13 @@ class ModernBertMiceCrossAttention(nn.Module):
                 (batch_size, d_len), dtype=torch.bool, device=d_hidden.device
             )
 
-        attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
-        is_flash_impl = "flash" in str(attn_impl).lower()
-
         if (
             is_flash_impl
             and q_hidden.is_cuda
             and _unpad_input is not None
             and _pad_input is not None
         ):
-            # FlashAttention varlen path (supports flash_attention_2 and kernels-community/flash-attn2)
+            # Per-layer unpad fallback if cu_seqlens is not provided directly
             q_unpadded, indices_q, cu_seqlens_q, max_seqlen_q, _ = _unpad_input(
                 q_hidden, q_mask
             )
@@ -168,13 +264,12 @@ class ModernBertMiceCrossAttention(nn.Module):
                 d_hidden, d_mask
             )
 
-            # Re-project unpadded Q, K, V
             q_un_qkv = self.Wqkv(q_unpadded).view(-1, 3, self.num_heads, self.head_dim)
-            Q_un = q_un_qkv[:, 0].unsqueeze(0)  # [1, total_q, heads, head_dim]
+            Q_un = q_un_qkv[:, 0].unsqueeze(0)
 
             d_un_qkv = self.Wqkv(d_unpadded).view(-1, 3, self.num_heads, self.head_dim)
-            K_un = d_un_qkv[:, 1].unsqueeze(0)  # [1, total_d, heads, head_dim]
-            V_un = d_un_qkv[:, 2].unsqueeze(0)  # [1, total_d, heads, head_dim]
+            K_un = d_un_qkv[:, 1].unsqueeze(0)
+            V_un = d_un_qkv[:, 2].unsqueeze(0)
 
             attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
                 attn_impl, eager_attention_forward
@@ -182,10 +277,10 @@ class ModernBertMiceCrossAttention(nn.Module):
 
             attn_output, _ = attn_interface(
                 self,
-                Q_un.transpose(1, 2),  # [1, heads, total_q, head_dim]
-                K_un.transpose(1, 2),  # [1, heads, total_d, head_dim]
-                V_un.transpose(1, 2),  # [1, heads, total_d, head_dim]
-                attention_mask=None,  # Crucial: bypasses internal 2D _upad_input inside HF/kernels!
+                Q_un.transpose(1, 2),
+                K_un.transpose(1, 2),
+                V_un.transpose(1, 2),
+                attention_mask=None,
                 dropout=self.attention_dropout if self.training else 0.0,
                 scaling=self.head_dim**-0.5,
                 is_causal=False,
@@ -196,7 +291,6 @@ class ModernBertMiceCrossAttention(nn.Module):
                 **kwargs,
             )
 
-            # Reshape back to [1, total_q, hidden_size] and pad back
             attn_output_flat = attn_output.reshape(-1, self.config.hidden_size)
             attn_output = _pad_input(attn_output_flat, indices_q, batch_size, q_len)
         else:
@@ -206,13 +300,10 @@ class ModernBertMiceCrossAttention(nn.Module):
                     f"(_unpad_input={_unpad_input is not None}). Falling back to SDPA with 4D cross-mask."
                 )
 
-            # SDPA / Eager path with 4D boolean cross-attention mask
             cross_mask = (
                 q_mask.unsqueeze(-1).bool() & d_mask.unsqueeze(1).bool()
             ).unsqueeze(1)
 
-            # 4D cross-attention masks are ONLY supported by SDPA or Eager (NOT any FlashAttention variant).
-            # Force 'sdpa' (or 'eager') so FlashAttention interfaces are never called with 4D cross_mask tensors.
             fallback_impl = "eager" if attn_impl == "eager" else "sdpa"
             attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
                 fallback_impl, eager_attention_forward
@@ -268,6 +359,11 @@ class ModernBertMiceTopLayer(nn.Module):
         q_attn_mask: Optional[torch.Tensor] = None,
         q_position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         is_last_layer: bool = False,
+        cu_seqlens_q: Optional[torch.Tensor] = None,
+        cu_seqlens_d: Optional[torch.Tensor] = None,
+        max_seqlen_q: Optional[int] = None,
+        max_seqlen_d: Optional[int] = None,
+        **kwargs,
     ) -> torch.Tensor:
         # 1. Cross Attention
         cross_out = self.cross_attn(
@@ -275,20 +371,50 @@ class ModernBertMiceTopLayer(nn.Module):
             d_hidden,
             q_mask=q_mask,
             d_mask=d_mask,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_d=cu_seqlens_d,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_d=max_seqlen_d,
+            **kwargs,
         )
         q_hidden = q_hidden + cross_out
 
         # 2. Self Attention
-        self_out, _ = self.self_attn(
-            self.self_attn_norm(q_hidden),
-            position_embeddings=q_position_embeddings,
-            attention_mask=q_attn_mask,
-        )
+        if cu_seqlens_q is not None:
+            # Unpadded Flash Attention 2 query self-attention
+            self_out, _ = self.self_attn(
+                self.self_attn_norm(q_hidden),
+                position_embeddings=q_position_embeddings,
+                attention_mask=None,
+                cu_seq_lens_q=cu_seqlens_q.to(torch.int32),
+                cu_seq_lens_k=cu_seqlens_q.to(torch.int32),
+                max_length_q=int(max_seqlen_q)
+                if max_seqlen_q is not None
+                else q_hidden.shape[1],
+                max_length_k=int(max_seqlen_q)
+                if max_seqlen_q is not None
+                else q_hidden.shape[1],
+                **kwargs,
+            )
+        else:
+            # Padded SDPA / Eager query self-attention
+            self_out, _ = self.self_attn(
+                self.self_attn_norm(q_hidden),
+                position_embeddings=q_position_embeddings,
+                attention_mask=q_attn_mask,
+                **kwargs,
+            )
         q_hidden = q_hidden + self_out
 
         # 3. MLP (Slice to CLS token on final top layer to optimize compute)
         if is_last_layer:
-            q_hidden = q_hidden[:, 0:1, :]
+            if cu_seqlens_q is not None:
+                # Unpadded 1D path: slice CLS tokens at cu_seqlens_q[:-1]
+                cls_indices = cu_seqlens_q[:-1].long()
+                q_hidden = q_hidden[:, cls_indices, :]  # Shape: [1, batch_size, D]
+            else:
+                # Padded 3D path: slice CLS token at index 0
+                q_hidden = q_hidden[:, 0:1, :]  # Shape: [batch_size, 1, D]
 
         q_hidden = q_hidden + self.mlp(self.mlp_norm(q_hidden))
 
@@ -299,6 +425,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
     """
     HF-compatible Sequence Classification Model for MICE with ModernBERT backbone.
     Supports standard ST CrossEncoder forward pass as well as independent Q/D pass.
+    Optimized for continuous 1D unpadded Flash Attention 2 execution when FA2 is available on CUDA.
     """
 
     config_class = ModernBertMiceConfig
@@ -438,46 +565,132 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     d_mask_list, batch_first=True, padding_value=0
                 )
 
-        # 1. Encode queries and docs through bottom layers
-        q_outputs = self.model(input_ids=query_ids, attention_mask=query_mask, **kwargs)
-        d_outputs = self.model(input_ids=doc_ids, attention_mask=doc_mask, **kwargs)
-
-        q_hidden = q_outputs.last_hidden_state
-        d_hidden = d_outputs.last_hidden_state
-
-        # Compute position embeddings for query self-attention
-        position_ids = torch.arange(
-            q_hidden.shape[1], device=q_hidden.device
-        ).unsqueeze(0)
-        q_pos_emb = self.model.rotary_emb(
-            q_hidden, position_ids, layer_type="full_attention"
+        attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
+        is_flash_impl = "flash" in str(attn_impl).lower()
+        use_unpadded = (
+            is_flash_impl
+            and query_ids.is_cuda
+            and is_fa2_available()
+            and _unpad_input is not None
         )
 
-        # Prepare 4D bidirectional mask for self-attention
-
-        q_attn_mask = None
-        if query_mask is not None:
-            q_attn_mask = create_bidirectional_mask(
-                config=self.config,
-                inputs_embeds=q_hidden,
-                attention_mask=query_mask,
+        if use_unpadded:
+            logger.debug(
+                "[MICE v2] Executing unpadded Flash Attention 2 pipeline for bottom and top layers."
             )
+            # Embeddings
+            q_embeds = self.model.embeddings(input_ids=query_ids)
+            d_embeds = self.model.embeddings(input_ids=doc_ids)
 
-        # 2. Pass query hidden states through top layers with cross-attention to doc
-        num_top = len(self.top_layers)
-        for i, top_layer in enumerate(self.top_layers):
-            q_hidden = top_layer(
+            # Unpad query and doc embeddings ONCE
+            (
                 q_hidden,
+                cu_seqlens_q,
+                max_seqlen_q,
+                indices_q,
+                q_pos_ids,
+            ) = _unpad_input_with_posids(q_embeds, query_mask)
+            (
                 d_hidden,
-                q_mask=query_mask,
-                d_mask=doc_mask,
-                q_attn_mask=q_attn_mask,
-                q_position_embeddings=q_pos_emb,
-                is_last_layer=(i == num_top - 1),
+                cu_seqlens_d,
+                max_seqlen_d,
+                indices_d,
+                d_pos_ids,
+            ) = _unpad_input_with_posids(d_embeds, doc_mask)
+
+            # Precompute rotary embeddings ONCE for unpadded 1D position sequences
+            q_pos_emb = self.model.rotary_emb(
+                q_hidden, q_pos_ids, layer_type="full_attention"
+            )
+            d_pos_emb = self.model.rotary_emb(
+                d_hidden, d_pos_ids, layer_type="full_attention"
             )
 
-        # 3. Pooling (CLS token score)
-        cls_hidden = q_hidden[:, 0]
+            # Pass unpadded 1D sequences through bottom encoder layers
+            for encoder_layer in self.model.layers:
+                q_hidden = encoder_layer(
+                    q_hidden,
+                    position_embeddings=q_pos_emb,
+                    attention_mask=None,
+                    cu_seq_lens_q=cu_seqlens_q.to(torch.int32),
+                    cu_seq_lens_k=cu_seqlens_q.to(torch.int32),
+                    max_length_q=int(max_seqlen_q),
+                    max_length_k=int(max_seqlen_q),
+                    **kwargs,
+                )
+                d_hidden = encoder_layer(
+                    d_hidden,
+                    position_embeddings=d_pos_emb,
+                    attention_mask=None,
+                    cu_seq_lens_q=cu_seqlens_d.to(torch.int32),
+                    cu_seq_lens_k=cu_seqlens_d.to(torch.int32),
+                    max_length_q=int(max_seqlen_d),
+                    max_length_k=int(max_seqlen_d),
+                    **kwargs,
+                )
+
+            # Pass unpadded query hidden states through top interaction layers
+            num_top = len(self.top_layers)
+            for i, top_layer in enumerate(self.top_layers):
+                q_hidden = top_layer(
+                    q_hidden,
+                    d_hidden,
+                    q_position_embeddings=q_pos_emb,
+                    is_last_layer=(i == num_top - 1),
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_d=cu_seqlens_d,
+                    max_seqlen_q=max_seqlen_q,
+                    max_seqlen_d=max_seqlen_d,
+                    **kwargs,
+                )
+
+            # Slicing and Pooling: on last top layer, q_hidden was sliced to [1, batch_size, D]
+            cls_hidden = q_hidden.squeeze(0)  # Shape: [batch_size, D]
+        else:
+            if is_flash_impl and not query_ids.is_cuda:
+                logger.warning(
+                    "[MICE v2] Flash Attention 2 requested but inputs are not on CUDA. "
+                    "Falling back to standard 3D padded pipeline."
+                )
+
+            # Standard 3D Padded Pipeline (SDPA / Eager / Fallback)
+            q_outputs = self.model(
+                input_ids=query_ids, attention_mask=query_mask, **kwargs
+            )
+            d_outputs = self.model(input_ids=doc_ids, attention_mask=doc_mask, **kwargs)
+
+            q_hidden = q_outputs.last_hidden_state
+            d_hidden = d_outputs.last_hidden_state
+
+            position_ids = torch.arange(
+                q_hidden.shape[1], device=q_hidden.device
+            ).unsqueeze(0)
+            q_pos_emb = self.model.rotary_emb(
+                q_hidden, position_ids, layer_type="full_attention"
+            )
+
+            q_attn_mask = None
+            if query_mask is not None:
+                q_attn_mask = create_bidirectional_mask(
+                    config=self.config,
+                    inputs_embeds=q_hidden,
+                    attention_mask=query_mask,
+                )
+
+            num_top = len(self.top_layers)
+            for i, top_layer in enumerate(self.top_layers):
+                q_hidden = top_layer(
+                    q_hidden,
+                    d_hidden,
+                    q_mask=query_mask,
+                    d_mask=doc_mask,
+                    q_attn_mask=q_attn_mask,
+                    q_position_embeddings=q_pos_emb,
+                    is_last_layer=(i == num_top - 1),
+                )
+
+            cls_hidden = q_hidden[:, 0]
+
         logits = self.classifier(cls_hidden)
 
         loss = None

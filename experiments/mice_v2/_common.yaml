@@ -6,9 +6,12 @@ seed: 12
 
 ### Compute requirements for the different steps of the experiment
 preprocessing:
-    requirements: duration=8h & cpu(cores=8)
+    # Used for preprocessing the datasets
+    # need many cpus to shuffle and flatten data from https://huggingface.co/datasets/cross-encoder/ettin-reranker-v1-data
+    requirements: duration=8h & cpu(cores=32, mem=10G)
 
 indexation:
+    # Running Splade to index the collections.
     requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
 
 validation:

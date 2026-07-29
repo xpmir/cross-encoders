@@ -7,6 +7,7 @@ learner:
     loss: MSE_mixedbread_large
     optimization:
         steps_per_epoch: 100
+        batch_size: 128 #is 256 in ettin-reranker-v1
         max_epochs: 2000 #  x 128 x 100 = ~26M Samples < 145M in full dataset
         num_warmup_steps: 20000 # Follows the original setup
         weight_decay: 0.00

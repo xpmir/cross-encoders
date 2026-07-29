@@ -4,15 +4,16 @@ description:
     Configuration for training an ettin-68m model with the MSE_mixedbread_large loss on cross_encoder.ettin_reranker_v1_data.
 
 module: cross_encoders_training.experiment
+parent: ./_common.yaml
 # pre_experiment: pre_experiment
-seed: 12 # To mimick the HF xp
+
 nb_repetitions: 2
-max_length: 1024
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 retriever: "naver/splade-v3-distilbert" #BM25
 use_st_scorer: true # Use HFCrossScorer instead of STCrossEncoder
 base: jhu-clsp/ettin-encoder-68m
+max_length: 1024
 
 preprocessing:
     requirements: duration=8h & cpu(cores=16, mem=10G)

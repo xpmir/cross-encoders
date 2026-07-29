@@ -8,7 +8,7 @@ export_trained_models: false
 parent: ./_ettin68m.yaml
 
 
-nb_repetitions: 1
+nb_repetitions: 2
 
 # Shared Training hyperparameters for all the Mini Mice Models
 learner:

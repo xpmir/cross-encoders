@@ -4,7 +4,7 @@ description:
     Reproduction of the MICE-Ettin-68m-l10+4 training from v1
 
 module: MICE.experiments.mice_training
-parent: ./mice_v1/mice_ettin_68m.yaml
+parent: ../mice_v1/mice_ettin_68m.yaml
 
 
 max_length: 1024

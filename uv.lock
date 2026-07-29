@@ -663,7 +663,7 @@ wheels = [
 
 [[package]]
 name = "datamaestro"
-version = "1.11.3"
+version = "1.15.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bitmath", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -672,6 +672,7 @@ dependencies = [
     { name = "docstring-parser", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "experimaestro", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "filelock", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "idna", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "marshmallow", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "mkdocs", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "mkdocs-material", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -681,9 +682,9 @@ dependencies = [
     { name = "tqdm", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "urllib3", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/0a/0046a04fcd3c4ff04fbad01157cbb6c7912a7049c7958281b3299221536c/datamaestro-1.11.3.tar.gz", hash = "sha256:e31b254ca0e0eb3c176a083c0fd691bb37d9bb22ef7a2b56aa486751f8a0e96d", size = 289982, upload-time = "2026-05-04T10:29:56.193Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a6/7c/51723d8a2dff520e3c29252a037a3776f635f41c8476fddff54175d7b5c7/datamaestro-1.15.2.tar.gz", hash = "sha256:2f43fe1a2e268d7b4daf79b0c5cef5a4379457f6fda78c069dbaf009144b5baa", size = 303269, upload-time = "2026-07-29T12:40:26.281Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d5/de/f842b6dddb4e9b81fb0dff752188e3df32ad7682bb6a850f884ebc07c940/datamaestro-1.11.3-py3-none-any.whl", hash = "sha256:eb3318fd860ab85328423a02281ee3e255291cd4b80efb850e99b0a1187f7d99", size = 131316, upload-time = "2026-05-04T10:29:54.625Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/01/6b16679bf39dcc8b4f0a467d0da879ec812bf6a0a0d6c69886db545c70a6/datamaestro-1.15.2-py3-none-any.whl", hash = "sha256:ade4856e2b77298b1c1f796668074405182a5a769718d6fb3c770820fdcc8032", size = 144856, upload-time = "2026-07-29T12:40:24.886Z" },
 ]
 
 [[package]]
@@ -701,7 +702,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "attrs" },
-    { name = "datamaestro", specifier = ">=1.11.2" },
+    { name = "datamaestro", specifier = ">=1.15.2" },
     { name = "experimaestro", specifier = ">=2.0.0" },
     { name = "impact-index", specifier = ">=1.3.1" },
     { name = "lxml" },
@@ -1313,11 +1314,11 @@ wheels = [
 
 [[package]]
 name = "idna"
-version = "3.13"
+version = "3.18"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ce/cc/762dfb036166873f0059f3b7de4565e1b5bc3d6f28a414c13da27e442f99/idna-3.13.tar.gz", hash = "sha256:585ea8fe5d69b9181ec1afba340451fba6ba764af97026f92a91d4eef164a242", size = 194210, upload-time = "2026-04-22T16:42:42.314Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/63/9496c57188a2ee585e0f1db071d75089a11e98aa86eb99d9d7618fc1edce/idna-3.18.tar.gz", hash = "sha256:ffb385a7e039654cef1ab9ef32c6fafe283c0c0467bba1d9029738ce4a14a848", size = 196711, upload-time = "2026-06-02T14:34:07.794Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/13/ad7d7ca3808a898b4612b6fe93cde56b53f3034dcde235acb1f0e1df24c6/idna-3.13-py3-none-any.whl", hash = "sha256:892ea0cde124a99ce773decba204c5552b69c3c67ffd5f232eb7696135bc8bb3", size = 68629, upload-time = "2026-04-22T16:42:40.909Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl", hash = "sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2", size = 65455, upload-time = "2026-06-02T14:34:06.319Z" },
 ]
 
 [[package]]
