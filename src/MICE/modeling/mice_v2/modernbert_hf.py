@@ -374,23 +374,54 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             q_ids_list, d_ids_list = [], []
             q_mask_list, d_mask_list = [], []
 
+            cls_token_id = getattr(
+                self.config, "cls_token_id", getattr(self.config, "bos_token_id", 50281)
+            )
+
             for i in range(b_size):
                 row = input_ids[i]
                 sep_idx = (row == sep_token_id).nonzero(as_tuple=False)
                 if len(sep_idx) > 0:
                     split = sep_idx[0].item() + 1
-                    q_ids_list.append(row[:split])
-                    d_ids_list.append(row[split:])
-                    if attention_mask is not None:
-                        q_mask_list.append(attention_mask[i, :split])
-                        d_mask_list.append(attention_mask[i, split:])
+                    q_seq = row[:split]
+                    d_seq = row[split:]
+                    q_m_seq = (
+                        attention_mask[i, :split]
+                        if attention_mask is not None
+                        else None
+                    )
+                    d_m_seq = (
+                        attention_mask[i, split:]
+                        if attention_mask is not None
+                        else None
+                    )
                 else:
                     half = seq_len // 2
-                    q_ids_list.append(row[:half])
-                    d_ids_list.append(row[half:])
-                    if attention_mask is not None:
-                        q_mask_list.append(attention_mask[i, :half])
-                        d_mask_list.append(attention_mask[i, half:])
+                    q_seq = row[:half]
+                    d_seq = row[half:]
+                    q_m_seq = (
+                        attention_mask[i, :half] if attention_mask is not None else None
+                    )
+                    d_m_seq = (
+                        attention_mask[i, half:] if attention_mask is not None else None
+                    )
+
+                # Prepend CLS token to doc if missing (HF pair tokenization omits CLS for doc)
+                if (
+                    len(d_seq) > 0
+                    and cls_token_id is not None
+                    and d_seq[0].item() != cls_token_id
+                ):
+                    d_seq = torch.cat([d_seq.new_tensor([cls_token_id]), d_seq])
+                    if d_m_seq is not None:
+                        d_m_seq = torch.cat([d_m_seq.new_tensor([1]), d_m_seq])
+
+                q_ids_list.append(q_seq)
+                d_ids_list.append(d_seq)
+                if q_m_seq is not None:
+                    q_mask_list.append(q_m_seq)
+                if d_m_seq is not None:
+                    d_mask_list.append(d_m_seq)
 
             # Pad sub-batches
             query_ids = torch.nn.utils.rnn.pad_sequence(
@@ -474,4 +505,10 @@ AutoConfig.register("modernbert_mice", ModernBertMiceConfig)
 AutoModel.register(ModernBertMiceConfig, ModernBertMiceForSequenceClassification)
 AutoModelForSequenceClassification.register(
     ModernBertMiceConfig, ModernBertMiceForSequenceClassification
+)
+
+ModernBertMiceConfig.register_for_auto_class("AutoConfig")
+ModernBertMiceForSequenceClassification.register_for_auto_class("AutoModel")
+ModernBertMiceForSequenceClassification.register_for_auto_class(
+    "AutoModelForSequenceClassification"
 )

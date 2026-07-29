@@ -32,7 +32,7 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
 
     def execute(self):
         scorer = self.scorer
-        logger.info(f"Loading MICE ModernBERT weights from {scorer.hf_id}")
+        logger.info(f"Building MICE from ModernBERT Encoder {scorer.hf_id}")
         scorer.initialize()
         full_backbone = AutoModelForSequenceClassification.from_pretrained(scorer.hf_id)
 
@@ -137,19 +137,29 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         logger.info("Initializing ModernBertMiceCrossEncoder")
         self.tokenizer.initialize()
 
-        # Instantiate model skeleton
-        backbone_config = AutoConfig.from_pretrained(self.hf_id)
-        config_kwargs = backbone_config.to_dict()
-        if self.attn_implementation is not None:
-            config_kwargs["_attn_implementation"] = self.attn_implementation
+        # Instantiate model config (MICE config if already exported, or backbone config skeleton)
+        loaded_config = AutoConfig.from_pretrained(self.hf_id)
+        if (
+            isinstance(loaded_config, ModernBertMiceConfig)
+            or getattr(loaded_config, "model_type", None) == "modernbert_mice"
+        ):
+            logger.info(f"Loaded existing MICE config from {self.hf_id}")
+            mice_config = loaded_config
+            if self.attn_implementation is not None:
+                mice_config._attn_implementation = self.attn_implementation
+        else:
+            logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
+            config_kwargs = loaded_config.to_dict()
+            if self.attn_implementation is not None:
+                config_kwargs["_attn_implementation"] = self.attn_implementation
 
-        mice_config = ModernBertMiceConfig(
-            n_contextualization_layers=self.n_contextualization_layers,
-            n_docs_ctx_layers=self.n_docs_ctx_layers,
-            n_interaction_layers=self.n_interaction_layers,
-            bound_bottom_layers=self.bound_bottom_layers,
-            **config_kwargs,
-        )
+            mice_config = ModernBertMiceConfig(
+                n_contextualization_layers=self.n_contextualization_layers,
+                n_docs_ctx_layers=self.n_docs_ctx_layers,
+                n_interaction_layers=self.n_interaction_layers,
+                bound_bottom_layers=self.bound_bottom_layers,
+                **config_kwargs,
+            )
 
         hf_model = ModernBertMiceForSequenceClassification(mice_config)
         self.add_module("hf_model", hf_model)
@@ -207,13 +217,69 @@ class ModernBertMiceScorer(AbstractModuleScorer):
 
         return out.logits.squeeze(-1)
 
-    def export_to_st(self, save_directory: str):
-        """Export model in Sentence Transformers compatible format."""
+    def export_to_st(
+        self,
+        save_directory: str,
+        repo_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ):
+        """Export model in Sentence Transformers compatible format, including model card."""
+        from huggingface_hub import ModelCard, ModelCardData
+
         save_path = Path(save_directory)
         save_path.mkdir(parents=True, exist_ok=True)
         self.hf_model.save_pretrained(save_path)
         if hasattr(self.tokenizer, "tokenizer"):
             self.tokenizer.tokenizer.save_pretrained(save_path)
+
+        # Generate and write README.md model card from Micev2Card.md template using huggingface_hub ModelCard
+        card_template_path = Path(__file__).parent / "Micev2Card.md"
+        if card_template_path.exists():
+            try:
+                metadata = metadata or {}
+                base_name = getattr(self, "hf_id", "ModernBERT")
+                model_name = repo_id or save_path.name
+
+                cfg = getattr(self.hf_model, "config", None)
+                n_ctx = getattr(
+                    cfg,
+                    "n_contextualization_layers",
+                    getattr(self, "n_contextualization_layers", 2),
+                )
+                n_inter = getattr(
+                    cfg,
+                    "n_interaction_layers",
+                    getattr(self, "n_interaction_layers", None),
+                )
+                if n_inter is None and cfg is not None:
+                    n_inter = getattr(cfg, "num_hidden_layers", 0) - n_ctx
+
+                card_data = ModelCardData(
+                    language="en",
+                    license="apache-2.0",
+                    base_model=str(base_name),
+                    model_name=str(model_name),
+                    pipeline_tag="text-classification",
+                )
+
+                card = ModelCard.from_template(
+                    card_data,
+                    template_path=str(card_template_path),
+                    base=str(base_name),
+                    model_id=str(model_name),
+                    n_contextualization_layers=n_ctx,
+                    n_interaction_layers=n_inter,
+                    loss=metadata.get("loss", "MarginMSE / CrossEntropy"),
+                    k=metadata.get("k", 1000),
+                    retriever=metadata.get("retriever", "BM25"),
+                    results=metadata.get("results", "Evaluations pending."),
+                )
+
+                card.save(save_path / "README.md")
+                logger.info(f"Model card written to {save_path / 'README.md'}")
+            except Exception as e:
+                logger.warning(f"Could not write model card README.md: {e}")
+
         logger.info(f"Model exported for Sentence Transformers at {save_path}")
 
     def save_model(self, path: Path):
