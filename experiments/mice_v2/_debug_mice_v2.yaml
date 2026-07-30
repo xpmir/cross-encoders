@@ -19,7 +19,7 @@ learner:
     # sample_max: 2_000_000
     checkpoint_interval: 50
     validation_interval: 20
-    requirements: duration=2h & cpu(cores=16) & cuda(mem=80G)
+    requirements: duration=2h & cpu(cores=16) & cuda(mem=80G) * 2
 
 evaluation:
     all_datasets: false

@@ -82,6 +82,26 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             f"Unknown loss function: {cfg.learner.loss}. Accepted values are: {[e.value for e in Losses]}"
         )
 
+    # Multi-GPU & DDP Strategy Warning Check
+    fabric_obj = cfg.learner.fabric
+    devices = getattr(fabric_obj, "devices", 1) if fabric_obj else 1
+    strategy = getattr(fabric_obj, "strategy", "auto") if fabric_obj else "auto"
+
+    if isinstance(devices, list):
+        num_devices = len(devices)
+    elif isinstance(devices, int) and devices > 0:
+        num_devices = devices
+    else:
+        num_devices = 1
+
+    if num_devices > 1 and strategy in (None, "auto", "ddp"):
+        logger.info(
+            f"[Fabric] Multiple GPUs requested ({num_devices} devices) with strategy='{strategy}'. "
+            f"Setting strategy to 'ddp_find_unused_parameters_true'."
+        )
+        if fabric_obj is not None:
+            fabric_obj.strategy = "ddp_find_unused_parameters_true"
+
     ### Pointwise losses
     if loss_member is Losses.BCE:
         launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)

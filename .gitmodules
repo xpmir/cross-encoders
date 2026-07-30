@@ -11,3 +11,6 @@
 [submodule "xpm-torch"]
 	path = xpm-torch
 	url = https://github.com/experimaestro/xpm-torch.git
+[submodule "datamaestro"]
+	path = datamaestro
+	url = https://github.com/experimaestro/datamaestro.git

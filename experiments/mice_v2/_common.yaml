@@ -1,7 +1,7 @@
 description:
     This is the base configuration for all experiments in the MICE v2 series.
 
-
+module: MICE.experiments.micev2_training
 seed: 12
 
 ### Compute requirements for the different steps of the experiment
