@@ -125,6 +125,9 @@ class Evaluation:
     nanobeir: bool = False
     """Whether to evaluate on NanoBEIR datasets"""
 
+    eval_last_checkpoint: bool = False
+    """Whether to evaluate the last checkpoint (at the end of training) in addition to best-validation checkpoints"""
+
     datasets: List[str] = Factory(list)
     """List of specific datasets to evaluate on"""
 

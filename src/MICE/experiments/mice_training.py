@@ -312,72 +312,87 @@ def TrainEvaluateLateInteractionScorer(
             if helper.xp.run_mode == RunMode.NORMAL:
                 helper.tensorboard_service.add(learner, learner.logpath)
 
-            # Evaluate each model on test collections
+            # Build list of models to evaluate: (model_id, load_model, label)
+            models_to_evaluate = []
+
+            # 1. Best validation checkpoints
             for name, tracked_validation in tracked_validations.items():
-                logging.info(f"evaluating from validation: {name}")
+                logging.info(f"Adding validation model for evaluation: {name}")
                 for metric_name in tracked_validation.monitored():
                     load_model = (
                         outputs.listeners[tracked_validation.id][metric_name]
-                        .tag("validation", name)
+                        .tag("checkpoint", name)
                         .tag("seed", seed)
                         .tag("first_stage", retriever_tag)
                     )
-                    if cfg.plaid.use_plaid:
-                        # first eval without, tag it with False
-                        load_model.tag("plaid_retriever", False)
                     for k, v in cfg_tags.items():
                         load_model.tag(k, v)
-                    all_weights.append(load_model)
+                    model_id = f"{grid_search_id}-{name}-{metric_name}-{seed}"
+                    models_to_evaluate.append((model_id, load_model, name))
 
-                    # Just evaluate the scorer with given first stage
+            # 2. Last checkpoint (if requested)
+            if getattr(cfg.evaluation, "eval_last_checkpoint", False):
+                logging.info("Adding last checkpoint for evaluation")
+                last_model = (
+                    outputs.learned_model.tag("checkpoint", "last")
+                    .tag("seed", seed)
+                    .tag("first_stage", retriever_tag)
+                )
+                for k, v in cfg_tags.items():
+                    last_model.tag(k, v)
+                model_id = f"{grid_search_id}-last-{seed}"
+                models_to_evaluate.append((model_id, last_model, "last"))
+
+            # Shared evaluation execution loop (Standard & PLAID)
+            for model_id, load_model, label in models_to_evaluate:
+                if cfg.plaid.use_plaid:
+                    load_model.tag("plaid_retriever", False)
+
+                all_weights.append(load_model)
+                tests.evaluate_retriever(
+                    partial(
+                        scorer_retriever,
+                        scorer=model,
+                        retrievers=test_run_retriever_factory,
+                        batch_size=cfg.retrieval.batch_size,
+                    ),
+                    launcher_evaluate,
+                    model_id=model_id,
+                    init_tasks=[load_model],
+                    with_run=cfg.save_runs,
+                    fabric_config=cfg.evaluation.fabric.get_config(),
+                )
+
+                if cfg.plaid.use_plaid:
+                    load_model.tag("plaid_retriever", True)
+                    logging.info(f"Running PLAID-style evaluation for: {label}")
+                    # 1) Build the Retriever factory for first stage + model + Plaid
+                    mice_plaid_factory = MicePlaidRetrieverFactory(
+                        mice_model=model,
+                        first_stage_factory=test_run_retriever_factory,
+                        topk=cfg.retrieval.k,
+                        batchsize=cfg.retrieval.batch_size,
+                    )
+                    # 2) Build the plaid indexes for all datasets in the collection
+                    mice_plaid_factory.build_indexes(
+                        evaluations=tests,
+                        cfg=cfg.plaid,
+                        batch_size=cfg.retrieval.batch_size,
+                        seed=seed,
+                        launcher_index=launcher_index,
+                        init_tasks=[load_model],
+                    )
+
+                    # 2) Run tests with the factory
+                    all_weights.append(load_model)
                     tests.evaluate_retriever(
-                        partial(
-                            scorer_retriever,
-                            scorer=model,
-                            retrievers=test_run_retriever_factory,
-                            batch_size=cfg.retrieval.batch_size,
-                        ),
-                        launcher_evaluate,
-                        model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
+                        retriever=mice_plaid_factory,
+                        launcher=launcher_evaluate,
+                        model_id=f"{model_id}-Plaid",
                         init_tasks=[load_model],
                         with_run=cfg.save_runs,
                         fabric_config=cfg.evaluation.fabric.get_config(),
                     )
-                    if cfg.plaid.use_plaid:
-                        # tag with true now
-                        load_model.tag("plaid_retriever", True)
-                        logging.info(
-                            f"Running PLAID-style evaluation from validation: {name}"
-                        )
-
-                        # 1) Build the Retriever factory for first stage + model + Plaid
-                        mice_plaid_factory = MicePlaidRetrieverFactory(
-                            mice_model=model,
-                            first_stage_factory=test_run_retriever_factory,
-                            topk=cfg.retrieval.k,
-                            batchsize=cfg.retrieval.batch_size,
-                        )
-
-                        # 2) Build the plaid indexes for all datasets in the collection
-                        mice_plaid_factory.build_indexes(
-                            evaluations=tests,
-                            cfg=cfg.plaid,
-                            batch_size=cfg.retrieval.batch_size,
-                            seed=seed,
-                            launcher_index=launcher_index,
-                            init_tasks=[load_model],  # for loading model
-                        )
-
-                        # 2) Run tests with the factory
-                        all_weights.append(load_model)
-                        tests.evaluate_retriever(
-                            retriever=mice_plaid_factory,
-                            launcher=launcher_evaluate,
-                            model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}-Plaid",
-                            init_tasks=[load_model],
-                            with_run=cfg.save_runs,
-                            fabric_config=cfg.evaluation.fabric.get_config(),
-                        )
 
     all_configs, all_tags = generate_grid(cfg)
 

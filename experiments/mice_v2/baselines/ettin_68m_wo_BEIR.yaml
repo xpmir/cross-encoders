@@ -7,6 +7,9 @@ module: cross_encoders_training.experiment
 parent: ./ettin_68m.yaml
 # pre_experiment: pre_experiment
 
+evaluation:
+    eval_last_checkpoint: true
+
 ettin_subset_exclude:
 #### RERANKING DATASETS
 #   - rerank_msmarco

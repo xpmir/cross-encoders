@@ -301,35 +301,55 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                     "Skipping TensorBoard service registration in dry-run mode"
                 )
 
-            # Evaluate each model on test collections
+            # Build list of models to evaluate: (model_id, load_model)
+            models_to_evaluate = []
+
+            # 1. Best validation checkpoints
             for name, tracked_validation in tracked_validations.items():
-                logging.info(f"evaluating from validation: {name}")
+                logging.info(f"Adding validation model for evaluation: {name}")
                 for metric_name in tracked_validation.monitored():
                     load_model = (
                         outputs.listeners[tracked_validation.id][metric_name]
-                        .tag("validation", name)
+                        .tag("checkpoint", name)
                         .tag("scorer", grid_search_id)
                         .tag("seed", seed)
                         .tag("first_stage", retriever_tag)
                     )
-                    all_weights.append(load_model)
-                    tests.evaluate_retriever(
-                        partial(
-                            scorer_retriever,
-                            scorer=scorer_model,
-                            retrievers=(
-                                test_run_retriever_factory
-                                if cfg.precompute_first_stage
-                                else test_retrievers_factory
-                            ),
-                            batch_size=cfg.retrieval.batch_size,
+                    model_id = f"{grid_search_id}-{name}-{metric_name}-{seed}"
+                    models_to_evaluate.append((model_id, load_model))
+
+            # 2. Last checkpoint (if requested)
+            if getattr(cfg.evaluation, "eval_last_checkpoint", False):
+                logging.info("Adding last checkpoint for evaluation")
+                last_model = (
+                    outputs.learned_model.tag("checkpoint", "last")
+                    .tag("scorer", grid_search_id)
+                    .tag("seed", seed)
+                    .tag("first_stage", retriever_tag)
+                )
+                model_id = f"{grid_search_id}-last-{seed}"
+                models_to_evaluate.append((model_id, last_model))
+
+            # Shared evaluation execution loop
+            for model_id, load_model in models_to_evaluate:
+                all_weights.append(load_model)
+                tests.evaluate_retriever(
+                    partial(
+                        scorer_retriever,
+                        scorer=scorer_model,
+                        retrievers=(
+                            test_run_retriever_factory
+                            if cfg.precompute_first_stage
+                            else test_retrievers_factory
                         ),
-                        launcher_evaluate,
-                        model_id=f"{grid_search_id}-{name}-{metric_name}-{seed}",
-                        init_tasks=[load_model],
-                        with_run=cfg.save_runs,
-                        fabric_config=cfg.evaluation.fabric.get_config(),
-                    )
+                        batch_size=cfg.retrieval.batch_size,
+                    ),
+                    launcher_evaluate,
+                    model_id=model_id,
+                    init_tasks=[load_model],
+                    with_run=cfg.save_runs,
+                    fabric_config=cfg.evaluation.fabric.get_config(),
+                )
 
     all_configs, all_tags = generate_grid(cfg)
 
