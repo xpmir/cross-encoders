@@ -15,17 +15,21 @@ learner:
     loss: MSE_mixedbread_large
     optimization:
         steps_per_epoch: 100
-        max_epochs: 100 #  x 128 x 100 = ~26M Samples < 145M in full dataset
+        max_epochs: 200 #  x 128 x 100 = ~26M Samples < 145M in full dataset
+        batch_size: 256 #is 256 in ettin-reranker-v1
     # sample_max: 2_000_000
     checkpoint_interval: 50
-    validation_interval: 20
-    requirements: duration=2h & cpu(cores=16) & cuda(mem=80G) * 2
+    validation_interval: 10
+    requirements: duration=2h & cpu(cores=16) & cuda(mem=80G)
 
 evaluation:
+    #fast evals don't need multiple GPUs
+    requirements: duration=2h & cpu(cores=8) & cuda(mem=16G)
     all_datasets: false
     in_domain: true
     datasets:
         - nfcorpus
+        - scifact
 
 base: jhu-clsp/ettin-encoder-68m
 max_length: 1024
@@ -34,7 +38,10 @@ n_interaction_layers: 4
 
 #### Params that are grid searched
 grid_search:
+    learner.optimization.max_epochs:
+        values_list:
+            - 200
+            - 250
     attn_implementation:
         values_list:
-            - sdpa
             - flash_attention_2
