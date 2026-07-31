@@ -526,14 +526,20 @@ def process_experiment_results(
     cols_to_drop = [col for col in df.columns if "index_doc" in str(col).lower()]
     df = df.drop(columns=cols_to_drop, errors="ignore")
 
-    # Identify grid search keys
+    # Identify grid search keys from all_tags
     grid_keys = set()
     for tags in all_tags:
         grid_keys.update(tags.keys())
 
-    # Tags to group by
-    group_by_tags = sorted(list({"first_stage"} | grid_keys))
-    model_id_tags = sorted(group_by_tags + ["seed"])
+    # Core model identity tags (grid keys + evaluation checkpoint tags if present)
+    eval_identity_tags = {"first_stage", "checkpoint", "plaid_retriever"}
+    model_id_tags = sorted(
+        list((grid_keys | eval_identity_tags) & set(df.columns))
+        + (["seed"] if "seed" in df.columns else [])
+    )
+
+    # Tags to group by when aggregating across seeds
+    group_by_tags = [tag for tag in model_id_tags if tag != "seed"]
 
     # Add both specific aggregations (ID, BEIR, etc.) and the global mean
     df_with_aggs = add_dataset_aggregations(
@@ -557,10 +563,13 @@ def process_experiment_results(
     template_path = Path(__file__).parent / "CrossEncoderCard.md"
     card_template_txt = template_path.read_text() if template_path.exists() else None
 
-    # Identify and export best models per configuration
+    # Identify and export best models per configuration (prioritizing BEIR13 over mean)
+    target_dataset = (
+        "BEIR13" if "BEIR13" in scorer_only_df["dataset"].values else "mean"
+    )
     best_models_df = identify_best_models(
         scorer_only_df,
-        dataset="mean",
+        dataset=target_dataset,
         metric="nDCG@10",
         group_by_tags=group_by_tags,
     )
@@ -581,6 +590,9 @@ def process_experiment_results(
             logging.info(f"Best evaluated model is {best_tags}")
 
             # Reconstruct the grid tags to find the original config
+            grid_keys = set()
+            for tags in all_tags:
+                grid_keys.update(tags.keys())
             best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
             best_cfg = config_map.get(frozenset(best_grid_tags.items()))
 
