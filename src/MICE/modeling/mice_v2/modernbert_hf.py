@@ -507,31 +507,39 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
 
             for i in range(b_size):
                 row = input_ids[i]
-                sep_idx = (row == sep_token_id).nonzero(as_tuple=False)
+                row_m = (
+                    attention_mask[i]
+                    if attention_mask is not None
+                    else torch.ones_like(row, dtype=torch.bool)
+                )
+
+                # Trim trailing padding tokens from row if attention_mask is present
+                if attention_mask is not None:
+                    valid_len = row_m.sum().item()
+                    row_valid = row[:valid_len]
+                    row_m_valid = row_m[:valid_len]
+                else:
+                    valid_len = seq_len
+                    row_valid = row
+                    row_m_valid = row_m
+
+                sep_idx = (row_valid == sep_token_id).nonzero(as_tuple=False)
                 if len(sep_idx) > 0:
                     split = sep_idx[0].item() + 1
-                    q_seq = row[:split]
-                    d_seq = row[split:]
+                    q_seq = row_valid[:split]
+                    d_seq = row_valid[split:]
                     q_m_seq = (
-                        attention_mask[i, :split]
-                        if attention_mask is not None
-                        else None
+                        row_m_valid[:split] if attention_mask is not None else None
                     )
                     d_m_seq = (
-                        attention_mask[i, split:]
-                        if attention_mask is not None
-                        else None
+                        row_m_valid[split:] if attention_mask is not None else None
                     )
                 else:
-                    half = seq_len // 2
-                    q_seq = row[:half]
-                    d_seq = row[half:]
-                    q_m_seq = (
-                        attention_mask[i, :half] if attention_mask is not None else None
-                    )
-                    d_m_seq = (
-                        attention_mask[i, half:] if attention_mask is not None else None
-                    )
+                    half = valid_len // 2
+                    q_seq = row_valid[:half]
+                    d_seq = row_valid[half:]
+                    q_m_seq = row_m_valid[:half] if attention_mask is not None else None
+                    d_m_seq = row_m_valid[half:] if attention_mask is not None else None
 
                 # Prepend CLS token to doc if missing (HF pair tokenization omits CLS for doc)
                 if (

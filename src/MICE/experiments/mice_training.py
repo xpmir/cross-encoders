@@ -233,6 +233,7 @@ def TrainEvaluateLateInteractionScorer(
             launcher=launcher_evaluate,
             init_tasks=retriever_init_tasks,
             with_run=True,
+            fabric_config=cfg.evaluation.fabric.get_config(),
         )
         test_run_retriever_factory = MultiRunRetrieverFactory.from_results(
             retriever_tag, test_runs
@@ -246,7 +247,9 @@ def TrainEvaluateLateInteractionScorer(
             launcher=launcher_evaluate,
             init_tasks=retriever_init_tasks,
             with_run=True,
+            fabric_config=cfg.evaluation.fabric.get_config(),
         )
+
         val_run_retriever_factory = MultiRunRetrieverFactory.from_results(
             retriever_tag, val_runs
         )

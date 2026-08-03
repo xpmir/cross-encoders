@@ -17,6 +17,8 @@ learner:
         steps_per_epoch: 100
         max_epochs: 200 #  x 128 x 100 = ~26M Samples < 145M in full dataset
         batch_size: 256 #is 256 in ettin-reranker-v1
+    fabric:
+        precision: bf16-mixed
     # sample_max: 2_000_000
     checkpoint_interval: 50
     validation_interval: 10
@@ -35,6 +37,7 @@ evaluation:
 grid_search:
     learner.optimization.max_epochs:
         values_list:
+            - 100
             - 200
             - 250
     attn_implementation:

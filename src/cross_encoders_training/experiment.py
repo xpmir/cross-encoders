@@ -123,7 +123,15 @@ def get_ce_name(model_tags: dict) -> str:
     if len(loss):
         loss = f"-{loss}"
     base = backbone_names_lower.get(base, base).replace("/", "-")
-    return f"cross-encoder-{base}{loss}"
+
+    extra_parts = []
+    if "batch_size" in model_tags:
+        extra_parts.append(f"bs{model_tags['batch_size']}")
+    if "checkpoint" in model_tags and str(model_tags["checkpoint"]) != "last":
+        extra_parts.append(str(model_tags["checkpoint"]))
+
+    extra = f"-{'-'.join(extra_parts)}" if extra_parts else ""
+    return f"cross-encoder-{base}{loss}{extra}"
 
 
 @learning_experiment()
@@ -202,6 +210,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             launcher=launcher_evaluate,
             init_tasks=retriever_init_tasks,
             with_run=cfg.precompute_first_stage,
+            fabric_config=cfg.evaluation.fabric.get_config(),
         )
         if cfg.precompute_first_stage:
             test_run_retriever_factory = MultiRunRetrieverFactory.from_results(
@@ -219,7 +228,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             launcher=launcher_evaluate,
             init_tasks=retriever_init_tasks,
             with_run=True,
+            fabric_config=cfg.evaluation.fabric.get_config(),
         )
+
         if cfg.precompute_first_stage:
             val_run_retriever_factory = MultiRunRetrieverFactory.from_results(
                 retriever_tag, val_runs
@@ -311,7 +322,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                     load_model = (
                         outputs.listeners[tracked_validation.id][metric_name]
                         .tag("checkpoint", name)
-                        .tag("scorer", grid_search_id)
                         .tag("seed", seed)
                         .tag("first_stage", retriever_tag)
                     )
@@ -323,7 +333,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 logging.info("Adding last checkpoint for evaluation")
                 last_model = (
                     outputs.learned_model.tag("checkpoint", "last")
-                    .tag("scorer", grid_search_id)
                     .tag("seed", seed)
                     .tag("first_stage", retriever_tag)
                 )

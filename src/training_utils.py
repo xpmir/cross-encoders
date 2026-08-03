@@ -563,15 +563,37 @@ def process_experiment_results(
     template_path = Path(__file__).parent / "CrossEncoderCard.md"
     card_template_txt = template_path.read_text() if template_path.exists() else None
 
-    # Identify and export best models per configuration (prioritizing BEIR13 over mean)
-    target_dataset = (
-        "BEIR13" if "BEIR13" in scorer_only_df["dataset"].values else "mean"
+    # Determine target dataset for selecting best model
+    val_dataset = getattr(cfg.learner, "validation", None)
+    best_model_dataset = getattr(
+        getattr(cfg, "evaluation", None), "best_model_dataset", None
     )
+
+    present_datasets = [str(x) for x in scorer_only_df["dataset"].values]
+    val_dataset_str = str(val_dataset) if val_dataset is not None else None
+    best_model_dataset_str = (
+        str(best_model_dataset) if best_model_dataset is not None else None
+    )
+
+    if best_model_dataset_str and best_model_dataset_str in present_datasets:
+        target_dataset = best_model_dataset_str
+    elif val_dataset_str and val_dataset_str in present_datasets:
+        target_dataset = val_dataset_str
+    elif "BEIR13" in present_datasets:
+        target_dataset = "BEIR13"
+    else:
+        target_dataset = "mean"
+
+    logging.info(f"Selecting best model based on dataset: {target_dataset}")
+
+    # Group by hyperparameter tags excluding seed and checkpoint so that
+    # a single best (seed, checkpoint) combination is selected per model configuration
+    best_model_group_tags = [tag for tag in group_by_tags if tag != "checkpoint"]
     best_models_df = identify_best_models(
         scorer_only_df,
         dataset=target_dataset,
         metric="nDCG@10",
-        group_by_tags=group_by_tags,
+        group_by_tags=best_model_group_tags,
     )
     logging.info(f"df with only best models:\n{best_models_df}")
 
@@ -632,14 +654,16 @@ def process_experiment_results(
 
     # Final aggregation and LaTeX table generation
     metric_names = [col[1] for col in metric_cols]
-    df_grouped = (
-        df_with_aggs.groupby(["dataset"] + group_by_tags, dropna=False)[metric_names]
-        .agg(["mean", "var"])
-        .reset_index()
-    )
+    group_by_tags = ["dataset"] + group_by_tags
+    counts = df_with_aggs.groupby(group_by_tags, dropna=False).size().to_frame("n_runs")
+    df_grouped_raw = df_with_aggs.groupby(group_by_tags, dropna=False)[
+        metric_names
+    ].agg(["mean", "var"])
+    df_grouped_raw[("n_runs", "")] = counts["n_runs"]
+    df_grouped = df_grouped_raw.reset_index()
 
     # Reorder columns: tags first, metrics after
-    tag_cols_expected = ["dataset"] + group_by_tags
+    tag_cols_expected = group_by_tags + ["n_runs"]
     tag_cols = []
     for col in tag_cols_expected:
         if (col, "") in df_grouped.columns:

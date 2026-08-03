@@ -5,10 +5,15 @@ Verification and Parity Benchmark Script for MICE v2 Flash Attention 2 (FA2) Unp
 Verifies:
   1. Output logits numerical parity between SDPA (padded 3D) and FA2 (unpadded 1D) paths.
   2. Backward pass gradient flow and gradient parity.
-  3. Latency & memory throughput benchmarks for SDPA vs FA2 across uniform and skewed padding batches.
+  3. SentenceTransformers concatenated pair tokenization (`input_ids` + `attention_mask`) parity with token ID collision (sep_token_id == pad_token_id == 50283).
+  4. Batch padding invariance: Sample logits in isolation match sample logits in heavily padded batches for SDPA & FA2.
+  5. Latency & memory throughput benchmarks for SDPA vs FA2 across uniform and skewed padding batches.
+
+Hardware Requirement:
+  MUST be run on CUDA SM 8.0+ GPU hardware with FlashAttention-2 enabled. Non-CUDA environments will raise RuntimeError.
 
 Usage:
-  uv run python scripts/test_mice_v2_fa2_parity.py [--device cuda] [--dtype bfloat16] [--batch-size 32] [--max-doc-len 512] [--warmup-iters 15] [--num-iters 50]
+  uv run python scripts/test_mice_v2_fa2_parity.py [--device cuda] [--dtype bfloat16] [--model-path PATH_OR_HF_ID] [--batch-size 32] [--max-doc-len 512] [--warmup-iters 15] [--num-iters 50]
 """
 
 import argparse
@@ -16,6 +21,8 @@ import logging
 import time
 import torch
 import torch.nn as nn
+
+from transformers import AutoConfig, AutoTokenizer
 
 from MICE.modeling.mice_v2.modernbert_hf import (
     ModernBertMiceConfig,
@@ -30,20 +37,25 @@ logging.basicConfig(
 logger = logging.getLogger("test_mice_v2_fa2_parity")
 
 
-def check_flash_attn_package() -> bool:
-    """Checks if native tri-dao flash_attn C++/CUDA extension is installed."""
-    try:
-        import flash_attn
-        logger.info("[ENV CHECK] Native `flash_attn` (tri-dao C++/CUDA extension) is INSTALLED!")
-        return True
-    except ImportError:
-        logger.warning(
-            "[ENV CHECK] `flash_attn` (tri-dao C++/CUDA package) is NOT installed in this Python environment.\n"
-            "   HuggingFace is falling back to `kernels-community/flash-attn2` (Triton/PyTorch fallback kernel).\n"
-            "   For maximum CUDA speedup, install native flash-attn via:\n"
-            "   --> uv pip install flash-attn --no-build-isolation\n"
+def check_flash_attn_hardware(device: torch.device):
+    """Enforces strict CUDA SM 8.0+ and FlashAttention-2 hardware requirement."""
+    if device.type != "cuda" or not torch.cuda.is_available():
+        raise RuntimeError(
+            "must use FA2-compatible hardware (CUDA SM 8.0+ with flash-attn installed). "
+            f"Current device '{device}' is not CUDA."
         )
-        return False
+
+    if not is_fa2_available():
+        raise RuntimeError(
+            "must use FA2-compatible hardware (CUDA SM 8.0+ with flash-attn installed). "
+            "FlashAttention 2 is not available/supported in this Python/CUDA environment."
+        )
+
+    try:
+        import flash_attn  # noqa
+        logger.info("[ENV CHECK] Native `flash_attn` (tri-dao C++/CUDA extension) is INSTALLED!")
+    except ImportError:
+        logger.info("[ENV CHECK] `flash_attn` extension missing; using HF Triton/kernels-community fallback.")
 
 
 def build_synthetic_batch(
@@ -52,6 +64,7 @@ def build_synthetic_batch(
     max_q_len: int = 64,
     max_d_len: int = 512,
     highly_skewed: bool = False,
+    pad_token_id: int = 50283,
 ):
     """Builds variable-length synthetic query and document batches with random padding."""
     torch.manual_seed(42)
@@ -60,11 +73,11 @@ def build_synthetic_batch(
 
     for i in range(batch_size):
         if highly_skewed and (i % 5 != 0):
-            # 80% of batch items are short (e.g. len 16-32 for query, 64-128 for doc)
+            # 80% of batch items are short
             q_len = torch.randint(16, 32, (1,)).item()
             d_len = torch.randint(64, 128, (1,)).item()
         else:
-            # 20% are long / max length (up to max_q_len and max_d_len)
+            # 20% are long / max length
             q_len = torch.randint(max_q_len // 2, max_q_len + 1, (1,)).item()
             d_len = torch.randint(max_d_len // 2, max_d_len + 1, (1,)).item()
 
@@ -76,9 +89,9 @@ def build_synthetic_batch(
         q_mask_list.append(torch.ones(q_len, dtype=torch.long, device=device))
         d_mask_list.append(torch.ones(d_len, dtype=torch.long, device=device))
 
-    query_ids = torch.nn.utils.rnn.pad_sequence(q_ids_list, batch_first=True, padding_value=0)
+    query_ids = torch.nn.utils.rnn.pad_sequence(q_ids_list, batch_first=True, padding_value=pad_token_id)
     query_mask = torch.nn.utils.rnn.pad_sequence(q_mask_list, batch_first=True, padding_value=0)
-    doc_ids = torch.nn.utils.rnn.pad_sequence(d_ids_list, batch_first=True, padding_value=0)
+    doc_ids = torch.nn.utils.rnn.pad_sequence(d_ids_list, batch_first=True, padding_value=pad_token_id)
     doc_mask = torch.nn.utils.rnn.pad_sequence(d_mask_list, batch_first=True, padding_value=0)
 
     labels = torch.rand(batch_size, 1, device=device)
@@ -86,18 +99,29 @@ def build_synthetic_batch(
     return query_ids, query_mask, doc_ids, doc_mask, labels
 
 
-def test_parity_and_gradients(device: torch.device, dtype: torch.dtype):
+def test_parity_and_gradients(device: torch.device, dtype: torch.dtype, model_path: str = None):
     logger.info("=" * 70)
     logger.info("STAGE 1: Forward & Backward Parity Check (SDPA vs FA2 Unpadded)")
     logger.info("=" * 70)
 
-    base_config = ModernBertMiceConfig(
-        hidden_size=256,
-        num_attention_heads=4,
-        num_hidden_layers=8,
-        n_contextualization_layers=4,
-        n_interaction_layers=4,
-    )
+    if model_path:
+        logger.info(f"Loading base config from pretrained checkpoint: '{model_path}'")
+        base_config = ModernBertMiceConfig.from_pretrained(
+            model_path,
+            n_contextualization_layers=4,
+            n_interaction_layers=4,
+        )
+    else:
+        base_config = ModernBertMiceConfig(
+            hidden_size=256,
+            num_attention_heads=4,
+            num_hidden_layers=8,
+            n_contextualization_layers=4,
+            n_interaction_layers=4,
+            pad_token_id=50283,
+            sep_token_id=50283,
+            cls_token_id=50281,
+        )
 
     config_sdpa = ModernBertMiceConfig(**base_config.to_dict())
     config_sdpa._attn_implementation = "sdpa"
@@ -115,7 +139,7 @@ def test_parity_and_gradients(device: torch.device, dtype: torch.dtype):
     model_fa2.load_state_dict(model_sdpa.state_dict())
 
     query_ids, query_mask, doc_ids, doc_mask, labels = build_synthetic_batch(
-        batch_size=8, device=device, max_q_len=64, max_d_len=256
+        batch_size=8, device=device, max_q_len=64, max_d_len=256, pad_token_id=base_config.pad_token_id
     )
     labels = labels.to(dtype=dtype)
 
@@ -140,7 +164,6 @@ def test_parity_and_gradients(device: torch.device, dtype: torch.dtype):
     logger.info(f"Forward Logits FA2  sample: {logits_fa2[:3].squeeze(-1).tolist()}")
     logger.info(f"Logits Abs Difference -> Max: {max_diff:.6f}, Mean: {mean_diff:.6f}")
 
-    # Set tolerance matching floating-point format precision (bfloat16 has 7 mantissa bits, eps ~0.0078)
     atol = 0.02 if dtype == torch.bfloat16 else (1e-2 if dtype == torch.float16 else 1e-4)
     rtol = 0.02 if dtype == torch.bfloat16 else (1e-2 if dtype == torch.float16 else 1e-4)
     is_close = torch.allclose(logits_sdpa, logits_fa2, atol=atol, rtol=rtol)
@@ -148,7 +171,9 @@ def test_parity_and_gradients(device: torch.device, dtype: torch.dtype):
     if is_close:
         logger.info(f"[SUCCESS] Forward pass logits parity check PASSED (atol={atol}, rtol={rtol})!")
     else:
-        logger.warning(f"[WARNING] Logits difference exceeded tolerance (atol={atol}, rtol={rtol}).")
+        raise ValueError(
+            f"[FAILURE] Logits difference between SDPA and FA2 exceeded tolerance (atol={atol}, max_diff={max_diff:.6f})."
+        )
 
     # Backward Pass & Gradient Parity
     logger.info("Testing Backward pass & gradient flow...")
@@ -177,9 +202,105 @@ def test_parity_and_gradients(device: torch.device, dtype: torch.dtype):
         if torch.allclose(grad_sdpa, grad_fa2, atol=atol, rtol=rtol):
             logger.info(f"[SUCCESS] Backward pass gradient parity check PASSED (atol={atol}, rtol={rtol})!")
         else:
-            logger.warning("[WARNING] Gradient difference exceeded tolerance.")
+            raise ValueError(f"[FAILURE] Gradient difference exceeded tolerance (max_diff={grad_diff:.6f}).")
     else:
-        logger.error("[ERROR] Gradients were None after backward pass!")
+        raise RuntimeError("[ERROR] Gradients were None after backward pass!")
+
+
+def test_st_input_mode_and_padding_invariance(device: torch.device, dtype: torch.dtype, model_path: str = None):
+    logger.info("=" * 70)
+    logger.info("STAGE 2: ST Pair Mode (`input_ids`) & Batch Padding Invariance Check")
+    logger.info("=" * 70)
+
+    if model_path:
+        base_config = ModernBertMiceConfig.from_pretrained(
+            model_path,
+            n_contextualization_layers=2,
+            n_interaction_layers=2,
+        )
+    else:
+        base_config = ModernBertMiceConfig(
+            hidden_size=256,
+            num_attention_heads=4,
+            num_hidden_layers=6,
+            n_contextualization_layers=4,
+            n_interaction_layers=2,
+            pad_token_id=50283,
+            sep_token_id=50283,
+            cls_token_id=50281,
+        )
+
+    config_sdpa = ModernBertMiceConfig(**base_config.to_dict())
+    config_sdpa._attn_implementation = "sdpa"
+
+    config_fa2 = ModernBertMiceConfig(**base_config.to_dict())
+    config_fa2._attn_implementation = "flash_attention_2"
+
+    torch.manual_seed(1337)
+    model_sdpa = ModernBertMiceForSequenceClassification(config_sdpa).to(device=device, dtype=dtype)
+    torch.manual_seed(1337)
+    model_fa2 = ModernBertMiceForSequenceClassification(config_fa2).to(device=device, dtype=dtype)
+    model_fa2.load_state_dict(model_sdpa.state_dict())
+
+    model_sdpa.eval()
+    model_fa2.eval()
+
+    # 1. Test SentenceTransformers concatenated pair inputs with token ID collision (sep=pad=50283)
+    # Item 0: Short pair (7 tokens valid, 6 tokens pad)
+    # Item 1: Long pair (13 tokens valid)
+    st_padded = torch.tensor(
+        [
+            [50281, 100, 200, 50283, 300, 400, 50283, 50283, 50283, 50283, 50283, 50283, 50283],
+            [50281, 100, 200, 300, 400, 500, 600, 50283, 700, 800, 900, 1000, 50283],
+        ],
+        device=device,
+    )
+    st_mask = torch.tensor(
+        [
+            [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        ],
+        device=device,
+    )
+
+    with torch.no_grad():
+        out_st_sdpa = model_sdpa(input_ids=st_padded, attention_mask=st_mask).logits
+        out_st_fa2 = model_fa2(input_ids=st_padded, attention_mask=st_mask).logits
+
+    st_diff = (out_st_sdpa - out_st_fa2).abs().max().item()
+    logger.info(f"ST Pair Mode Logits SDPA: {out_st_sdpa.squeeze(-1).tolist()}")
+    logger.info(f"ST Pair Mode Logits FA2:  {out_st_fa2.squeeze(-1).tolist()}")
+    logger.info(f"ST Pair Mode Abs Difference (SDPA vs FA2): {st_diff:.6f}")
+
+    atol = 0.02 if dtype == torch.bfloat16 else (1e-2 if dtype == torch.float16 else 1e-4)
+    if st_diff <= atol:
+        logger.info(f"[SUCCESS] ST Pair Mode parity check PASSED (atol={atol})!")
+    else:
+        raise ValueError(f"[FAILURE] ST Pair Mode difference exceeded tolerance (st_diff={st_diff:.6f}).")
+
+    # 2. Test Batch Padding Invariance for Item 0 (Standalone vs in Padded Batch)
+    st_single = st_padded[0:1, :7]
+    st_single_m = st_mask[0:1, :7]
+
+    with torch.no_grad():
+        sdpa_single = model_sdpa(input_ids=st_single, attention_mask=st_single_m).logits[0].item()
+        fa2_single = model_fa2(input_ids=st_single, attention_mask=st_single_m).logits[0].item()
+
+    sdpa_padded_item0 = out_st_sdpa[0].item()
+    fa2_padded_item0 = out_st_fa2[0].item()
+
+    sdpa_pad_diff = abs(sdpa_single - sdpa_padded_item0)
+    fa2_pad_diff = abs(fa2_single - fa2_padded_item0)
+
+    logger.info(f"SDPA Item 0 Standalone: {sdpa_single:.6f} | Padded Batch: {sdpa_padded_item0:.6f} | Diff: {sdpa_pad_diff:.6f}")
+    logger.info(f"FA2  Item 0 Standalone: {fa2_single:.6f}  | Padded Batch: {fa2_padded_item0:.6f}  | Diff: {fa2_pad_diff:.6f}")
+
+    if sdpa_pad_diff <= atol and fa2_pad_diff <= atol:
+        logger.info("[SUCCESS] Batch Padding Invariance check PASSED for both SDPA and FA2!")
+    else:
+        raise ValueError(
+            f"[FAILURE] Batch Padding Invariance check failed! SDPA diff={sdpa_pad_diff:.6f}, FA2 diff={fa2_pad_diff:.6f}"
+        )
 
 
 def benchmark_throughput(
@@ -191,25 +312,33 @@ def benchmark_throughput(
     warmup_iters: int = 15,
     num_iters: int = 50,
     highly_skewed: bool = False,
+    model_path: str = None,
 ):
     label_str = "High-Padding Skewed" if highly_skewed else "Standard"
     logger.info("=" * 70)
-    logger.info(f"STAGE 2: Latency & Throughput Benchmark [{label_str} Batches]")
+    logger.info(f"STAGE 3: Latency & Throughput Benchmark [{label_str} Batches]")
     logger.info("=" * 70)
 
-    config_sdpa = ModernBertMiceConfig(
-        hidden_size=768,
-        num_attention_heads=12,
-        num_hidden_layers=22,
-        n_contextualization_layers=18,
-        n_interaction_layers=4,
-        _attn_implementation="sdpa",
-    )
+    if model_path:
+        config_sdpa = ModernBertMiceConfig.from_pretrained(
+            model_path,
+            _attn_implementation="sdpa",
+        )
+    else:
+        config_sdpa = ModernBertMiceConfig(
+            hidden_size=768,
+            num_attention_heads=12,
+            num_hidden_layers=22,
+            n_contextualization_layers=18,
+            n_interaction_layers=4,
+            _attn_implementation="sdpa",
+            pad_token_id=50283,
+        )
 
     config_fa2 = ModernBertMiceConfig(**config_sdpa.to_dict())
     config_fa2._attn_implementation = "flash_attention_2"
 
-    logger.info(f"Building full 22-layer ModernBERT MICE models (B={batch_size}, max_q={max_q_len}, max_d={max_d_len})...")
+    logger.info(f"Building MICE models (B={batch_size}, max_q={max_q_len}, max_d={max_d_len})...")
     model_sdpa = ModernBertMiceForSequenceClassification(config_sdpa).to(device=device, dtype=dtype)
     model_fa2 = ModernBertMiceForSequenceClassification(config_fa2).to(device=device, dtype=dtype)
 
@@ -222,6 +351,7 @@ def benchmark_throughput(
         max_q_len=max_q_len,
         max_d_len=max_d_len,
         highly_skewed=highly_skewed,
+        pad_token_id=config_sdpa.pad_token_id,
     )
     labels = labels.to(dtype=dtype)
 
@@ -236,15 +366,14 @@ def benchmark_throughput(
         f"({padding_pct:.1f}% Padding)"
     )
 
-    # 1. Dedicated Warmup SDPA
+    # Warmup SDPA
     logger.info(f"Running {warmup_iters} CUDA warmup iterations for SDPA...")
     for _ in range(warmup_iters):
         out = model_sdpa(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask, labels=labels)
         out.loss.backward()
         model_sdpa.zero_grad()
 
-    if device.type == "cuda":
-        torch.cuda.synchronize()
+    torch.cuda.synchronize()
 
     # Benchmark SDPA
     logger.info(f"Running {num_iters} timed benchmark iterations for SDPA...")
@@ -253,23 +382,21 @@ def benchmark_throughput(
         out = model_sdpa(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask, labels=labels)
         out.loss.backward()
         model_sdpa.zero_grad()
-    if device.type == "cuda":
-        torch.cuda.synchronize()
+    torch.cuda.synchronize()
     t1 = time.perf_counter()
     sdpa_time = (t1 - t0) / num_iters * 1000.0
     sdpa_tps = (total_tokens_per_batch * num_iters) / (t1 - t0)
 
     logger.info(f"SDPA Mode: {sdpa_time:.2f} ms/iter | Throughput: {sdpa_tps:.1f} tokens/sec")
 
-    # 2. Dedicated Warmup FA2
+    # Warmup FA2
     logger.info(f"Running {warmup_iters} CUDA warmup iterations for FA2...")
     for _ in range(warmup_iters):
         out = model_fa2(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask, labels=labels)
         out.loss.backward()
         model_fa2.zero_grad()
 
-    if device.type == "cuda":
-        torch.cuda.synchronize()
+    torch.cuda.synchronize()
 
     # Benchmark FA2
     logger.info(f"Running {num_iters} timed benchmark iterations for FA2...")
@@ -278,8 +405,7 @@ def benchmark_throughput(
         out = model_fa2(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask, labels=labels)
         out.loss.backward()
         model_fa2.zero_grad()
-    if device.type == "cuda":
-        torch.cuda.synchronize()
+    torch.cuda.synchronize()
     t1 = time.perf_counter()
     fa2_time = (t1 - t0) / num_iters * 1000.0
     fa2_tps = (total_tokens_per_batch * num_iters) / (t1 - t0)
@@ -291,7 +417,7 @@ def benchmark_throughput(
 
 def main():
     parser = argparse.ArgumentParser(description="Test MICE v2 FA2 Unpadding Parity and Speed.")
-    parser.add_argument("--device", type=str, default="cuda", help="Target device (e.g. 'cuda' or 'cpu').")
+    parser.add_argument("--device", type=str, default="cuda", help="Target device (must be 'cuda').")
     parser.add_argument(
         "--dtype",
         type=str,
@@ -299,14 +425,21 @@ def main():
         choices=["bfloat16", "float16", "float32"],
         help="Target data type.",
     )
+    parser.add_argument(
+        "--model-path",
+        "-m",
+        type=str,
+        default=None,
+        help="Optional local path or HF model ID to load pretrained backbone weights.",
+    )
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for throughput testing.")
     parser.add_argument("--max-query-len", type=int, default=64, help="Max query token length.")
-    parser.add_argument("--max-doc-len", type=int, default=512, help="Max document token length.")
+    parser.add_argument("--max-doc-len", type=int, default=1024, help="Max document token length.")
     parser.add_argument("--warmup-iters", type=int, default=15, help="Number of warmup iterations.")
     parser.add_argument("--num-iters", type=int, default=50, help="Number of timed benchmark iterations.")
     args = parser.parse_args()
 
-    device = torch.device(args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu")
+    device = torch.device(args.device)
     dtype_map = {
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
@@ -314,26 +447,13 @@ def main():
     }
     dtype = dtype_map[args.dtype]
 
-    logger.info(f"Starting MICE v2 FA2 Parity Test on device={device}, dtype={dtype}")
+    # Enforce strict FA2 hardware check (raises RuntimeError if non-CUDA or FA2 unsupported)
+    check_flash_attn_hardware(device)
 
-    if device.type != "cuda":
-        logger.warning(
-            "CUDA device is not active in this environment. FA2 unpadded path requires CUDA SM 8.0+. "
-            "Running SDPA fallback verification locally."
-        )
-        test_parity_and_gradients(device=torch.device("cpu"), dtype=torch.float32)
-        return
+    logger.info(f"Starting MICE v2 FA2 Parity Test on device={device}, dtype={dtype}, model_path={args.model_path}")
 
-    fa2_avail = is_fa2_available()
-    if not fa2_avail:
-        logger.warning(
-            "FlashAttention 2 is not available/supported in this Python environment. "
-            "Install `flash-attn` or `kernels-community/flash-attn2` to enable FA2 benchmarking."
-        )
-        return
-
-    check_flash_attn_package()
-    test_parity_and_gradients(device=device, dtype=dtype)
+    test_parity_and_gradients(device=device, dtype=dtype, model_path=args.model_path)
+    test_st_input_mode_and_padding_invariance(device=device, dtype=dtype, model_path=args.model_path)
     benchmark_throughput(
         device=device,
         dtype=dtype,
@@ -343,6 +463,7 @@ def main():
         warmup_iters=args.warmup_iters,
         num_iters=args.num_iters,
         highly_skewed=False,
+        model_path=args.model_path,
     )
     benchmark_throughput(
         device=device,
@@ -353,6 +474,7 @@ def main():
         warmup_iters=args.warmup_iters,
         num_iters=args.num_iters,
         highly_skewed=True,
+        model_path=args.model_path,
     )
 
 

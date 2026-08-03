@@ -149,7 +149,9 @@ def run(helper: IRExperimentHelper, cfg: LocalEvalsConfig) -> PaperResults:
                 ),
                 launcher=launcher_evaluate,
                 init_tasks=retriever_init_tasks + ce_init_tasks,
+                fabric_config=cfg.evaluation.fabric.get_config(),
             )
+
         else:
             logging.warning(f"No valid model found in {model_path}, skipping")
 

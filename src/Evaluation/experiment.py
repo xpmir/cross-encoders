@@ -100,7 +100,13 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
 
     fabric_config = (
-        FabricConfiguration.C(precision=cfg.precision) if cfg.precision else None
+        cfg.evaluation.fabric.get_config()
+        if hasattr(cfg.evaluation, "fabric")
+        else (
+            FabricConfiguration.C(precision=cfg.precision)
+            if getattr(cfg, "precision", None)
+            else None
+        )
     )
 
     # Built tests collections depending on config

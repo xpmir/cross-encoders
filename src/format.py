@@ -217,6 +217,7 @@ def dataframe_to_latex(
     dataset_col = find_col_by_value("dataset") or df.columns[0]
     first_stage_col = find_col_by_value("first_stage")
     scorer_col = find_col_by_value("scorer")
+    base_col = find_col_by_value("base")
 
     # Find nDCG@10 mean/var columns
     ndcg_mean_col = None
@@ -250,6 +251,23 @@ def dataframe_to_latex(
     # Final fallback: just look for the metric name itself if no mean/var columns found
     if ndcg_mean_col is None:
         ndcg_mean_col = find_col_by_value(metric_col)
+
+    # Identify tag columns (non-metric, non-dataset, non-n_runs)
+    excluded_col_names = {"dataset", "n_runs", "seed"}
+    tag_cols = []
+    for col in df.columns:
+        col_name = col[0] if isinstance(col, tuple) else str(col)
+        col_stat = col[1] if isinstance(col, tuple) and len(col) > 1 else ""
+        if (
+            col_name not in excluded_col_names
+            and col_name != "metric"
+            and col_stat not in ("mean", "var")
+        ):
+            if (
+                col not in (dataset_col, ndcg_mean_col, ndcg_var_col)
+                and col not in tag_cols
+            ):
+                tag_cols.append(col)
     table: dict = {}
     table_values: dict = {}  # numeric mean values for averaging
     table_meta: dict = {}  # store first_stage/scorer for each model label
@@ -269,22 +287,56 @@ def dataframe_to_latex(
         dataset = str(dataset_val)
         datasets.add(dataset)
 
-        # model label = first_stage + scorer (if available)
+        # model label construction
         parts = []
         if first_stage_col is not None:
             try:
                 fs = row[first_stage_col]
-                if pd.notna(fs):
+                if pd.notna(fs) and str(fs) != "nan":
                     parts.append(str(fs))
             except Exception:
                 pass
+
+        scorer_val = None
         if scorer_col is not None:
             try:
                 sc = row[scorer_col]
                 if pd.notna(sc) and str(sc) != "nan":
-                    parts.append(str(sc))
+                    scorer_val = str(sc)
+                    parts.append(scorer_val)
             except Exception:
                 pass
+
+        # If scorer is absent or NaN (fine-tuning mode), use base model
+        model_parts = []
+        if scorer_val is None and base_col is not None:
+            try:
+                b = row[base_col]
+                if pd.notna(b) and str(b) != "nan":
+                    model_parts.append(str(b))
+            except Exception:
+                pass
+
+        # Add any grid search / tag columns that vary across rows in df
+        extra_tags = []
+        for tc in tag_cols:
+            if tc in (first_stage_col, scorer_col, base_col):
+                continue
+            tc_name = tc[0] if isinstance(tc, tuple) else str(tc)
+            try:
+                val = row[tc]
+                if pd.notna(val) and str(val) != "nan":
+                    if df[tc].nunique(dropna=True) > 1:
+                        extra_tags.append(f"{tc_name}={val}")
+            except Exception:
+                pass
+
+        if model_parts:
+            if extra_tags:
+                model_parts.append(f"({', '.join(extra_tags)})")
+            parts.append(" ".join(model_parts))
+        elif extra_tags:
+            parts.append(", ".join(extra_tags))
 
         model_label = " / ".join(parts) if parts else "model"
 

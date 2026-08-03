@@ -7,7 +7,13 @@ module: MICE.experiments.micev2_training
 parent: ./_ettin68m.yaml
 nb_repetitions: 2
 
+    # fabric:
+    #     precision: bf16-mixed
 evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
-    beir13: true
+    beir13: false
+
+# Exceptionally use H100 for eval
+retrieval:
+    requirements: duration=1h & cpu(cores=16) & cuda(mem=80G)

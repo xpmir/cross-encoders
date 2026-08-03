@@ -13,8 +13,7 @@ from experimaestro import LightweightTask, Param, Constant, field
 from xpmir.rankers.scorer import AbstractModuleScorer
 from xpmir.letor.records import BaseItems
 from xpm_torch.utils import to_device
-from xpm_torch.module import SimpleModuleLoader
-
+from xpm_torch.module import SimpleModuleLoader, fallback_fa2_if_incompatible_precision
 from MICE.modeling.mice import MICEQueryDocTokenizer, MICETokenizedTexts, QueryDocInput
 from MICE.modeling.mice_v2.modernbert_hf import (
     ModernBertMiceConfig,
@@ -169,17 +168,27 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             logger.info(
                 f"Using Flash Attention 2 for MICE V2 ModernBERT (`{attn_impl}`)."
             )
-            model_dtype = getattr(hf_model, "dtype", None) or torch.get_default_dtype()
-            if model_dtype not in (torch.float16, torch.bfloat16):
-                logger.warning(
-                    f"FlashAttention only supports fp16 and bf16 data types (current dtype: {model_dtype}). "
-                    "Ensure your learner/evaluation config specifies `fabric.precision: bf16-mixed` (or 16-mixed)."
-                )
         else:
             logger.warning(
                 f"Flash Attention 2 is not enabled or available (using `{attn_impl}`). "
                 "For optimal performance and unpadded attention, set `_attn_implementation='flash_attention_2'`."
             )
+
+    def setup_with_fabric(self, fabric) -> torch.nn.Module:
+        """Sets up the module with PyTorch Lightning Fabric, checking precision compatibility.
+
+        If Fabric runs in float32 precision (precision is None or '32-true'), FlashAttention-2
+        cannot execute and is automatically downgraded to 'sdpa'.
+
+        Args:
+            fabric: The PyTorch Lightning Fabric instance.
+
+        Returns:
+            torch.nn.Module: The Fabric-wrapped module proxy.
+        """
+        # extra check for FlashAttention-2 compatibility and fallback to SDPA if needed.
+        fallback_fa2_if_incompatible_precision(self.hf_model, fabric)
+        return super().setup_with_fabric(fabric)
 
     def batch_tokenize(
         self,
