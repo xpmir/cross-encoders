@@ -31,11 +31,6 @@ evaluation:
         - nfcorpus
         - scifact
 
-base: jhu-clsp/ettin-encoder-68m
-max_length: 1024
-n_contextualization_layers: 10
-n_interaction_layers: 4
-
 #### Params that are grid searched
 grid_search:
     learner.optimization.max_epochs:

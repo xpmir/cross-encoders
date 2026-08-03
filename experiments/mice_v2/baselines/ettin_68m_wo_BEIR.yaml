@@ -3,7 +3,6 @@ title: "Training Ettin-68m Reranker with MSE"
 description:
     Comparing results of ettin68m MSE baseline when omitting BEIR data from the training set.
 
-module: cross_encoders_training.experiment
 parent: ./ettin_68m.yaml
 # pre_experiment: pre_experiment
 

@@ -18,7 +18,7 @@ dependencies = [
     "tabulate>=0.9.0",
     "transformers[kernels]>=5.0.0",
     "xpm-torch>=0.2.0",
-    "torch>=2.11",
+    "torch",
     "accelerate>=1.13.0",
     "tiktoken>=0.12.0",
     "sentencepiece>=0.2.1",
@@ -39,17 +39,15 @@ environments = [
     "sys_platform == 'darwin'",
     "sys_platform == 'linux'"
 ]
-managed = true # Tells uv to accept pre-installed packages in site-packages without trying to re-install/upgrade them
 
-
-# PyTorch CUDA 12.8 wheel index
+# Our cluster don't have Cuda 13 yet
 [[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }
+torch = { index = "pytorch-cu126", marker = "sys_platform != 'darwin'" }
 experimaestro = { path = "experimaestro-python", editable = true }
 experimaestro-ir = { path = "experimaestro-ir", editable = true }
 xpm-torch = { path = "xpm-torch", editable = true }

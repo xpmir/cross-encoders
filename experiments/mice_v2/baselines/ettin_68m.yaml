@@ -12,8 +12,8 @@ learner:
     loss: MSE_mixedbread_large
     optimization:
         steps_per_epoch: 100
-        batch_size: 128
-        max_epochs: 2000 #  x 128 x 100 = ~26M Samples < 145M in full dataset
+        batch_size: 256
+        max_epochs: 2000 #  x 256 x 100 = ~52M Samples < 145M in full dataset
         num_warmup_steps: 20000 # Follows the original setup
         weight_decay: 0.00
         lr: 3e-5 #tom aarsen value
@@ -23,10 +23,10 @@ learner:
     # sample_max: 2_000_000
     max_grad_norm: 1.0
     checkpoint_interval: 50
-    validation_interval: 20
+    validation_interval: 25
     validation_top_k: 100
     validation: nanobeir11
-    requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=40G)
+    requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=40G) * 2
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 nb_repetitions: 2
@@ -38,7 +38,7 @@ pref_attn_implementation: flash_attention_2
 ettin_subset_exclude: [] # Train on full reranker-v1 data
 
 retrieval:
-    requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=20G) * 2
+    requirements: duration=6h & cpu(cores=16, mem=10G) & cuda(mem=20G) * 2
     batch_size: 64
     k: 100
 
@@ -46,9 +46,3 @@ evaluation:
     beir13: true
     in_domain: true
     # nanobeir: true
-
-#### Params that are grid searched
-grid_search:
-    learner.optimization.batch_size:
-        values_list:
-            - 128
