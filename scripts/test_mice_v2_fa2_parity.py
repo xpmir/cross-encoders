@@ -139,7 +139,7 @@ def test_parity_and_gradients(device: torch.device, dtype: torch.dtype, model_pa
     model_fa2.load_state_dict(model_sdpa.state_dict())
 
     query_ids, query_mask, doc_ids, doc_mask, labels = build_synthetic_batch(
-        batch_size=8, device=device, max_q_len=64, max_d_len=256, pad_token_id=base_config.pad_token_id
+        batch_size=8, device=device, max_q_len=64, max_d_len=512, pad_token_id=base_config.pad_token_id
     )
     labels = labels.to(dtype=dtype)
 
@@ -209,7 +209,7 @@ def test_parity_and_gradients(device: torch.device, dtype: torch.dtype, model_pa
 
 def test_st_input_mode_and_padding_invariance(device: torch.device, dtype: torch.dtype, model_path: str = None):
     logger.info("=" * 70)
-    logger.info("STAGE 2: ST Pair Mode (`input_ids`) & Batch Padding Invariance Check")
+    logger.info("STAGE 2: ST Pair Mode (`input_ids`) & Batch Padding Invariance Check [TREC-19 512-Token Constraints]")
     logger.info("=" * 70)
 
     if model_path:
@@ -245,31 +245,30 @@ def test_st_input_mode_and_padding_invariance(device: torch.device, dtype: torch
     model_sdpa.eval()
     model_fa2.eval()
 
-    # 1. Test SentenceTransformers concatenated pair inputs with token ID collision (sep=pad=50283)
-    # Item 0: Short pair (7 tokens valid, 6 tokens pad)
-    # Item 1: Long pair (13 tokens valid)
-    st_padded = torch.tensor(
-        [
-            [50281, 100, 200, 50283, 300, 400, 50283, 50283, 50283, 50283, 50283, 50283, 50283],
-            [50281, 100, 200, 300, 400, 500, 600, 50283, 700, 800, 900, 1000, 50283],
-        ],
-        device=device,
-    )
-    st_mask = torch.tensor(
-        [
-            [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        ],
-        device=device,
-    )
+    # Test long sequence (512 tokens max) to match TREC-19 evaluation constraints
+    # Item 0: Short pair (64 tokens valid, 448 tokens pad) -> batch max_len = 512
+    # Item 1: Full long TREC-19 pair (500 tokens valid, 12 tokens pad)
+    torch.manual_seed(42)
+    seq0_valid = torch.cat([torch.tensor([50281]), torch.randint(100, 30000, (30,)), torch.tensor([50283]), torch.randint(100, 30000, (31,)), torch.tensor([50283])])
+    seq1_valid = torch.cat([torch.tensor([50281]), torch.randint(100, 30000, (60,)), torch.tensor([50283]), torch.randint(100, 30000, (437,)), torch.tensor([50283])])
+
+    # Pad both to 512
+    pad_id = base_config.pad_token_id
+    seq0 = torch.cat([seq0_valid, torch.full((512 - len(seq0_valid),), pad_id, dtype=torch.long)])
+    seq1 = torch.cat([seq1_valid, torch.full((512 - len(seq1_valid),), pad_id, dtype=torch.long)])
+
+    st_padded = torch.stack([seq0, seq1]).to(device)
+    st_mask = torch.zeros((2, 512), dtype=torch.long, device=device)
+    st_mask[0, :len(seq0_valid)] = 1
+    st_mask[1, :len(seq1_valid)] = 1
 
     with torch.no_grad():
         out_st_sdpa = model_sdpa(input_ids=st_padded, attention_mask=st_mask).logits
         out_st_fa2 = model_fa2(input_ids=st_padded, attention_mask=st_mask).logits
 
     st_diff = (out_st_sdpa - out_st_fa2).abs().max().item()
-    logger.info(f"ST Pair Mode Logits SDPA: {out_st_sdpa.squeeze(-1).tolist()}")
-    logger.info(f"ST Pair Mode Logits FA2:  {out_st_fa2.squeeze(-1).tolist()}")
+    logger.info(f"TREC-19 512-token ST Pair Mode Logits SDPA: {out_st_sdpa.squeeze(-1).tolist()}")
+    logger.info(f"TREC-19 512-token ST Pair Mode Logits FA2:  {out_st_fa2.squeeze(-1).tolist()}")
     logger.info(f"ST Pair Mode Abs Difference (SDPA vs FA2): {st_diff:.6f}")
 
     atol = 0.02 if dtype == torch.bfloat16 else (1e-2 if dtype == torch.float16 else 1e-4)
@@ -279,8 +278,9 @@ def test_st_input_mode_and_padding_invariance(device: torch.device, dtype: torch
         raise ValueError(f"[FAILURE] ST Pair Mode difference exceeded tolerance (st_diff={st_diff:.6f}).")
 
     # 2. Test Batch Padding Invariance for Item 0 (Standalone vs in Padded Batch)
-    st_single = st_padded[0:1, :7]
-    st_single_m = st_mask[0:1, :7]
+    valid_len_0 = len(seq0_valid)
+    st_single = st_padded[0:1, :valid_len_0]
+    st_single_m = st_mask[0:1, :valid_len_0]
 
     with torch.no_grad():
         sdpa_single = model_sdpa(input_ids=st_single, attention_mask=st_single_m).logits[0].item()

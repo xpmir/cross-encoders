@@ -17,6 +17,7 @@ from transformers.models.modernbert.modeling_modernbert import (
     ModernBertAttention,
     ModernBertPreTrainedModel,
     eager_attention_forward,
+    create_bidirectional_sliding_window_mask,
 )
 from transformers.masking_utils import create_bidirectional_mask
 from transformers.modeling_outputs import SequenceClassifierOutput
@@ -421,6 +422,33 @@ class ModernBertMiceTopLayer(nn.Module):
         return q_hidden
 
 
+def _split_input_ids_vectorized(
+    input_ids: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    sep_token_id: int = 50282,
+    pad_token_id: int = 50283,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Vectorized GPU splitting of concatenated pair input_ids [B, S] into query and doc tensors."""
+    device = input_ids.device
+    batch_size, seq_len = input_ids.shape
+
+    first_sep_idx = (input_ids == sep_token_id).long().argmax(dim=1, keepdim=True)
+    seq_pos = torch.arange(seq_len, device=device).unsqueeze(0)
+    attn_bool = (
+        attention_mask.bool()
+        if attention_mask is not None
+        else torch.ones_like(input_ids, dtype=torch.bool)
+    )
+
+    q_mask = (seq_pos <= first_sep_idx) & attn_bool
+    d_mask = (seq_pos > first_sep_idx) & attn_bool
+
+    q_ids = torch.where(q_mask, input_ids, pad_token_id)
+    d_ids = torch.where(d_mask, input_ids, pad_token_id)
+
+    return q_ids, q_mask.long(), d_ids, d_mask.long()
+
+
 class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
     """
     HF-compatible Sequence Classification Model for MICE with ModernBERT backbone.
@@ -472,125 +500,27 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         )
         self.post_init()
 
-    def forward(
+    def _forward_bottom_layers(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        query_ids: Optional[torch.LongTensor] = None,
-        query_mask: Optional[torch.Tensor] = None,
-        doc_ids: Optional[torch.LongTensor] = None,
-        doc_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        return_dict: Optional[bool] = None,
+        query_ids: torch.Tensor,
+        query_mask: torch.Tensor,
+        doc_ids: torch.Tensor,
+        doc_mask: torch.Tensor,
+        use_unpadded: bool,
         **kwargs,
-    ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
-        return_dict = (
-            return_dict
-            if return_dict is not None
-            else getattr(self.config, "return_dict", True)
-        )
+    ):
+        """Pass query and document sequences through bottom encoder layers.
 
-        # Handle ST concatenated inputs if query_ids is not passed
-        if query_ids is None and input_ids is not None:
-            sep_token_id = getattr(
-                self.config, "sep_token_id", getattr(self.config, "eos_token_id", 50283)
-            )
-
-            # Extract query and doc sequences by finding first SEP token per row
-            b_size, seq_len = input_ids.shape
-            q_ids_list, d_ids_list = [], []
-            q_mask_list, d_mask_list = [], []
-
-            cls_token_id = getattr(
-                self.config, "cls_token_id", getattr(self.config, "bos_token_id", 50281)
-            )
-
-            for i in range(b_size):
-                row = input_ids[i]
-                row_m = (
-                    attention_mask[i]
-                    if attention_mask is not None
-                    else torch.ones_like(row, dtype=torch.bool)
-                )
-
-                # Trim trailing padding tokens from row if attention_mask is present
-                if attention_mask is not None:
-                    valid_len = row_m.sum().item()
-                    row_valid = row[:valid_len]
-                    row_m_valid = row_m[:valid_len]
-                else:
-                    valid_len = seq_len
-                    row_valid = row
-                    row_m_valid = row_m
-
-                sep_idx = (row_valid == sep_token_id).nonzero(as_tuple=False)
-                if len(sep_idx) > 0:
-                    split = sep_idx[0].item() + 1
-                    q_seq = row_valid[:split]
-                    d_seq = row_valid[split:]
-                    q_m_seq = (
-                        row_m_valid[:split] if attention_mask is not None else None
-                    )
-                    d_m_seq = (
-                        row_m_valid[split:] if attention_mask is not None else None
-                    )
-                else:
-                    half = valid_len // 2
-                    q_seq = row_valid[:half]
-                    d_seq = row_valid[half:]
-                    q_m_seq = row_m_valid[:half] if attention_mask is not None else None
-                    d_m_seq = row_m_valid[half:] if attention_mask is not None else None
-
-                # Prepend CLS token to doc if missing (HF pair tokenization omits CLS for doc)
-                if (
-                    len(d_seq) > 0
-                    and cls_token_id is not None
-                    and d_seq[0].item() != cls_token_id
-                ):
-                    d_seq = torch.cat([d_seq.new_tensor([cls_token_id]), d_seq])
-                    if d_m_seq is not None:
-                        d_m_seq = torch.cat([d_m_seq.new_tensor([1]), d_m_seq])
-
-                q_ids_list.append(q_seq)
-                d_ids_list.append(d_seq)
-                if q_m_seq is not None:
-                    q_mask_list.append(q_m_seq)
-                if d_m_seq is not None:
-                    d_mask_list.append(d_m_seq)
-
-            # Pad sub-batches
-            query_ids = torch.nn.utils.rnn.pad_sequence(
-                q_ids_list, batch_first=True, padding_value=self.config.pad_token_id
-            )
-            doc_ids = torch.nn.utils.rnn.pad_sequence(
-                d_ids_list, batch_first=True, padding_value=self.config.pad_token_id
-            )
-            if attention_mask is not None:
-                query_mask = torch.nn.utils.rnn.pad_sequence(
-                    q_mask_list, batch_first=True, padding_value=0
-                )
-                doc_mask = torch.nn.utils.rnn.pad_sequence(
-                    d_mask_list, batch_first=True, padding_value=0
-                )
-
-        attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
-        is_flash_impl = "flash" in str(attn_impl).lower()
-        use_unpadded = (
-            is_flash_impl
-            and query_ids.is_cuda
-            and is_fa2_available()
-            and _unpad_input is not None
-        )
-
+        Supports both 1D unpadded varlen FlashAttention 2 pipeline (for zero-OOM memory efficiency)
+        and 3D padded SDPA pipeline (for CPU/V100 fallback).
+        """
         if use_unpadded:
             logger.debug(
-                "[MICE v2] Executing unpadded Flash Attention 2 pipeline for bottom and top layers."
+                "[MICE v2] Executing unpadded Flash Attention 2 pipeline for bottom layers."
             )
-            # Embeddings
             q_embeds = self.model.embeddings(input_ids=query_ids)
             d_embeds = self.model.embeddings(input_ids=doc_ids)
 
-            # Unpad query and doc embeddings ONCE
             (
                 q_hidden,
                 cu_seqlens_q,
@@ -606,19 +536,24 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 d_pos_ids,
             ) = _unpad_input_with_posids(d_embeds, doc_mask)
 
-            # Precompute rotary embeddings ONCE for unpadded 1D position sequences
-            q_pos_emb = self.model.rotary_emb(
-                q_hidden, q_pos_ids, layer_type="full_attention"
-            )
-            d_pos_emb = self.model.rotary_emb(
-                d_hidden, d_pos_ids, layer_type="full_attention"
-            )
+            q_position_embeddings = {
+                l_type: self.model.rotary_emb(q_hidden, q_pos_ids, layer_type=l_type)
+                for l_type in set(self.config.layer_types)
+            }
+            d_position_embeddings = {
+                l_type: self.model.rotary_emb(d_hidden, d_pos_ids, layer_type=l_type)
+                for l_type in set(self.config.layer_types)
+            }
 
-            # Pass unpadded 1D sequences through bottom encoder layers
             for encoder_layer in self.model.layers:
+                layer_type = getattr(
+                    encoder_layer,
+                    "attention_type",
+                    getattr(encoder_layer.attn, "layer_type", "full_attention"),
+                )
                 q_hidden = encoder_layer(
                     q_hidden,
-                    position_embeddings=q_pos_emb,
+                    position_embeddings=q_position_embeddings[layer_type],
                     attention_mask=None,
                     cu_seq_lens_q=cu_seqlens_q.to(torch.int32),
                     cu_seq_lens_k=cu_seqlens_q.to(torch.int32),
@@ -628,7 +563,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 )
                 d_hidden = encoder_layer(
                     d_hidden,
-                    position_embeddings=d_pos_emb,
+                    position_embeddings=d_position_embeddings[layer_type],
                     attention_mask=None,
                     cu_seq_lens_q=cu_seqlens_d.to(torch.int32),
                     cu_seq_lens_k=cu_seqlens_d.to(torch.int32),
@@ -637,31 +572,34 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     **kwargs,
                 )
 
-            # Pass unpadded query hidden states through top interaction layers
-            num_top = len(self.top_layers)
-            for i, top_layer in enumerate(self.top_layers):
-                q_hidden = top_layer(
-                    q_hidden,
-                    d_hidden,
-                    q_position_embeddings=q_pos_emb,
-                    is_last_layer=(i == num_top - 1),
-                    cu_seqlens_q=cu_seqlens_q,
-                    cu_seqlens_d=cu_seqlens_d,
-                    max_seqlen_q=max_seqlen_q,
-                    max_seqlen_d=max_seqlen_d,
-                    **kwargs,
-                )
+            if hasattr(self.model, "final_norm") and self.model.final_norm is not None:
+                q_hidden = self.model.final_norm(q_hidden)
+                d_hidden = self.model.final_norm(d_hidden)
 
-            # Slicing and Pooling: on last top layer, q_hidden was sliced to [1, batch_size, D]
-            cls_hidden = q_hidden.squeeze(0)  # Shape: [batch_size, D]
+            q_pos_emb_top = q_position_embeddings.get(
+                "full_attention", list(q_position_embeddings.values())[0]
+            )
+
+            return (
+                q_hidden,
+                d_hidden,
+                q_pos_emb_top,
+                cu_seqlens_q,
+                cu_seqlens_d,
+                max_seqlen_q,
+                max_seqlen_d,
+            )
         else:
-            if is_flash_impl and not query_ids.is_cuda:
+            if (
+                getattr(self.config, "_attn_implementation", "sdpa")
+                == "flash_attention_2"
+                and not query_ids.is_cuda
+            ):
                 logger.warning(
                     "[MICE v2] Flash Attention 2 requested but inputs are not on CUDA. "
                     "Falling back to standard 3D padded pipeline."
                 )
 
-            # Standard 3D Padded Pipeline (SDPA / Eager / Fallback)
             q_outputs = self.model(
                 input_ids=query_ids, attention_mask=query_mask, **kwargs
             )
@@ -673,17 +611,111 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             position_ids = torch.arange(
                 q_hidden.shape[1], device=q_hidden.device
             ).unsqueeze(0)
+
             q_pos_emb = self.model.rotary_emb(
                 q_hidden, position_ids, layer_type="full_attention"
             )
 
+            return (
+                q_hidden,
+                d_hidden,
+                q_pos_emb,
+                None,
+                None,
+                None,
+                None,
+            )
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        query_ids: Optional[torch.LongTensor] = None,
+        query_mask: Optional[torch.Tensor] = None,
+        doc_ids: Optional[torch.LongTensor] = None,
+        doc_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        return_dict: Optional[bool] = None,
+        **kwargs,
+    ) -> Union[Tuple[torch.Tensor, ...], SequenceClassifierOutput]:
+        return_dict = (
+            return_dict
+            if return_dict is not None
+            else getattr(self.config, "return_dict", True)
+        )
+
+        # Handle ST concatenated inputs if query_ids is not passed
+        if (query_ids is None or doc_ids is None) and input_ids is not None:
+            sep_token_id = getattr(
+                self.config, "sep_token_id", getattr(self.config, "eos_token_id", 50282)
+            )
+            pad_token_id = getattr(
+                self.config, "pad_token_id", getattr(self.config, "pad_token_id", 50283)
+            )
+            query_ids, query_mask, doc_ids, doc_mask = _split_input_ids_vectorized(
+                input_ids,
+                attention_mask,
+                sep_token_id=sep_token_id,
+                pad_token_id=pad_token_id,
+            )
+
+        attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
+        is_flash_impl = "flash" in str(attn_impl).lower()
+        use_unpadded = (
+            is_flash_impl
+            and query_ids.is_cuda
+            and is_fa2_available()
+            and _unpad_input is not None
+        )
+
+        (
+            q_hidden,
+            d_hidden,
+            q_pos_emb_top,
+            cu_seqlens_q,
+            cu_seqlens_d,
+            max_seqlen_q,
+            max_seqlen_d,
+        ) = self._forward_bottom_layers(
+            query_ids,
+            query_mask,
+            doc_ids,
+            doc_mask,
+            use_unpadded=use_unpadded,
+            **kwargs,
+        )
+
+        if use_unpadded:
+            num_top = len(self.top_layers)
+            for i, top_layer in enumerate(self.top_layers):
+                q_hidden = top_layer(
+                    q_hidden,
+                    d_hidden,
+                    q_position_embeddings=q_pos_emb_top,
+                    is_last_layer=(i == num_top - 1),
+                    cu_seqlens_q=cu_seqlens_q,
+                    cu_seqlens_d=cu_seqlens_d,
+                    max_seqlen_q=max_seqlen_q,
+                    max_seqlen_d=max_seqlen_d,
+                    **kwargs,
+                )
+            cls_hidden = q_hidden.squeeze(0)
+        else:
             q_attn_mask = None
+            q_sw_attn_mask = None
             if query_mask is not None:
                 q_attn_mask = create_bidirectional_mask(
                     config=self.config,
                     inputs_embeds=q_hidden,
                     attention_mask=query_mask,
                 )
+                local_attn = getattr(self.config, "local_attention", 128)
+                if local_attn is not None and local_attn > 0:
+                    q_sw_attn_mask = create_bidirectional_sliding_window_mask(
+                        config=self.config,
+                        inputs_embeds=q_hidden,
+                        attention_mask=query_mask,
+                    )
 
             num_top = len(self.top_layers)
             for i, top_layer in enumerate(self.top_layers):
@@ -693,10 +725,10 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     q_mask=query_mask,
                     d_mask=doc_mask,
                     q_attn_mask=q_attn_mask,
-                    q_position_embeddings=q_pos_emb,
+                    q_sw_attn_mask=q_sw_attn_mask,
+                    q_position_embeddings=q_pos_emb_top,
                     is_last_layer=(i == num_top - 1),
                 )
-
             cls_hidden = q_hidden[:, 0]
 
         logits = self.classifier(cls_hidden)
