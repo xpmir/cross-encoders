@@ -127,7 +127,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     attn_implementation: Param[Optional[str]] = field(default=None, ignore_default=True)
     """Attention implementation (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
 
-    _version: Constant[int] = 2
+    _version: Constant[str] = "2.0.1"
 
     hf_model: nn.Module
 

@@ -17,7 +17,6 @@ from transformers.models.modernbert.modeling_modernbert import (
     ModernBertAttention,
     ModernBertPreTrainedModel,
     eager_attention_forward,
-    create_bidirectional_sliding_window_mask,
 )
 from transformers.masking_utils import create_bidirectional_mask
 from transformers.modeling_outputs import SequenceClassifierOutput
@@ -315,7 +314,6 @@ class ModernBertMiceCrossAttention(nn.Module):
                 key_states,
                 value_states,
                 attention_mask=cross_mask,
-                dropout=self.attention_dropout if self.training else 0.0,
                 scaling=self.head_dim**-0.5,
                 is_causal=False,
                 **kwargs,
@@ -324,6 +322,19 @@ class ModernBertMiceCrossAttention(nn.Module):
 
         attn_output = self.out_drop(self.Wo(attn_output))
         return attn_output
+
+
+def create_sliding_window_mask(
+    query_mask: torch.Tensor, local_attention: int = 128
+) -> torch.Tensor:
+    """Generates a 4D band-diagonal sliding window mask [B, 1, S, S] for SDPA."""
+    seq_len = query_mask.shape[1]
+    half_window = local_attention // 2
+    row_idx = torch.arange(seq_len, device=query_mask.device).unsqueeze(1)
+    col_idx = torch.arange(seq_len, device=query_mask.device).unsqueeze(0)
+    band_mask = (row_idx - col_idx).abs() <= half_window
+    key_mask = query_mask.unsqueeze(1).unsqueeze(2).bool()
+    return key_mask & band_mask.unsqueeze(0).unsqueeze(0)
 
 
 class ModernBertMiceTopLayer(nn.Module):
@@ -358,6 +369,7 @@ class ModernBertMiceTopLayer(nn.Module):
         q_mask: Optional[torch.Tensor] = None,
         d_mask: Optional[torch.Tensor] = None,
         q_attn_mask: Optional[torch.Tensor] = None,
+        q_sw_attn_mask: Optional[torch.Tensor] = None,
         q_position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         is_last_layer: bool = False,
         cu_seqlens_q: Optional[torch.Tensor] = None,
@@ -399,10 +411,18 @@ class ModernBertMiceTopLayer(nn.Module):
             )
         else:
             # Padded SDPA / Eager query self-attention
+            target_mask = (
+                q_sw_attn_mask
+                if (
+                    q_sw_attn_mask is not None
+                    and getattr(self.self_attn, "sliding_window", None) is not None
+                )
+                else q_attn_mask
+            )
             self_out, _ = self.self_attn(
                 self.self_attn_norm(q_hidden),
                 position_embeddings=q_position_embeddings,
-                attention_mask=q_attn_mask,
+                attention_mask=target_mask,
                 **kwargs,
             )
         q_hidden = q_hidden + self_out
@@ -490,8 +510,12 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         if num_top is None:
             num_top = config.num_hidden_layers - config.n_contextualization_layers
 
+        layer_offset = n_context if n_context is not None else 0
         self.top_layers = nn.ModuleList(
-            [ModernBertMiceTopLayer(config, layer_idx=i) for i in range(num_top)]
+            [
+                ModernBertMiceTopLayer(config, layer_idx=layer_offset + i)
+                for i in range(num_top)
+            ]
         )
 
         self.classifier = nn.Linear(
@@ -711,10 +735,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 )
                 local_attn = getattr(self.config, "local_attention", 128)
                 if local_attn is not None and local_attn > 0:
-                    q_sw_attn_mask = create_bidirectional_sliding_window_mask(
-                        config=self.config,
-                        inputs_embeds=q_hidden,
-                        attention_mask=query_mask,
+                    q_sw_attn_mask = create_sliding_window_mask(
+                        query_mask=query_mask,
+                        local_attention=local_attn,
                     )
 
             num_top = len(self.top_layers)
