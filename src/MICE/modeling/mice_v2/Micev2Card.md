@@ -22,7 +22,7 @@ pipeline_tag: text-classification
 [![Paper](https://img.shields.io/badge/Paper-Arxiv-red)](https://arxiv.org/abs/2602.16299)
 [![GitHub](https://img.shields.io/badge/GitHub-Code-blue)](https://github.com/xpmir/cross-encoders)
 
-This model is a **MICE v2** (Modular Interaction Cross-Encoder with ModernBERT backbone) model based on `{{base}}`.
+This model is a **MICE v2** (Minimal Interaction Cross-Encoder) model based on `{{base}}` (ModernBERT backbone).
 
 MICE models separate query and document processing in the bottom layers, enabling independent document contextualization and faster re-ranking with cross-attention only in the top interaction layers.
 

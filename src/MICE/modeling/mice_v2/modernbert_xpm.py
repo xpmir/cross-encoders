@@ -236,10 +236,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         from huggingface_hub import ModelCard, ModelCardData
 
         save_path = Path(save_directory)
-        save_path.mkdir(parents=True, exist_ok=True)
-        self.hf_model.save_pretrained(save_path)
-        if hasattr(self.tokenizer, "tokenizer"):
-            self.tokenizer.tokenizer.save_pretrained(save_path)
+        self.save_model(save_path)
 
         # Generate and write README.md model card from Micev2Card.md template using huggingface_hub ModelCard
         card_template_path = Path(__file__).parent / "Micev2Card.md"
@@ -292,19 +289,65 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         logger.info(f"Model exported for Sentence Transformers at {save_path}")
 
     def save_model(self, path: Path):
+        """Save the model architecture config, state dict weights, and tokenizer to directory."""
+        path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
-        torch.save(self.hf_model.state_dict(), path / "pytorch_model.bin")
-        self.hf_model.config.save_pretrained(path)
+
+        # Disconnect base model remote reference to prevent HF Hub network requests on reload
+        self.hf_model.config._name_or_path = str(path)
+        if hasattr(self.hf_model.config, "base_model_name_or_path"):
+            self.hf_model.config.base_model_name_or_path = str(path)
+
+        # 1. Save HF model (config.json + model.safetensors)
+        self.hf_model.save_pretrained(path)
+        logger.info(f"Saved ModernBERT MICE model configuration and weights to {path}")
+
+        # 2. Save tokenizer
+        if (
+            hasattr(self.tokenizer, "tokenizer")
+            and self.tokenizer.tokenizer is not None
+        ):
+            self.tokenizer.tokenizer.name_or_path = str(path)
+            self.tokenizer.tokenizer.save_pretrained(path)
+            logger.info(f"Saved tokenizer to {path}")
+        elif hasattr(self.tokenizer, "save_pretrained"):
+            if hasattr(self.tokenizer, "name_or_path"):
+                self.tokenizer.name_or_path = str(path)
+            self.tokenizer.save_pretrained(path)
+            logger.info(f"Saved tokenizer to {path}")
+        else:
+            logger.warning(
+                f"Could not save tokenizer to {path}: no `save_pretrained` method found on tokenizer {type(self.tokenizer)}"
+            )
 
     def load_model(self, path: Path):
+        """Load model architecture config, state dict weights, and tokenizer from directory."""
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Model directory '{path}' does not exist.")
+
         if not self._initialized:
-            self.initialize()
+            if (path / "config.json").exists():
+                logger.info(f"Loading MICE config from {path / 'config.json'}")
+                mice_config = AutoConfig.from_pretrained(path)
+                if self.attn_implementation is not None:
+                    mice_config._attn_implementation = self.attn_implementation
+                hf_model = ModernBertMiceForSequenceClassification(mice_config)
+                self.add_module("hf_model", hf_model)
+                self._initialized = True
+            else:
+                self.initialize()
 
         if (path / "model.safetensors").exists():
-            super().load_model(path)
+            from safetensors.torch import load_file
+
+            state_dict = load_file(path / "model.safetensors")
+            self.hf_model.load_state_dict(state_dict)
+            logger.info(f"Loaded weights from {path / 'model.safetensors'}")
         elif (path / "pytorch_model.bin").exists():
             state_dict = torch.load(path / "pytorch_model.bin", map_location="cpu")
             self.hf_model.load_state_dict(state_dict)
+            logger.info(f"Loaded weights from {path / 'pytorch_model.bin'}")
         else:
             super().load_model(path)
 

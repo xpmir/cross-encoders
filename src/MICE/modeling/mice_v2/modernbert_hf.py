@@ -3,6 +3,7 @@ ModernBERT MICE HuggingFace Implementation.
 Custom PreTrainedModel and Modules supporting SDPA, Flash Attention 2, and ST export.
 """
 
+import copy
 import logging
 from typing import Optional, Tuple, Union
 import torch
@@ -490,27 +491,40 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 )
                 config._attn_implementation = "sdpa"
 
+        # 1. Determine bottom and top layer counts
+        n_context = config.n_contextualization_layers
+        num_top = config.n_interaction_layers
+        if num_top is None:
+            num_top = config.num_hidden_layers - n_context
+
+        # Update config total layers so num_hidden_layers represents total MICE layers
+        config.num_hidden_layers = n_context + num_top
+        if hasattr(config, "layer_types") and isinstance(
+            config.layer_types, (list, tuple)
+        ):
+            if len(config.layer_types) != config.num_hidden_layers:
+                multiplier = (
+                    config.num_hidden_layers // max(1, len(config.layer_types))
+                ) + 1
+                config.layer_types = (list(config.layer_types) * multiplier)[
+                    : config.num_hidden_layers
+                ]
+
         super().__init__(config)
         self.config = config
 
-        # Standard ModernBERT backbone for bottom layers & embeddings
-        self.model = ModernBertModel(config)
+        # 2. Build bottom ModernBertModel backbone with exactly n_contextualization_layers directly
+        bottom_config = copy.deepcopy(config)
+        bottom_config.num_hidden_layers = n_context
+        if hasattr(bottom_config, "layer_types") and isinstance(
+            bottom_config.layer_types, (list, tuple)
+        ):
+            bottom_config.layer_types = list(bottom_config.layer_types)[:n_context]
 
-        # Prune bottom layers to n_contextualization_layers so bottom layers run only n_context layers
-        n_context = config.n_contextualization_layers
-        if n_context is not None and n_context < len(self.model.layers):
-            logger.info(
-                f"Pruning ModernBertModel bottom layers from {len(self.model.layers)} "
-                f"to n_contextualization_layers={n_context}"
-            )
-            self.model.layers = self.model.layers[:n_context]
+        self.model = ModernBertModel(bottom_config)
 
-        # Top interaction layers
-        num_top = config.n_interaction_layers
-        if num_top is None:
-            num_top = config.num_hidden_layers - config.n_contextualization_layers
-
-        layer_offset = n_context if n_context is not None else 0
+        # 3. Top interaction layers
+        layer_offset = n_context
         self.top_layers = nn.ModuleList(
             [
                 ModernBertMiceTopLayer(config, layer_idx=layer_offset + i)

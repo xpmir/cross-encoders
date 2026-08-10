@@ -80,6 +80,8 @@ def main():
         or isinstance(loaded_cfg, ModernBertMiceConfig)
     )
 
+    logger.info("\n\n#1 - Initializing MICE V2 scorer and tasks...")
+
     if is_mice_model:
         logger.info("Provided path/id '%s' is an existing MICE model checkpoint.", target_hf_id)
         tokenizer = MICEQueryDocTokenizer.C(model_id=target_hf_id)
@@ -179,6 +181,7 @@ def main():
     logger.info("Successfully verified README.md model card generated from MiceCard.md.")
 
     # 4. Reload via HF AutoModelForSequenceClassification
+    logger.info("\n\n#4 - Reloading local model via HF AutoModelForSequenceClassification...")
     logger.info("Reloading local model via AutoModelForSequenceClassification...")
     hf_reloaded = AutoModelForSequenceClassification.from_pretrained(
         export_dir, trust_remote_code=True
@@ -215,6 +218,7 @@ def main():
     logger.info("[SUCCESS] Baseline vs. HF AutoModel parity check PASSED!")
 
     # 5. Reload via SentenceTransformers CrossEncoder
+    logger.info("\n\n#5 - Loading exported model with SentenceTransformers CrossEncoder...")
     logger.info("Reloading local model via sentence_transformers.CrossEncoder...")
     st_cross_encoder = CrossEncoder(
         str(export_dir), device=str(device), trust_remote_code=True
@@ -239,7 +243,7 @@ def main():
         tokenizer.push_to_hub(args.repo_id)
         logger.info("Successfully pushed model and tokenizer to %s", args.repo_id)
 
-        logger.info("Testing remote reload via sentence_transformers.CrossEncoder('%s', trust_remote_code=True)...", args.repo_id)
+        logger.info("\n\n#6 - Testing remote reload via sentence_transformers.CrossEncoder('%s', trust_remote_code=True)...", args.repo_id)
         hub_cross_encoder = CrossEncoder(
             args.repo_id, device=str(device), trust_remote_code=True
         )
