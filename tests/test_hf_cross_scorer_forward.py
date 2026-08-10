@@ -3,6 +3,7 @@ import os
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 import torch
+import pytest
 import logging
 from xpmir.letor.records import PointwiseItems
 from experimaestro import LightweightTask, Param
@@ -77,6 +78,7 @@ class TestHFForwardTask(LightweightTask):
         )
 
 
+@pytest.mark.parametrize("model_id", ["jhu-clsp/ettin-encoder-32m"])
 def test_hf_cross_scorer(model_id):
     """tests hf cross scorer loading, forward pass."""
     # hf_cross_scorer returns the model and a list of initialization tasks

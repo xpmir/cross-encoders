@@ -209,10 +209,22 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                     pref_attn_implementation=cfg.attn_implementation,
                 )
             else:
+                st_tok = None
+                if cfg.max_query_length is not None or cfg.max_doc_length is not None:
+                    from xpmir.neural.huggingface import HFQueryDocTokenizer
+
+                    st_tok = HFQueryDocTokenizer.C(
+                        model_id=scorer_id,
+                        max_query_length=cfg.max_query_length,
+                        max_doc_length=cfg.max_doc_length,
+                        max_length=cfg.max_length,
+                    )
+
                 scorer, ce_init_tasks = st_cross_scorer(
                     model_id=scorer_id,
                     max_length=cfg.max_length,
                     pref_attn_implementation=cfg.attn_implementation,
+                    tokenizer=st_tok,
                 )
 
             scorer.tag("scorer", scorer_id)
