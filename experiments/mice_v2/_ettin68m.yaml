@@ -8,7 +8,7 @@ learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 256 #is 256 in ettin-reranker-v1
-        max_epochs: 2000 #  x 128 x 100 = ~26M Samples < 145M in full dataset
+        max_epochs: 3000 #  x 128 x 100 = ~76M Samples < 145M in full dataset
         num_warmup_steps: 20000 # Follows the original setup
         weight_decay: 0.00
         lr: 3e-5 #tom aarsen value
@@ -17,11 +17,11 @@ learner:
         precision: bf16-mixed
     # sample_max: 2_000_000
     max_grad_norm: 1.0
-    checkpoint_interval: 50
-    validation_interval: 20
+    checkpoint_interval: 100
+    validation_interval: 50
     validation_top_k: 100
     validation: nanobeir11
-    requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=40G)
+    requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=50G) * 2
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 ettin_subset_exclude: [] # Train on full reranker-v1 data
