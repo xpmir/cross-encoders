@@ -3,7 +3,7 @@ title: cross_scorer_evaluation
 description: Compare FlashAttention2 and SDPA for HF Cross-scorers.
 
 module: Evaluation.experiment
-pre_experiment: ../pre_experiment.py
+pre_experiment: pre_experiment
 
 gpu: true
 

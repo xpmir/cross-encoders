@@ -92,6 +92,21 @@ aggregations = {
         "touche",
         "trec_covid",
     ],
+    "BEIR13 Decontaminated": [
+        "arguana_decontaminated",
+        "climate_fever_decontaminated",
+        "dbpedia_decontaminated",
+        "fever_decontaminated",
+        "fiqa_decontaminated",
+        "hotpotqa_decontaminated",
+        "nfcorpus_decontaminated",
+        "nq_decontaminated",
+        "quora_decontaminated",
+        "scidocs_decontaminated",
+        "scifact_decontaminated",
+        "touche_decontaminated",
+        "trec_covid_decontaminated",
+    ],
     "Lotte-S": [
         "lotte_lifestyle",
         "lotte_recreation",
@@ -106,6 +121,7 @@ aggregations = {
 aggregation_hf = {
     "Mean In Domain": aggregations["In Domain"],
     "BEIR 13": aggregations["BEIR13"],
+    "BEIR 13 (Decontaminated)": aggregations["BEIR13 Decontaminated"],
     "LoTTE (OOD)": aggregations["Lotte-S"],
     "Nano BEIR": aggregations["Nano BEIR"],
 }
@@ -133,6 +149,19 @@ DATASET_TO_ABB = {
     "lotte_science": "Sci.",
     "lotte_technology": "Tech.",
     "lotte_writing": "Writ.",
+    "fiqa_decontaminated": "Fi*",
+    "nfcorpus_decontaminated": "NFC*",
+    "scifact_decontaminated": "SF*",
+    "arguana_decontaminated": "Ar*",
+    "touche_decontaminated": "T-v2*",
+    "climate_fever_decontaminated": "CF*",
+    "dbpedia_decontaminated": "DB*",
+    "fever_decontaminated": "FE*",
+    "hotpotqa_decontaminated": "HPQ*",
+    "nq_decontaminated": "NQ*",
+    "quora_decontaminated": "Q*",
+    "scidocs_decontaminated": "SD*",
+    "trec_covid_decontaminated": "T-C*",
 }
 
 

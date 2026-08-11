@@ -116,6 +116,9 @@ class Evaluation:
     beir13: bool = False
     """Whether to evaluate on all BEIR13 datasets"""
 
+    beir13_decontaminated: bool = False
+    """Whether to evaluate on all LightOn BEIR13 decontaminated datasets"""
+
     lotte_search: bool = False
     """Whether to evaluate on all LOTTE Search datasets"""
 

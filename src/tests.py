@@ -179,6 +179,38 @@ def BEIR_13_tests(
     )
 
 
+BEIR13_DECONTAMINATED_KEYS = {
+    "arguana_decontaminated": "ai.lighton.beir_decontaminated.arguana",
+    "climate_fever_decontaminated": "ai.lighton.beir_decontaminated.climate_fever",
+    "dbpedia_decontaminated": "ai.lighton.beir_decontaminated.dbpedia_entity",
+    "fever_decontaminated": "ai.lighton.beir_decontaminated.fever",
+    "fiqa_decontaminated": "ai.lighton.beir_decontaminated.fiqa",
+    "hotpotqa_decontaminated": "ai.lighton.beir_decontaminated.hotpotqa",
+    "nfcorpus_decontaminated": "ai.lighton.beir_decontaminated.nfcorpus",
+    "nq_decontaminated": "ai.lighton.beir_decontaminated.nq",
+    "quora_decontaminated": "ai.lighton.beir_decontaminated.quora",
+    "scidocs_decontaminated": "ai.lighton.beir_decontaminated.scidocs",
+    "scifact_decontaminated": "ai.lighton.beir_decontaminated.scifact",
+    "touche_decontaminated": "ai.lighton.beir_decontaminated.webis_touche2020",
+    "trec_covid_decontaminated": "ai.lighton.beir_decontaminated.trec_covid",
+}
+
+
+@lru_cache
+def BEIR13_decontaminated_tests(
+    test_topic_nb: int, retrievers_only: bool = False, launcher=None
+) -> EvaluationsCollection:
+    """All 13 LightOn decontaminated BEIR datasets."""
+    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+    evals = {}
+    for key, dataset_id in BEIR13_DECONTAMINATED_KEYS.items():
+        ds = prepare_dataset(dataset_id)
+        ds = get_fold(ds, test_topic_nb, launcher=launcher)
+        evals[key] = Evaluations(ds, measures=measures)
+
+    return EvaluationsCollection(**evals)
+
+
 @lru_cache
 def Robust04_test(
     test_topic_nb: int, retrievers_only: bool = False, launcher=None
@@ -393,6 +425,14 @@ def build_tests(
             )
         )
 
+    # 3b. BEIR13 Decontaminated
+    if cfg.beir13_decontaminated:
+        add_evals(
+            BEIR13_decontaminated_tests(
+                cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
+            )
+        )
+
     if cfg.robust04 or cfg.all_datasets:
         add_evals(
             Robust04_test(
@@ -417,17 +457,22 @@ def build_tests(
     # 4. Specific datasets
     if cfg.datasets:
         # We need a way to map dataset names to their respective prepare functions
-        # For now, let's look them up in BEIR_13_tests if possible, or handle individually
         beir13_all = BEIR_13_tests(
+            cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
+        )
+        beir13_decont_all = BEIR13_decontaminated_tests(
             cfg.test_max_topics, retrievers_only=retrievers_only, launcher=launcher
         )
         for ds_name in cfg.datasets:
             if ds_name in beir13_all.collection:
                 if ds_name not in all_evals:
                     all_evals[ds_name] = beir13_all.collection[ds_name]
+            elif ds_name in beir13_decont_all.collection:
+                if ds_name not in all_evals:
+                    all_evals[ds_name] = beir13_decont_all.collection[ds_name]
             else:
                 logger.warning(
-                    f"Dataset {ds_name} not found in BEIR13 or supported list"
+                    f"Dataset {ds_name} not found in BEIR13, BEIR13_decontaminated, or supported list"
                 )
 
     # If nothing was selected, use minified_tests as default (original behavior)

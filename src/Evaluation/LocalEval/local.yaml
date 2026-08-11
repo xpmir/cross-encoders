@@ -3,7 +3,7 @@ title: Evaluation of Local Models
 description: Experiment to evaluate local checkpoints of cross-encoders
 
 module: Evaluation.LocalEval.experiment
-pre_experiment: ../../pre_experiment.py
+pre_experiment: ../pre_experiment
 
 gpu: true
 

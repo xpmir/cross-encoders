@@ -1,14 +1,13 @@
 id: debug_mice_training
 title: "Debugging Mice training"
 description:
-    💡 this config load everything from core_base.yaml, and just overrides the base and learner.loss
-    So that only ettin-150m is launched with infoNCE loss
+    💡 You can run this debug config to ensure that the environment is properly setup.
+    - It will run a small training of Mice on a subset of the data, and then evaluate it on a small validation set.
 
 module: MICE.experiments.mice_training
 pre_experiment: pre_experiment
 export_trained_models: false
 seed: 12 # To mimick the HF xp
-
 
 
 preprocessing:
