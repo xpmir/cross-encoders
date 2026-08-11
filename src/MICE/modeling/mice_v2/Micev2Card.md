@@ -91,9 +91,3 @@ with torch.no_grad():
     output = scorer(input_records)
 print(output)
 ```
-
-## Evaluations
-
-We provide evaluations of this cross-encoder re-ranking the top `{{k}}` documents retrieved by `{{retriever}}`.
-
-{{results}}

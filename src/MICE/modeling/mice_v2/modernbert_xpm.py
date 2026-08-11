@@ -21,7 +21,11 @@ from experimaestro import LightweightTask, Param, Constant, field
 from xpmir.rankers.scorer import AbstractModuleScorer
 from xpmir.letor.records import BaseItems
 from xpm_torch.utils import to_device
-from xpm_torch.module import SimpleModuleLoader, fallback_fa2_if_incompatible_precision
+from xpm_torch.module import (
+    SimpleModuleLoader,
+    ReadmeSection,
+    fallback_fa2_if_incompatible_precision,
+)
 from MICE.modeling.mice import MICEQueryDocTokenizer, MICETokenizedTexts, QueryDocInput
 from MICE.modeling.mice_v2.modernbert_hf import (
     ModernBertMiceConfig,
@@ -275,77 +279,43 @@ class ModernBertMiceScorer(AbstractModuleScorer):
 
         return out.logits.squeeze(-1)
 
-    def write_hub_extras(self, save_directory: Path):
-        """Called by TorchHFHub during model export."""
-        self.export_to_st(save_directory)
+    def hub_readme_sections(self) -> List["ReadmeSection"]:
+        """Returns structured README sections (main card template + separate evaluations section)."""
+        from xpm_torch.module import ReadmeSection
+        from xpm_torch.utils import count_safetensors_params, format_num_params
+        from huggingface_hub import ModelCard, ModelCardData
 
-    def export_to_st(
-        self,
-        save_directory: str,
-        repo_id: Optional[str] = None,
-        metadata: Optional[dict] = None,
-    ):
-        """Export model in Sentence Transformers compatible format, including model card."""
-        from xpm_torch.utils import build_model_card
-        from safetensors.torch import save_file
+        sections = []
+        template_path = Path(__file__).parent / "Micev2Card.md"
 
-        save_path = Path(save_directory)
+        export_dir = getattr(self, "_last_export_dir", None) or getattr(
+            getattr(self, "__config__", None), "_last_export_dir", None
+        )
+        total_params_str = "N/A"
+        if export_dir:
+            st_path = Path(export_dir) / "model.safetensors"
+            if st_path.is_file():
+                try:
+                    num_params = count_safetensors_params(st_path)
+                    total_params_str = (
+                        f"{num_params:,} ({format_num_params(num_params)})"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Could not compute parameter count from safetensors: {e}"
+                    )
 
-        # Handle invocation on Config object
-        if hasattr(self, "instance") and not getattr(self, "_initialized", False):
-            inst = self.instance()
-            inst.initialize()
-            inst.export_to_st(save_directory, repo_id=repo_id, metadata=metadata)
-            return
-
-        bin_path = save_path / "pytorch_model.bin"
-        st_path = save_path / "model.safetensors"
-
-        # Recovery for legacy folder model.safetensors/ if present from previous cluster runs
-        if st_path.is_dir():
-            import shutil
-
-            logger.info(f"Resolving legacy directory structure at {st_path}...")
-            inner_bin = st_path / "pytorch_model.bin"
-            inner_st = st_path / "model.safetensors"
-            tmp_st = save_path / "model.safetensors.tmp"
-
-            if inner_st.is_file():
-                shutil.move(inner_st, tmp_st)
-            elif inner_bin.is_file():
-                weights = torch.load(inner_bin, map_location="cpu", weights_only=True)
-                save_file(weights, tmp_st)
-
-            shutil.rmtree(st_path)
-            shutil.move(tmp_st, st_path)
-
-        # Convert existing legacy pytorch_model.bin to model.safetensors file if needed
-        if bin_path.is_file() and not st_path.is_file():
-            logger.info(f"Converting legacy {bin_path} to {st_path}...")
-            weights = torch.load(bin_path, map_location="cpu", weights_only=True)
-            save_file(weights, st_path)
-            bin_path.unlink(missing_ok=True)
-
-        # Save model and tokenizer files if model.safetensors is not present
-        if not st_path.is_file():
-            self.save_model(save_path)
-        else:
-            if not (save_path / "config.json").exists() and hasattr(self, "hf_model"):
-                self.hf_model.config.save_pretrained(save_path)
-            if hasattr(self, "tokenizer"):
-                if (
-                    hasattr(self.tokenizer, "tokenizer")
-                    and self.tokenizer.tokenizer is not None
-                ):
-                    self.tokenizer.tokenizer.save_pretrained(save_path)
-                elif hasattr(self.tokenizer, "save_pretrained"):
-                    self.tokenizer.save_pretrained(save_path)
-
-        # Generate and write README.md model card using xpm_torch.utils.build_model_card
-        card_template_path = Path(__file__).parent / "Micev2Card.md"
-        metadata = metadata or {}
+        metadata = (
+            getattr(self, "_export_metadata", None)
+            or getattr(getattr(self, "__config__", None), "_export_metadata", {})
+            or {}
+        )
         base_name = getattr(self, "hf_id", "ModernBERT")
-        model_name = repo_id or save_path.name
+        model_name = (
+            getattr(self, "model_name", None)
+            or getattr(getattr(self, "__config__", None), "model_name", None)
+            or (Path(export_dir).name if export_dir else "MICE v2 Model")
+        )
 
         cfg = (
             getattr(self.hf_model, "config", None)
@@ -365,18 +335,70 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         if n_inter is None and cfg is not None:
             n_inter = getattr(cfg, "num_hidden_layers", 0) - n_ctx
 
-        build_model_card(
-            save_path=save_path,
-            template_path=card_template_path,
-            model_name=model_name,
-            base_model=base_name,
-            n_contextualization_layers=n_ctx,
-            n_interaction_layers=n_inter,
-            loss=metadata.get("loss", "not specified"),
-            k=metadata.get("k", "not specified"),
-            retriever=metadata.get("retriever", "not specified"),
-            results=metadata.get("results", "Evaluations pending."),
-        )
+        # 1. Main Model Card Section (from Micev2Card.md template)
+        if template_path.exists():
+            card_data = ModelCardData(
+                language="en",
+                license="apache-2.0",
+                base_model=str(base_name),
+                model_name=str(model_name),
+                pipeline_tag="text-classification",
+            )
+            card = ModelCard.from_template(
+                card_data,
+                template_path=str(template_path),
+                base=str(base_name),
+                model_id=str(model_name),
+                total_parameters=total_params_str,
+                n_contextualization_layers=n_ctx,
+                n_interaction_layers=n_inter,
+                loss=metadata.get("loss", "not specified"),
+            )
+            sections.append(ReadmeSection(key="model_card", content=card.content))
+
+        # 2. Separate Evaluations Section (positioned after model_card)
+        results_md = metadata.get("results")
+        if results_md:
+            retriever = metadata.get("retriever", "BM25")
+            k = metadata.get("k", 1000)
+            eval_content = f"## Evaluations\n\nWe provide evaluations of this cross-encoder re-ranking top `{k}` documents retrieved by `{retriever}`:\n\n{results_md}"
+            sections.append(
+                ReadmeSection(
+                    key="evaluations",
+                    after="model_card",
+                    content=eval_content,
+                )
+            )
+
+        return sections
+
+    def write_hub_extras(self, save_directory: Path):
+        """Called by TorchHFHub during model export."""
+        save_path = Path(save_directory)
+        self._last_export_dir = save_path
+        self.save_model(save_path)
+
+    def export_to_st(
+        self,
+        save_directory: str,
+        repo_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ):
+        """Export model in Sentence Transformers compatible format, including model card."""
+        from xpm_torch.module import assemble_readme_sections
+
+        save_path = Path(save_directory)
+        self._last_export_dir = save_path
+        if repo_id:
+            self.model_name = repo_id
+        if metadata:
+            self._export_metadata = metadata
+
+        self.write_hub_extras(save_path)
+        sections = self.hub_readme_sections()
+        if sections:
+            readme = assemble_readme_sections([], sections)
+            (save_path / "README.md").write_text(readme)
 
         logger.info(f"Model exported for Sentence Transformers at {save_path}")
 

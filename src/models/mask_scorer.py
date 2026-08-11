@@ -216,8 +216,9 @@ class HFMaskedEttinCrossScorer(HFMaskedScorer):
                 # Rationale here, is that layer_attention_masks[-1][:,0,:] corresponds to the attention mask (dim=[BS,SEQ_LEN,SEQ_LEN]) of the last layer (-1),
                 # in particular over the information sent to the CLS token (0), from all tokens (:).
                 self.pooling_function = lambda x, masks: (
-                    x * masks[-1][:, 0, :].unsqueeze(-1)
-                ).sum(dim=1) / masks[-1][:, 0, :].sum(dim=1, keepdim=True)
+                    (x * masks[-1][:, 0, :].unsqueeze(-1)).sum(dim=1)
+                    / masks[-1][:, 0, :].sum(dim=1, keepdim=True)
+                )
             else:
                 raise ValueError(
                     f"Unsupported pooling method in model config: {self.hf_config.classifier_pooling}"
@@ -227,8 +228,9 @@ class HFMaskedEttinCrossScorer(HFMaskedScorer):
                 self.pooling_function = lambda x, masks: x[:, 0]
             elif self.pooling_method == PoolingMethod.MEAN.value:
                 self.pooling_function = lambda x, masks: (
-                    x * masks[-1][:, 0, :].unsqueeze(-1)
-                ).sum(dim=1) / masks[-1][:, 0, :].sum(dim=1, keepdim=True)
+                    (x * masks[-1][:, 0, :].unsqueeze(-1)).sum(dim=1)
+                    / masks[-1][:, 0, :].sum(dim=1, keepdim=True)
+                )
             else:
                 raise ValueError(
                     f"Unsupported pooling method provided: {self.pooling_method}"

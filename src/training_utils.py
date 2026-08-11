@@ -1,20 +1,16 @@
 """Utility functions for training and result processing."""
 
 import logging
-import yaml
 import shutil
 from typing import Callable
 from pathlib import Path
-from attrs import asdict
 import numpy as np
 import pandas as pd
-from jinja2 import Template
 
 from experimaestro.launcherfinder import find_launcher
 from experimaestro.annotations import tags as get_tags
 
 from xpm_torch.trainers import LossTrainer
-from xpm_torch.huggingface import TorchHFHub
 
 from xpmir.letor.trainers.batchwise import BatchwiseTrainer
 from xpmir.letor.trainers.pairwise import PairwiseTrainer
@@ -304,7 +300,7 @@ def add_dataset_aggregations(
         present_datasets = df["dataset"].unique()
         missing = [ds for ds in datasets if ds not in present_datasets]
         if missing:
-            logger.warning(
+            logger.debug(
                 f"Aggregation {agg_name} skipped because the following datasets are missing globally: {missing}"
             )
             continue
@@ -393,7 +389,6 @@ def export_model(
     all_weights: list,
     best_cfg: CE_FineTuning,
     resultspath: Path,
-    card_template_txt: str = None,
     save_runs: bool = False,
     tests: EvaluationsCollection = None,
 ):
@@ -422,40 +417,33 @@ def export_model(
                 tb_symlink_path.unlink()
             tb_symlink_path.symlink_to(tb_path)
 
-    if card_template_txt and best_cfg:
-        # Choose the right template
-        if "mice" in model_name.lower():
-            mice_template_path = Path(__file__).parent / "MiceCard.md"
-            if mice_template_path.exists():
-                card_template_txt = mice_template_path.read_text()
-
-        template = Template(card_template_txt)
-        card = template.render(
-            base=best_cfg.base,
-            k=best_cfg.retrieval.k,
-            retriever=best_cfg.retriever if best_cfg.retriever else "BM25",
-            model_id=model_name,
-            n_contextualization_layers=best_tags.get("n_contextualization_layers")
-            or best_tags.get("scorer.n_contextualization_layers", "N/A"),
-            n_interaction_layers=best_tags.get("n_interaction_layers")
-            or best_tags.get("scorer.n_interaction_layers", "N/A"),
-            training_data="MS MARCO Passage",
-            dataset="msmarco",
-            loss=best_tags.get("learner.loss") or best_tags.get("loss", ""),
-            results=md_results.to_markdown(index=False),
-        )
-        with open(best_model_path / "README.md", "w") as f:
-            f.write(card)
-
-        with open(best_model_path / "config.yaml", "w") as f:
-            yaml.dump(asdict(best_cfg.learner), f, default_flow_style=False)
-
-    # 4. Export to HF format
+    # Export to HF format using ExportAction
     best_model_loader = get_task_by_tags(all_weights, best_tags)
     if best_model_loader:
-        logger.info(f"Exporting model to HF format at {best_model_path}")
-        hub = TorchHFHub(best_model_loader)
-        hub.save_pretrained(best_model_path)
+        logger.info(f"Exporting model using ExportAction to {best_model_path}")
+        if hasattr(best_model_loader, "model"):
+            model_obj = best_model_loader.model
+            setattr(model_obj, "_last_export_dir", best_model_path)
+            setattr(model_obj, "model_name", model_name)
+            setattr(
+                model_obj,
+                "_export_metadata",
+                {
+                    "loss": best_tags.get("learner.loss")
+                    or best_tags.get("loss", "MarginMSE"),
+                    "k": getattr(getattr(best_cfg, "retrieval", None), "k", 1000)
+                    if best_cfg
+                    else 1000,
+                    "retriever": getattr(best_cfg, "retriever", "BM25")
+                    if best_cfg
+                    else "BM25",
+                    "results": md_results.to_markdown(index=False),
+                },
+            )
+        logger.info(f"Exporting model using ExportAction to {best_model_path}")
+        action_cfg = best_model_loader.export_action(default_name=model_name)
+        action_inst = action_cfg.instance()
+        action_inst.export_to_folder(best_model_path)
     else:
         logger.warning(f"Could not find model task for tags {best_tags} in all_weights")
 
@@ -559,10 +547,6 @@ def process_experiment_results(
         & (df_with_aggs["base"].astype(str) != "nan")
     ]
 
-    # Read model card template
-    template_path = Path(__file__).parent / "CrossEncoderCard.md"
-    card_template_txt = template_path.read_text() if template_path.exists() else None
-
     # Determine target dataset for selecting best model
     val_dataset = getattr(cfg.learner, "validation", None)
     best_model_dataset = getattr(
@@ -640,7 +624,6 @@ def process_experiment_results(
                 all_weights=all_weights,
                 best_cfg=best_cfg,
                 resultspath=helper.xp.resultspath,
-                card_template_txt=card_template_txt,
                 save_runs=cfg.save_runs,
                 tests=tests,
             )
