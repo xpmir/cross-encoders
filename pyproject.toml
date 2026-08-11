@@ -23,7 +23,7 @@ dependencies = [
     "tiktoken>=0.12.0",
     "sentencepiece>=0.2.1",
     "sentence-transformers>=5.5",
-    "fast-plaid",
+    "fast-plaid>=1.5.0",
     "datasets>=5.0.0",
 ]
 
@@ -54,7 +54,7 @@ xpm-torch = { path = "xpm-torch", editable = true }
 datamaestro = { path = "datamaestro", editable = true }
 datamaestro-ir = { path = "datamaestro-ir", editable = true }
 ir-datasets = { git = "https://github.com/bpiwowar/ir_datasets.git" }
-fast-plaid = {git = "https://github.com/lightonai/fast-plaid" }
+
 
 [dependency-groups]
 dev = [

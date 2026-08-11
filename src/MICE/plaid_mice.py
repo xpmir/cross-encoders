@@ -244,10 +244,10 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
             batch = inputs["batch"]
             tokenized_queries = inputs.get("tokenized_queries")
             doc_ids = inputs.get("doc_ids")
-            doc_token_embeddings: list = []
-            for doc_id in doc_ids:
-                token_embeddings = self.index.get_document_tokens(doc_id)
-                doc_token_embeddings.append(token_embeddings.to(self.scorer.device))
+            doc_token_embeddings = [
+                t.to(self.scorer.device)
+                for t in self.index.get_document_tokens(doc_ids)
+            ]
 
             if issubclass(scorer_type, AbstractModuleScorer):
                 # Use scorer.forward if it's an AbstractModuleScorer to batch across queries

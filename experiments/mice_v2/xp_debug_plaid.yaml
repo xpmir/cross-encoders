@@ -15,11 +15,11 @@ evaluation: # Build Plaid index and Evaluate only on 3 small datasets
     eval_last_checkpoint: false
     all_datasets: false
     in_domain: false
+    beir13: false
     datasets:
         - nfcorpus
         - arguana
         - scifact
 
-# Exceptionally use H100 for eval
-# retrieval:
-#     requirements: duration=1h & cpu(cores=16) & cuda(mem=40G)
+retrieval:
+    requirements: duration=3h & cpu(cores=16) & cuda(mem=20G)
