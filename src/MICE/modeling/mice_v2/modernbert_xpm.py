@@ -226,6 +226,10 @@ class ModernBertMiceScorer(AbstractModuleScorer):
 
         return out.logits.squeeze(-1)
 
+    def write_hub_extras(self, save_directory: Path):
+        """Called by TorchHFHub during model export."""
+        self.export_to_st(save_directory)
+
     def export_to_st(
         self,
         save_directory: str,
@@ -233,58 +237,97 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         metadata: Optional[dict] = None,
     ):
         """Export model in Sentence Transformers compatible format, including model card."""
-        from huggingface_hub import ModelCard, ModelCardData
+        from xpm_torch.utils import build_model_card
+        from safetensors.torch import save_file
 
         save_path = Path(save_directory)
-        self.save_model(save_path)
 
-        # Generate and write README.md model card from Micev2Card.md template using huggingface_hub ModelCard
+        # Handle invocation on Config object
+        if hasattr(self, "instance") and not getattr(self, "_initialized", False):
+            inst = self.instance()
+            inst.initialize()
+            inst.export_to_st(save_directory, repo_id=repo_id, metadata=metadata)
+            return
+
+        bin_path = save_path / "pytorch_model.bin"
+        st_path = save_path / "model.safetensors"
+
+        # Recovery for legacy folder model.safetensors/ if present from previous cluster runs
+        if st_path.is_dir():
+            import shutil
+
+            logger.info(f"Resolving legacy directory structure at {st_path}...")
+            inner_bin = st_path / "pytorch_model.bin"
+            inner_st = st_path / "model.safetensors"
+            tmp_st = save_path / "model.safetensors.tmp"
+
+            if inner_st.is_file():
+                shutil.move(inner_st, tmp_st)
+            elif inner_bin.is_file():
+                weights = torch.load(inner_bin, map_location="cpu", weights_only=True)
+                save_file(weights, tmp_st)
+
+            shutil.rmtree(st_path)
+            shutil.move(tmp_st, st_path)
+
+        # Convert existing legacy pytorch_model.bin to model.safetensors file if needed
+        if bin_path.is_file() and not st_path.is_file():
+            logger.info(f"Converting legacy {bin_path} to {st_path}...")
+            weights = torch.load(bin_path, map_location="cpu", weights_only=True)
+            save_file(weights, st_path)
+            bin_path.unlink(missing_ok=True)
+
+        # Save model and tokenizer files if model.safetensors is not present
+        if not st_path.is_file():
+            self.save_model(save_path)
+        else:
+            if not (save_path / "config.json").exists() and hasattr(self, "hf_model"):
+                self.hf_model.config.save_pretrained(save_path)
+            if hasattr(self, "tokenizer"):
+                if (
+                    hasattr(self.tokenizer, "tokenizer")
+                    and self.tokenizer.tokenizer is not None
+                ):
+                    self.tokenizer.tokenizer.save_pretrained(save_path)
+                elif hasattr(self.tokenizer, "save_pretrained"):
+                    self.tokenizer.save_pretrained(save_path)
+
+        # Generate and write README.md model card using xpm_torch.utils.build_model_card
         card_template_path = Path(__file__).parent / "Micev2Card.md"
-        if card_template_path.exists():
-            try:
-                metadata = metadata or {}
-                base_name = getattr(self, "hf_id", "ModernBERT")
-                model_name = repo_id or save_path.name
+        metadata = metadata or {}
+        base_name = getattr(self, "hf_id", "ModernBERT")
+        model_name = repo_id or save_path.name
 
-                cfg = getattr(self.hf_model, "config", None)
-                n_ctx = getattr(
-                    cfg,
-                    "n_contextualization_layers",
-                    getattr(self, "n_contextualization_layers", 2),
-                )
-                n_inter = getattr(
-                    cfg,
-                    "n_interaction_layers",
-                    getattr(self, "n_interaction_layers", None),
-                )
-                if n_inter is None and cfg is not None:
-                    n_inter = getattr(cfg, "num_hidden_layers", 0) - n_ctx
+        cfg = (
+            getattr(self.hf_model, "config", None)
+            if hasattr(self, "hf_model")
+            else None
+        )
+        n_ctx = getattr(
+            cfg,
+            "n_contextualization_layers",
+            getattr(self, "n_contextualization_layers", 2),
+        )
+        n_inter = getattr(
+            cfg,
+            "n_interaction_layers",
+            getattr(self, "n_interaction_layers", None),
+        )
+        if n_inter is None and cfg is not None:
+            n_inter = getattr(cfg, "num_hidden_layers", 0) - n_ctx
 
-                card_data = ModelCardData(
-                    language="en",
-                    license="apache-2.0",
-                    base_model=str(base_name),
-                    model_name=str(model_name),
-                    pipeline_tag="text-classification",
-                )
-
-                card = ModelCard.from_template(
-                    card_data,
-                    template_path=str(card_template_path),
-                    base=str(base_name),
-                    model_id=str(model_name),
-                    n_contextualization_layers=n_ctx,
-                    n_interaction_layers=n_inter,
-                    loss=metadata.get("loss", "MarginMSE / CrossEntropy"),
-                    k=metadata.get("k", 1000),
-                    retriever=metadata.get("retriever", "BM25"),
-                    results=metadata.get("results", "Evaluations pending."),
-                )
-
-                card.save(save_path / "README.md")
-                logger.info(f"Model card written to {save_path / 'README.md'}")
-            except Exception as e:
-                logger.warning(f"Could not write model card README.md: {e}")
+        build_model_card(
+            save_path=save_path,
+            template_path=card_template_path,
+            model_name=model_name,
+            base_model=base_name,
+            n_contextualization_layers=n_ctx,
+            n_interaction_layers=n_inter,
+            loss=metadata.get("loss", "not specified"),
+            k=metadata.get("k", "not specified"),
+            retriever=metadata.get("retriever", "not specified"),
+            results=metadata.get("results", "Evaluations pending."),
+        )
 
         logger.info(f"Model exported for Sentence Transformers at {save_path}")
 
@@ -294,12 +337,13 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         path.mkdir(parents=True, exist_ok=True)
 
         # Disconnect base model remote reference to prevent HF Hub network requests on reload
-        self.hf_model.config._name_or_path = str(path)
+        model_name_id = getattr(self, "hf_id", path.name)
+        self.hf_model.config._name_or_path = model_name_id
         if hasattr(self.hf_model.config, "base_model_name_or_path"):
-            self.hf_model.config.base_model_name_or_path = str(path)
+            self.hf_model.config.base_model_name_or_path = model_name_id
 
-        # 1. Save HF model (config.json + model.safetensors)
-        self.hf_model.save_pretrained(path)
+        # 1. Save HF model (config.json + model.safetensors file)
+        self.hf_model.save_pretrained(path, safe_serialization=True)
         logger.info(f"Saved ModernBERT MICE model configuration and weights to {path}")
 
         # 2. Save tokenizer
@@ -323,6 +367,10 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     def load_model(self, path: Path):
         """Load model architecture config, state dict weights, and tokenizer from directory."""
         path = Path(path)
+        if path.is_file():
+            # Always try to load from the parent directory if a file is provided
+            path = path.parent
+
         if not path.exists():
             raise FileNotFoundError(f"Model directory '{path}' does not exist.")
 

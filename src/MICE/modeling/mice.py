@@ -507,7 +507,7 @@ class MiceCrossEncoder(AbstractModuleScorer):
 
         assert path.exists(), f"Model path '{path}' does not exist"
 
-        if path.is_file() and path.suffix in [".safetensors", ".pt", ".pth"]:
+        if path.is_file() and path.suffix in [".safetensors", ".pt", ".pth", ".bin"]:
             path = path.parent
 
         # 1. Attempt to load head config locally

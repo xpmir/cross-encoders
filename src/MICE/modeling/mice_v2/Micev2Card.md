@@ -36,6 +36,7 @@ MICE models separate query and document processing in the bottom layers, enablin
 
 - **Architecture:** MICE v2 (Minimal Interaction Cross-Encoder with ModernBERT)
 - **Base Model:** {{base}}
+- **Total Parameters:** {{total_parameters}}
 - **Contextualization Layers:** {{n_contextualization_layers}}
 - **Interaction Layers:** {{n_interaction_layers}}
 - **Training Data:** MS MARCO Passage
