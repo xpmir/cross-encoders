@@ -185,9 +185,28 @@ class MICEQueryDocTokenizer(HFTokenizer):
                 tokenized_docs=_encode(docs, d_max),
             )
         elif input_nature == QueryDocInput.QUERY:
-            ### WARNING: Assumes the input is composed of a list of query records,
-            # not an instance from BaseItems
-            queries = [query["text_item"].text for query in input_records]
+            if hasattr(input_records, "unique_topics"):
+                queries = [
+                    topic["text_item"].text
+                    if hasattr(topic, "__getitem__") and "text_item" in topic
+                    else getattr(
+                        topic,
+                        "text",
+                        topic["text"] if hasattr(topic, "__getitem__") else str(topic),
+                    )
+                    for topic in input_records.unique_topics
+                ]
+            else:
+                queries = [
+                    query["text_item"].text
+                    if hasattr(query, "__getitem__") and "text_item" in query
+                    else getattr(
+                        query,
+                        "text",
+                        query["text"] if hasattr(query, "__getitem__") else str(query),
+                    )
+                    for query in input_records
+                ]
             tokenized_texts = (
                 MICETokenizedTexts(
                     tokenized_q=_encode(queries, q_max),
@@ -197,7 +216,16 @@ class MICEQueryDocTokenizer(HFTokenizer):
         else:  # input_nature == QueryDocInput.DOCUMENT
             ### WARNING: Assumes the input is composed of a list of document records,
             # not an instance from BaseItems
-            docs = [doc["text_item"].text for doc in input_records]
+            docs = [
+                doc["text_item"].text
+                if hasattr(doc, "__getitem__") and "text_item" in doc
+                else getattr(
+                    doc,
+                    "text",
+                    doc["text"] if hasattr(doc, "__getitem__") else str(doc),
+                )
+                for doc in input_records
+            ]
             tokenized_texts = (
                 MICETokenizedTexts(
                     tokenized_q=None,

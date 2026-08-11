@@ -9,6 +9,14 @@ import logging
 import torch
 import torch.nn as nn
 
+from datamaestro_ir.data.base import IDTextRecord
+from xpmir.text.encoders import (
+    TextEncoderBase,
+    EncoderOutput,
+    TokensEncoderOutput,
+    TokensRepresentationOutput,
+)
+from xpmir.text.tokenizers import TokenizerOptions
 from experimaestro import LightweightTask, Param, Constant, field
 from xpmir.rankers.scorer import AbstractModuleScorer
 from xpmir.letor.records import BaseItems
@@ -190,6 +198,17 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         fallback_fa2_if_incompatible_precision(self.hf_model, fabric)
         return super().setup_with_fabric(fabric)
 
+    def encode_documents(
+        self, doc_ids: torch.Tensor, doc_mask: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """Encode documents through bottom contextualization layers."""
+        return self.hf_model.encode_documents(doc_ids=doc_ids, doc_mask=doc_mask)
+
+    def get_document_encoder(self) -> TextEncoderBase:
+        """Returns a document encoder for fast-plaid index building."""
+        model_cfg = getattr(self, "config", self)
+        return MiceV2DocumentEncoder.C(model=model_cfg)
+
     def batch_tokenize(
         self,
         input_records: BaseItems,
@@ -207,6 +226,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         self,
         inputs: Optional[BaseItems] = None,
         tokenized: Optional[MICETokenizedTexts] = None,
+        doc_hidden_states: Optional[List[torch.Tensor]] = None,
     ) -> torch.Tensor:
         if inputs is None and tokenized is None:
             raise ValueError("Either raw inputs or tokenized inputs must be provided.")
@@ -215,14 +235,43 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             tokenized = self.batch_tokenize(inputs, input_nature=QueryDocInput.PAIRS)
 
         tokenized_q = to_device(tokenized.tokenized_q, self.device)
-        tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
 
-        out = self.hf_model(
-            query_ids=tokenized_q.ids,
-            query_mask=tokenized_q.mask,
-            doc_ids=tokenized_docs.ids,
-            doc_mask=tokenized_docs.mask,
-        )
+        if doc_hidden_states is not None:
+            # Decompressed document token embeddings from fast-plaid index (list of 2D tensors [doc_len, dim])
+            doc_tensors = [to_device(d, self.device) for d in doc_hidden_states]
+            max_d_len = max(d.shape[0] for d in doc_tensors)
+            batch_size = len(doc_tensors)
+            dim = doc_tensors[0].shape[-1]
+
+            doc_hidden = torch.zeros(
+                (batch_size, max_d_len, dim),
+                dtype=doc_tensors[0].dtype,
+                device=self.device,
+            )
+            doc_mask = torch.zeros(
+                (batch_size, max_d_len),
+                dtype=torch.long,
+                device=self.device,
+            )
+            for i, d in enumerate(doc_tensors):
+                seq_len = d.shape[0]
+                doc_hidden[i, :seq_len] = d
+                doc_mask[i, :seq_len] = 1
+
+            out = self.hf_model(
+                query_ids=tokenized_q.ids,
+                query_mask=tokenized_q.mask,
+                doc_hidden=doc_hidden,
+                doc_mask=doc_mask,
+            )
+        else:
+            tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
+            out = self.hf_model(
+                query_ids=tokenized_q.ids,
+                query_mask=tokenized_q.mask,
+                doc_ids=tokenized_docs.ids,
+                doc_mask=tokenized_docs.mask,
+            )
 
         return out.logits.squeeze(-1)
 
@@ -401,6 +450,60 @@ class ModernBertMiceScorer(AbstractModuleScorer):
 
     def loader_config(self, path: Path, *, settings=None) -> "SimpleModuleLoader":
         return SimpleModuleLoader.C(value=self, path=path, settings=settings)
+
+
+class MiceV2DocumentEncoder(TextEncoderBase):
+    """Document encoder for ModernBERT MICE v2, interfacing with PlaidIndexBuilder."""
+
+    model: Param[ModernBertMiceScorer]
+
+    def __initialize__(self) -> None:
+        super().__initialize__()
+        self.model.initialize()
+
+    @property
+    def dimension(self):
+        return getattr(self.model.hf_model.config, "hidden_size", 768)
+
+    @staticmethod
+    def _token_mask(output: TokensRepresentationOutput) -> Optional[torch.Tensor]:
+        mask = output.tokenized.mask
+        if mask is None:
+            return None
+        return mask.to(output.value.device).bool()
+
+    def document_token_embeddings(
+        self, records: List[IDTextRecord]
+    ) -> List[torch.Tensor]:
+        """Encode a batch of documents and return per-token embeddings filtering padding out."""
+        output = self.encode_documents(records)
+        mask = self._token_mask(output)
+        value = output.value
+        if mask is None:
+            return [value[i] for i in range(value.shape[0])]
+        return [value[i][mask[i]] for i in range(value.shape[0])]
+
+    def encode_documents(
+        self, records: List[IDTextRecord]
+    ) -> TokensRepresentationOutput:
+        options = TokenizerOptions(max_length=self.model.tokenizer.max_doc_length)
+        output = self(records, options=options)
+        return output
+
+    def forward(
+        self,
+        inputs: List[IDTextRecord],
+        *args,
+        options: Optional[TokenizerOptions] = None,
+    ) -> EncoderOutput:
+        assert len(args) == 0, "Unhandled extra arguments"
+        tokenized = self.model.batch_tokenize(
+            inputs, options=options, input_nature=QueryDocInput.DOCUMENT
+        )
+        if tokenized.ids.device != self.model.device:
+            tokenized = tokenized.to(self.model.device)
+        encoded = self.model.encode_documents(tokenized.ids, tokenized.mask)
+        return TokensEncoderOutput(tokenized, encoded)
 
 
 def mice_v2_scorer(

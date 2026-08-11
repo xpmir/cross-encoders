@@ -1,14 +1,17 @@
-id: plaid_micev2_ettin68m_l10+4
+id: debug_plaid_ettin68m_l10+4
 title: "Mice-Ettin-68m Training + Plaid evaluation"
 description:
-    Base Training for Ettin-68m-based MICE model.
+    Take one trained Mice-Ettin-68m model, and evaluate it with Plaid indexing and retrieval on 3 small datasets.
 
 module: MICE.experiments.micev2_training
-parent: ./_ettin68m.yaml
-nb_repetitions: 1 # keep only one seed
+parent: ./micev2_ettin_68m_l10+4.yaml
+nb_repetitions: 1 # keep only one seed over the 2 seeds of the parent experiment
 
 
-evaluation: #
+plaid:
+    use_plaid: true
+
+evaluation: # Build Plaid index and Evaluate only on 3 small datasets
     eval_last_checkpoint: false
     all_datasets: false
     in_domain: false

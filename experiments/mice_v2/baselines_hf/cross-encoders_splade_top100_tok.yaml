@@ -8,7 +8,7 @@ pre_experiment: pre_experiment
 
 gpu: true
 
-max_query_length: 128
+max_query_length: 1024
 max_doc_length: 1024
 max_length: 1024
 
@@ -48,4 +48,8 @@ retrieval:
 evaluation:
   #just for debugging
   in_domain: true
-  beir13: true
+  beir13: false
+  datasets:
+    - nfcorpus
+    - arguana
+    - scifact

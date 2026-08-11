@@ -5,7 +5,7 @@ Custom PreTrainedModel and Modules supporting SDPA, Flash Attention 2, and ST ex
 
 import copy
 import logging
-from typing import Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
@@ -538,131 +538,89 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         )
         self.post_init()
 
-    def _forward_bottom_layers(
+    def _forward_bottom(
         self,
-        query_ids: torch.Tensor,
-        query_mask: torch.Tensor,
-        doc_ids: torch.Tensor,
-        doc_mask: torch.Tensor,
-        use_unpadded: bool,
+        sequence_input: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        max_seqlen: Optional[int] = None,
+        pos_ids: Optional[torch.Tensor] = None,
         **kwargs,
-    ):
-        """Pass query and document sequences through bottom encoder layers.
+    ) -> Tuple[torch.Tensor, Any]:
+        """Process a single sequence (query or document) through bottom encoder layers.
 
-        Supports both 1D unpadded varlen FlashAttention 2 pipeline (for zero-OOM memory efficiency)
-        and 3D padded SDPA pipeline (for CPU/V100 fallback).
+        Args:
+            sequence_input: 1D unpadded embeddings [Total_Tokens, Dim] if cu_seqlens is provided,
+                           or 2D token IDs / 3D embeddings if cu_seqlens is None.
+            mask: 2D attention mask [Batch, SeqLen] (used when cu_seqlens is None).
+            cu_seqlens: Cumulative sequence lengths for 1D varlen FlashAttention.
+            max_seqlen: Maximum sequence length in batch for 1D varlen FlashAttention.
+            pos_ids: 1D unpadded position IDs for Rotary Position Embeddings.
+
+        Returns:
+            Tuple of (hidden_state, pos_emb_top)
         """
-        if use_unpadded:
-            logger.debug(
-                "[MICE v2] Executing unpadded Flash Attention 2 pipeline for bottom layers."
-            )
-            q_embeds = self.model.embeddings(input_ids=query_ids)
-            d_embeds = self.model.embeddings(input_ids=doc_ids)
-
-            (
-                q_hidden,
-                cu_seqlens_q,
-                max_seqlen_q,
-                indices_q,
-                q_pos_ids,
-            ) = _unpad_input_with_posids(q_embeds, query_mask)
-            (
-                d_hidden,
-                cu_seqlens_d,
-                max_seqlen_d,
-                indices_d,
-                d_pos_ids,
-            ) = _unpad_input_with_posids(d_embeds, doc_mask)
-
-            q_position_embeddings = {
-                l_type: self.model.rotary_emb(q_hidden, q_pos_ids, layer_type=l_type)
+        if cu_seqlens is not None:
+            # Unpadded FlashAttention 2 Path
+            position_embeddings = {
+                l_type: self.model.rotary_emb(
+                    sequence_input, pos_ids, layer_type=l_type
+                )
                 for l_type in set(self.config.layer_types)
             }
-            d_position_embeddings = {
-                l_type: self.model.rotary_emb(d_hidden, d_pos_ids, layer_type=l_type)
-                for l_type in set(self.config.layer_types)
-            }
-
+            hidden = sequence_input
             for encoder_layer in self.model.layers:
                 layer_type = getattr(
                     encoder_layer,
                     "attention_type",
                     getattr(encoder_layer.attn, "layer_type", "full_attention"),
                 )
-                q_hidden = encoder_layer(
-                    q_hidden,
-                    position_embeddings=q_position_embeddings[layer_type],
+                hidden = encoder_layer(
+                    hidden,
+                    position_embeddings=position_embeddings[layer_type],
                     attention_mask=None,
-                    cu_seq_lens_q=cu_seqlens_q.to(torch.int32),
-                    cu_seq_lens_k=cu_seqlens_q.to(torch.int32),
-                    max_length_q=int(max_seqlen_q),
-                    max_length_k=int(max_seqlen_q),
+                    cu_seq_lens_q=cu_seqlens.to(torch.int32),
+                    cu_seq_lens_k=cu_seqlens.to(torch.int32),
+                    max_length_q=int(max_seqlen),
+                    max_length_k=int(max_seqlen),
                     **kwargs,
                 )
-                d_hidden = encoder_layer(
-                    d_hidden,
-                    position_embeddings=d_position_embeddings[layer_type],
-                    attention_mask=None,
-                    cu_seq_lens_q=cu_seqlens_d.to(torch.int32),
-                    cu_seq_lens_k=cu_seqlens_d.to(torch.int32),
-                    max_length_q=int(max_seqlen_d),
-                    max_length_k=int(max_seqlen_d),
-                    **kwargs,
-                )
-
             if hasattr(self.model, "final_norm") and self.model.final_norm is not None:
-                q_hidden = self.model.final_norm(q_hidden)
-                d_hidden = self.model.final_norm(d_hidden)
+                hidden = self.model.final_norm(hidden)
 
-            q_pos_emb_top = q_position_embeddings.get(
-                "full_attention", list(q_position_embeddings.values())[0]
+            pos_emb_top = position_embeddings.get(
+                "full_attention", list(position_embeddings.values())[0]
             )
-
-            return (
-                q_hidden,
-                d_hidden,
-                q_pos_emb_top,
-                cu_seqlens_q,
-                cu_seqlens_d,
-                max_seqlen_q,
-                max_seqlen_d,
-            )
+            return hidden, pos_emb_top
         else:
-            if (
-                getattr(self.config, "_attn_implementation", "sdpa")
-                == "flash_attention_2"
-                and not query_ids.is_cuda
-            ):
-                logger.warning(
-                    "[MICE v2] Flash Attention 2 requested but inputs are not on CUDA. "
-                    "Falling back to standard 3D padded pipeline."
+            # Standard 3D Padded Path
+            if sequence_input.dtype in (torch.int32, torch.int64, torch.long):
+                outputs = self.model(
+                    input_ids=sequence_input, attention_mask=mask, **kwargs
+                )
+            else:
+                outputs = self.model(
+                    inputs_embeds=sequence_input, attention_mask=mask, **kwargs
                 )
 
-            q_outputs = self.model(
-                input_ids=query_ids, attention_mask=query_mask, **kwargs
-            )
-            d_outputs = self.model(input_ids=doc_ids, attention_mask=doc_mask, **kwargs)
-
-            q_hidden = q_outputs.last_hidden_state
-            d_hidden = d_outputs.last_hidden_state
-
+            last_hidden = outputs.last_hidden_state
             position_ids = torch.arange(
-                q_hidden.shape[1], device=q_hidden.device
+                last_hidden.shape[1], device=last_hidden.device
             ).unsqueeze(0)
-
-            q_pos_emb = self.model.rotary_emb(
-                q_hidden, position_ids, layer_type="full_attention"
+            pos_emb_top = self.model.rotary_emb(
+                last_hidden, position_ids, layer_type="full_attention"
             )
+            return last_hidden, pos_emb_top
 
-            return (
-                q_hidden,
-                d_hidden,
-                q_pos_emb,
-                None,
-                None,
-                None,
-                None,
-            )
+    def encode_documents(
+        self,
+        doc_ids: torch.LongTensor,
+        doc_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Encode documents through bottom contextualization layers."""
+        d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
+        return d_hidden
 
     def forward(
         self,
@@ -672,6 +630,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         query_mask: Optional[torch.Tensor] = None,
         doc_ids: Optional[torch.LongTensor] = None,
         doc_mask: Optional[torch.Tensor] = None,
+        doc_hidden: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         return_dict: Optional[bool] = None,
         **kwargs,
@@ -683,7 +642,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         )
 
         # Handle ST concatenated inputs if query_ids is not passed
-        if (query_ids is None or doc_ids is None) and input_ids is not None:
+        if (
+            query_ids is None or (doc_ids is None and doc_hidden is None)
+        ) and input_ids is not None:
             sep_token_id = getattr(
                 self.config, "sep_token_id", getattr(self.config, "eos_token_id", 50282)
             )
@@ -706,22 +667,74 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             and _unpad_input is not None
         )
 
-        (
-            q_hidden,
-            d_hidden,
-            q_pos_emb_top,
-            cu_seqlens_q,
-            cu_seqlens_d,
-            max_seqlen_q,
-            max_seqlen_d,
-        ) = self._forward_bottom_layers(
-            query_ids,
-            query_mask,
-            doc_ids,
-            doc_mask,
-            use_unpadded=use_unpadded,
-            **kwargs,
-        )
+        # 1. Query Bottom Layers
+        if use_unpadded:
+            q_embeds = self.model.embeddings(input_ids=query_ids)
+            (
+                q_unpadded,
+                cu_seqlens_q,
+                max_seqlen_q,
+                indices_q,
+                q_pos_ids,
+            ) = _unpad_input_with_posids(q_embeds, query_mask)
+            q_hidden, q_pos_emb_top = self._forward_bottom(
+                q_unpadded,
+                cu_seqlens=cu_seqlens_q,
+                max_seqlen=max_seqlen_q,
+                pos_ids=q_pos_ids,
+                **kwargs,
+            )
+        else:
+            if (
+                getattr(self.config, "_attn_implementation", "sdpa")
+                == "flash_attention_2"
+                and not query_ids.is_cuda
+            ):
+                logger.warning(
+                    "[MICE v2] Flash Attention 2 requested but inputs are not on CUDA. "
+                    "Falling back to standard 3D padded pipeline."
+                )
+            q_hidden, q_pos_emb_top = self._forward_bottom(
+                query_ids, mask=query_mask, **kwargs
+            )
+            cu_seqlens_q = max_seqlen_q = None
+
+        # 2. Document Bottom Layers (Bypassed if doc_hidden is given)
+        if doc_hidden is not None:
+            if doc_mask is None:
+                doc_mask = torch.ones(
+                    (doc_hidden.shape[0], doc_hidden.shape[1]),
+                    dtype=torch.bool,
+                    device=doc_hidden.device,
+                )
+
+            if use_unpadded:
+                d_hidden, _, cu_seqlens_d, max_seqlen_d, _ = _unpad_input(
+                    doc_hidden, doc_mask
+                )
+            else:
+                d_hidden = doc_hidden
+                cu_seqlens_d = max_seqlen_d = None
+        else:
+            if use_unpadded:
+                d_embeds = self.model.embeddings(input_ids=doc_ids)
+                (
+                    d_unpadded,
+                    cu_seqlens_d,
+                    max_seqlen_d,
+                    indices_d,
+                    d_pos_ids,
+                ) = _unpad_input_with_posids(d_embeds, doc_mask)
+                d_hidden, _ = self._forward_bottom(
+                    d_unpadded,
+                    cu_seqlens=cu_seqlens_d,
+                    max_seqlen=max_seqlen_d,
+                    pos_ids=d_pos_ids,
+                    **kwargs,
+                )
+            else:
+                d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
+                cu_seqlens_d = max_seqlen_d = None
 
         if use_unpadded:
             num_top = len(self.top_layers)
