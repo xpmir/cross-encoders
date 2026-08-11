@@ -420,26 +420,20 @@ def export_model(
     # Export to HF format using ExportAction
     best_model_loader = get_task_by_tags(all_weights, best_tags)
     if best_model_loader:
-        logger.info(f"Exporting model using ExportAction to {best_model_path}")
         if hasattr(best_model_loader, "model"):
             model_obj = best_model_loader.model
-            setattr(model_obj, "_last_export_dir", best_model_path)
-            setattr(model_obj, "model_name", model_name)
-            setattr(
-                model_obj,
-                "_export_metadata",
-                {
-                    "loss": best_tags.get("learner.loss")
-                    or best_tags.get("loss", "MarginMSE"),
-                    "k": getattr(getattr(best_cfg, "retrieval", None), "k", 1000)
-                    if best_cfg
-                    else 1000,
-                    "retriever": getattr(best_cfg, "retriever", "BM25")
-                    if best_cfg
-                    else "BM25",
-                    "results": md_results.to_markdown(index=False),
-                },
-            )
+            model_obj._last_export_dir = best_model_path
+            model_obj.model_name = model_name
+            model_obj._export_metadata = {
+                "loss": best_tags.get("learner.loss") or best_tags.get("loss", "N/A"),
+                "k": getattr(getattr(best_cfg, "retrieval", None), "k", "N/A")
+                if best_cfg
+                else "N/A",
+                "retriever": getattr(best_cfg, "retriever", "N/A")
+                if best_cfg
+                else "N/A",
+                "results": md_results.to_markdown(index=False),
+            }
         logger.info(f"Exporting model using ExportAction to {best_model_path}")
         action_cfg = best_model_loader.export_action(default_name=model_name)
         action_inst = action_cfg.instance()

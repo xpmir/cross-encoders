@@ -352,15 +352,15 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 total_parameters=total_params_str,
                 n_contextualization_layers=n_ctx,
                 n_interaction_layers=n_inter,
-                loss=metadata.get("loss", "not specified"),
+                loss=metadata.get("loss", "N/A"),
             )
             sections.append(ReadmeSection(key="model_card", content=card.content))
 
         # 2. Separate Evaluations Section (positioned after model_card)
         results_md = metadata.get("results")
         if results_md:
-            retriever = metadata.get("retriever", "BM25")
-            k = metadata.get("k", 1000)
+            retriever = metadata.get("retriever", "N/A")
+            k = metadata.get("k", "N/A")
             eval_content = f"## Evaluations\n\nWe provide evaluations of this cross-encoder re-ranking top `{k}` documents retrieved by `{retriever}`:\n\n{results_md}"
             sections.append(
                 ReadmeSection(
