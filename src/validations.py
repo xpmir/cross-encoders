@@ -1,12 +1,12 @@
 from functools import lru_cache
-from typing import Any
+from typing import Any, Optional
 
 from experimaestro import stop_tags
 from experimaestro.experiments import configuration
 
 from xpmir.datasets.adapters import RandomFold
 from xpmir.datasets.samplers import ValidationSample
-from xpmir.datasets.samplers import prepare_collection
+from samplers import prepare_collection
 from xpmir.letor.validation import AggregatorValidationListener, ValidationListener
 from xpmir.evaluation import Evaluations, EvaluationsCollection
 from xpmir.rankers import scorer_retriever
@@ -20,10 +20,12 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache
-def nano_msmarco_validation_datasets(cfg: ValidationSample, launcher=None):
+def nano_msmarco_validation_datasets(
+    cfg: ValidationSample, launcher=None, blocking: Optional[bool] = None
+):
     """Return validation over msmarco."""
 
-    dataset = prepare_collection("co.huggingface.nano-beir.msmarco")
+    dataset = prepare_collection("co.huggingface.nano-beir.msmarco", download=blocking)
     logger.info("Loaded: msmarco")
     _ = next(dataset.documents.iter_documents())  # Force load documents
     _ = next(dataset.topics.iter())  # Force load queries
@@ -39,7 +41,9 @@ def nano_msmarco_validation_datasets(cfg: ValidationSample, launcher=None):
 
 
 @lru_cache
-def nanobeir_validation_datasets(cfg: ValidationSample, launcher=None):
+def nanobeir_validation_datasets(
+    cfg: ValidationSample, launcher=None, blocking: Optional[bool] = None
+):
     """Return validations over all the NANO_BEIR datasets."""
 
     random_folds = {}
@@ -47,7 +51,7 @@ def nanobeir_validation_datasets(cfg: ValidationSample, launcher=None):
 
     for dataset_name, dataset_id in NANO_BEIR_KEYS.items():
         # Prepare dataset components
-        dataset = prepare_collection(dataset_id)
+        dataset = prepare_collection(dataset_id, download=blocking)
         logger.info(f"Loaded: {dataset_name}")
 
         random_folds[dataset_name] = RandomFold.C(
@@ -68,9 +72,13 @@ def nanobeir_validation_datasets(cfg: ValidationSample, launcher=None):
 
 
 @lru_cache
-def nanobeir11_validation_datasets(cfg: ValidationSample, launcher=None):
+def nanobeir11_validation_datasets(
+    cfg: ValidationSample, launcher=None, blocking: Optional[bool] = None
+):
     """Return validations over all the NANO_BEIR datasets except arguana and touche."""
-    random_folds, documents = nanobeir_validation_datasets(cfg, launcher=launcher)
+    random_folds, documents = nanobeir_validation_datasets(
+        cfg, launcher=launcher, blocking=blocking
+    )
     # Filter out arguana and touche
     to_exclude = ["nano_arguana", "nano_webis-touche2020"]
     random_folds = {k: v for k, v in random_folds.items() if k not in to_exclude}
@@ -86,9 +94,10 @@ class ValidationSet:
     @classmethod
     def load(cls, cfg: CE_FineTuning, launcher):
         items = []
+        blocking = cfg.preprocessing.blocking_download
         if cfg.learner.validation == Validation.MSMARCO.value:
             ds_val, docs = nano_msmarco_validation_datasets(
-                cfg.validation, launcher=launcher
+                cfg.validation, launcher=launcher, blocking=blocking
             )
             items.append(("msmarco", ds_val, docs))
         elif cfg.learner.validation in [
@@ -96,13 +105,13 @@ class ValidationSet:
             Validation.ALL.value,
         ]:
             validations, documents = nanobeir_validation_datasets(
-                cfg.validation, launcher=launcher
+                cfg.validation, launcher=launcher, blocking=blocking
             )
             for name in validations:
                 items.append((name, validations[name], documents[name]))
         elif cfg.learner.validation == Validation.NanoBEIR11.value:
             validations, documents = nanobeir11_validation_datasets(
-                cfg.validation, launcher=launcher
+                cfg.validation, launcher=launcher, blocking=blocking
             )
             for name in validations:
                 items.append((name, validations[name], documents[name]))

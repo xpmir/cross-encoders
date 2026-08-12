@@ -114,6 +114,8 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         cfg.evaluation,
         retrievers_only=cfg.retrievers_only,
         launcher=launcher_preprocessing,
+        check_docs=False,
+        blocking=cfg.preprocessing.blocking_download,
     )
 
     # Built Retrievers - list of splade models or just bm25

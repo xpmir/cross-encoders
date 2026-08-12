@@ -213,7 +213,9 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             dataset_id = (
                 f"cross_encoder.ettin_reranker_v1_data[name={name},streaming=false]"
             )
-            dataset_config = prepare_collection(dataset_id)
+            dataset_config = prepare_collection(
+                dataset_id, download=cfg.preprocessing.blocking_download
+            )
             samples_list.append(dataset_config)
 
         from pointwise_distillation import FlattenAndShuffleDataset

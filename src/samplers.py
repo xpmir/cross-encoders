@@ -13,10 +13,15 @@ from xpmir.letor.samplers.adapters import SamplerAdapter
 from xpmir.letor.processors import StoreHydrator
 
 
+from typing import Optional
+
+
 @lru_cache
-def prepare_collection(prepare_str: str) -> Union[Documents, Adhoc]:
+def prepare_collection(
+    prepare_str: str, download: Optional[bool] = None
+) -> Union[Documents, Adhoc]:
     """Prepare a dataset and caches the result"""
-    return prepare_dataset(prepare_str)
+    return prepare_dataset(prepare_str, download=download)
 
 
 @lru_cache

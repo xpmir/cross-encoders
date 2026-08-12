@@ -98,6 +98,8 @@ class Retrieval:
 @configuration()
 class Preprocessing:
     requirements: str = "duration=12h & cpu(cores=4)"
+    blocking_download: bool = False
+    """Whether to download and build dataset document stores sequentially in the main process before experiment task submission"""
 
 
 @configuration()

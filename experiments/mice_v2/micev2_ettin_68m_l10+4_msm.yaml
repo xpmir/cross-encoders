@@ -1,0 +1,20 @@
+id: train_micev2_ettin68m_l10+4_msm
+title: "Mice-Ettin-68m Training"
+description:
+    Base Training for Ettin-68m-based MICE model.
+
+module: MICE.experiments.micev2_training
+parent: ./_ettin68m.yaml
+nb_repetitions: 2
+
+learner:
+    validation: msmarco
+
+evaluation:
+    eval_last_checkpoint: false
+    in_domain: true
+    beir13: true
+
+# Exceptionally use H100 for eval
+# retrieval:
+#     requirements: duration=1h & cpu(cores=16) & cuda(mem=40G)

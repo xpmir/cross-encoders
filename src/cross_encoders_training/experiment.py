@@ -141,7 +141,11 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
 
-    tests = build_tests(cfg.evaluation, launcher=launcher_preprocessing)
+    tests = build_tests(
+        cfg.evaluation,
+        launcher=launcher_preprocessing,
+        blocking=cfg.preprocessing.blocking_download,
+    )
 
     # cache the indexes
     learners = []
