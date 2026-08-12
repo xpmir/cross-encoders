@@ -8,7 +8,7 @@ parent: ./_ettin68m.yaml
 nb_repetitions: 2
 
 evaluation: #default = Minified tests
-    eval_last_checkpoint: true
+    eval_checkpoint: "both"
     all_datasets: false
     in_domain: true
     beir13: true

@@ -102,6 +102,19 @@ class Preprocessing:
     """Whether to download and build dataset document stores sequentially in the main process before experiment task submission"""
 
 
+class CheckpointSelection(str, Enum):
+    """Possible checkpoints to evaluate"""
+
+    VAL = "val"
+    """Evaluate only the best validation checkpoint(s)"""
+
+    LAST = "last"
+    """Evaluate only the last checkpoint"""
+
+    BOTH = "both"
+    """Evaluate both best validation and last checkpoints"""
+
+
 @configuration()
 class Evaluation:
     """What datasets to evaluate on, eventually limit the number of queries for debug"""
@@ -130,14 +143,17 @@ class Evaluation:
     nanobeir: bool = False
     """Whether to evaluate on NanoBEIR datasets"""
 
-    eval_last_checkpoint: bool = False
-    """Whether to evaluate the last checkpoint (at the end of training) in addition to best-validation checkpoints"""
+    eval_checkpoint: CheckpointSelection = CheckpointSelection.LAST
+    """Checkpoint(s) to evaluate: 'val' (best validation), 'last' (final epoch), or 'both'"""
 
     datasets: List[str] = Factory(list)
     """List of specific datasets to evaluate on"""
 
     fabric: Fabric = Factory(Fabric)
     """Configuration for Fabric device management during evaluation"""
+
+    def get_checkpoint_mode(self) -> CheckpointSelection:
+        return CheckpointSelection(self.eval_checkpoint)
 
 
 @configuration()

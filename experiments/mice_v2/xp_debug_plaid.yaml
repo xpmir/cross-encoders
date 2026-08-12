@@ -12,7 +12,7 @@ plaid:
     use_plaid: true
 
 evaluation: # Build Plaid index and Evaluate only on 3 small datasets
-    eval_last_checkpoint: false
+    eval_checkpoint: "val"
     all_datasets: false
     in_domain: false
     beir13: false

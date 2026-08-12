@@ -36,7 +36,7 @@ from MICE.modeling.mice import mice_scorer, MiceCrossEncoder
 from retrievers import splade_retriever, bm25_retriever, MicePlaidRetrieverFactory
 from validations import ValidationSet
 from experimaestro.experiments.grid import generate_grid, GridSearch
-from configuration import CE_FineTuning
+from configuration import CE_FineTuning, CheckpointSelection
 from tests import build_tests
 from format import (
     loss_names,
@@ -321,24 +321,26 @@ def TrainEvaluateLateInteractionScorer(
 
             # Build list of models to evaluate: (model_id, load_model, label)
             models_to_evaluate = []
+            checkpoint_mode = cfg.evaluation.get_checkpoint_mode()
 
             # 1. Best validation checkpoints
-            for name, tracked_validation in tracked_validations.items():
-                logging.info(f"Adding validation model for evaluation: {name}")
-                for metric_name in tracked_validation.monitored():
-                    load_model = (
-                        outputs.listeners[tracked_validation.id][metric_name]
-                        .tag("checkpoint", name)
-                        .tag("seed", seed)
-                        .tag("first_stage", retriever_tag)
-                    )
-                    for k, v in cfg_tags.items():
-                        load_model.tag(k, v)
-                    model_id = f"{grid_search_id}-{name}-{metric_name}-{seed}"
-                    models_to_evaluate.append((model_id, load_model, name))
+            if checkpoint_mode in (CheckpointSelection.VAL, CheckpointSelection.BOTH):
+                for name, tracked_validation in tracked_validations.items():
+                    logging.info(f"Adding validation model for evaluation: {name}")
+                    for metric_name in tracked_validation.monitored():
+                        load_model = (
+                            outputs.listeners[tracked_validation.id][metric_name]
+                            .tag("checkpoint", name)
+                            .tag("seed", seed)
+                            .tag("first_stage", retriever_tag)
+                        )
+                        for k, v in cfg_tags.items():
+                            load_model.tag(k, v)
+                        model_id = f"{grid_search_id}-{name}-{metric_name}-{seed}"
+                        models_to_evaluate.append((model_id, load_model, name))
 
-            # 2. Last checkpoint (if requested)
-            if getattr(cfg.evaluation, "eval_last_checkpoint", False):
+            # 2. Last checkpoint
+            if checkpoint_mode in (CheckpointSelection.LAST, CheckpointSelection.BOTH):
                 logging.info("Adding last checkpoint for evaluation")
                 last_model = (
                     outputs.learned_model.tag("checkpoint", "last")
