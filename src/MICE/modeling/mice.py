@@ -286,6 +286,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
     extra_attn_bias: Param[bool] = field(default=False, ignore_default=True)
     """Whether to add an exact match cross-attention bias head."""
 
+    lexical_bias: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to add a learnable lexical bias for top layers attention heads."""
+
     compress_dim: Param[float] = field(default=1.0, ignore_default=True)
     """Factor by which to divide the hidden dimensions of the top layers"""
 
@@ -312,6 +315,29 @@ class MiceCrossEncoder(AbstractModuleScorer):
     _contextualization_config_path: str = "contextualization_layers"
 
     _interaction_config_path: str = "interaction_layers"
+
+    def get_lexical_match_mask(
+        self, query_ids: torch.Tensor, doc_ids: torch.Tensor
+    ) -> torch.Tensor:
+        """Computes a boolean lexical match mask (B, 1, Tq, Td) ignoring special tokens."""
+        is_special_q = torch.isin(
+            query_ids,
+            torch.tensor(
+                self.tokenizer.tokenizer.all_special_ids, device=query_ids.device
+            ),
+        )
+        is_special_d = torch.isin(
+            doc_ids,
+            torch.tensor(
+                self.tokenizer.tokenizer.all_special_ids, device=doc_ids.device
+            ),
+        )
+        match_mask = (
+            (query_ids.unsqueeze(2) == doc_ids.unsqueeze(1))
+            & (~is_special_q.unsqueeze(2))
+            & (~is_special_d.unsqueeze(1))
+        )
+        return match_mask.unsqueeze(1)  # shape (B, 1, Tq, Td)
 
     def _fetch_backbone_configs(self):
         """Helper to load the backbone config and head config from Hugging Face,
@@ -982,7 +1008,12 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
 class ModernBertCrossAttention(nn.Module):
     """Cross-attention wrapper for ModernBERT that accepts separate query/key/value tensors."""
 
-    def __init__(self, config: ModernBertConfig, layer_idx: Optional[int] = None):
+    def __init__(
+        self,
+        config: ModernBertConfig,
+        layer_idx: Optional[int] = None,
+        lexical_bias: bool = False,
+    ):
         super().__init__()
         self.config = config
         self.head_dim = config.hidden_size // config.num_attention_heads
@@ -1008,8 +1039,13 @@ class ModernBertCrossAttention(nn.Module):
             if config.attention_dropout > 0.0
             else nn.Identity()
         )
+        self.lexical_bias = lexical_bias
+        if self.lexical_bias:
+            self.lexical_bias_weight = nn.Parameter(torch.zeros(self.num_heads))
 
-    def forward(self, query, key, value, attention_mask, **kwargs):
+    def forward(
+        self, query, key, value, attention_mask, lexical_match_mask=None, **kwargs
+    ):
         q_shape = query.shape[:-1]
         query_states = (
             self.q_proj(query).view(*q_shape, -1, self.head_dim).transpose(1, 2)
@@ -1022,6 +1058,15 @@ class ModernBertCrossAttention(nn.Module):
             .view(*value.shape[:-1], -1, self.head_dim)
             .transpose(1, 2)
         )
+
+        if self.lexical_bias and lexical_match_mask is not None:
+            bias = self.lexical_bias_weight.view(1, -1, 1, 1) * lexical_match_mask.to(
+                dtype=query_states.dtype
+            )
+            if attention_mask is not None:
+                attention_mask = attention_mask + bias
+            else:
+                attention_mask = bias
 
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[
@@ -1049,7 +1094,12 @@ class ModernBertCrossAttentionLayer(nn.Module):
     A ModernBERT encoder layer with added cross-attention for mid-fusion ranking.
     """
 
-    def __init__(self, config: ModernBertConfig, layer_id: Optional[int] = None):
+    def __init__(
+        self,
+        config: ModernBertConfig,
+        layer_id: Optional[int] = None,
+        lexical_bias: bool = False,
+    ):
         super().__init__()
         self.config = config
         self.attn_norm = (
@@ -1063,7 +1113,7 @@ class ModernBertCrossAttentionLayer(nn.Module):
         )
         self.attn = ModernBertAttention(config=config, layer_idx=layer_id)
         self.crossattention = ModernBertCrossAttention(
-            config=config, layer_idx=layer_id
+            config=config, layer_idx=layer_id, lexical_bias=lexical_bias
         )
         self.mlp_norm = nn.LayerNorm(
             config.hidden_size,
@@ -1082,6 +1132,7 @@ class ModernBertCrossAttentionLayer(nn.Module):
         encoder_hidden_states=None,
         encoder_attention_mask=None,
         position_embeddings=None,
+        lexical_match_mask=None,
     ):
         # Self-attn residual
         attn_out = self.attn(
@@ -1098,6 +1149,7 @@ class ModernBertCrossAttentionLayer(nn.Module):
                 key=self.attn_norm(encoder_hidden_states),
                 value=self.attn_norm(encoder_hidden_states),
                 attention_mask=encoder_attention_mask,
+                lexical_match_mask=lexical_match_mask,
             )[0]
             hidden_states = hidden_states + cross_out
 
@@ -1180,7 +1232,9 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
             nn.ModuleList(
                 [
                     ModernBertCrossAttentionLayer(
-                        self.config, self.n_contextualization_layers + i
+                        self.config,
+                        self.n_contextualization_layers + i,
+                        lexical_bias=self.lexical_bias,
                     )
                     for i in range(num_top)
                 ]
@@ -1297,7 +1351,14 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         return x_d
 
     def forward_vanilla_transformer(
-        self, x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask=None
+        self,
+        x_q,
+        x_d,
+        q_self,
+        cross_mask,
+        q_pos_embeds,
+        exact_match_mask=None,
+        lexical_match_mask=None,
     ):
         """Vanilla transformer architecture: Self-Attention followed by Cross-Attention."""
         pm = self.pooling_method or getattr(self.config, "classifier_pooling", "cls")
@@ -1329,6 +1390,9 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                         key=layer.attn_norm(x_d),
                         value=layer.attn_norm(x_d),
                         attention_mask=cross_mask[:, :, 0:1, :],
+                        lexical_match_mask=lexical_match_mask[:, :, 0:1, :]
+                        if lexical_match_mask is not None
+                        else None,
                     )[0]
                     x_q = x_q + cross_out
 
@@ -1341,11 +1405,19 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                     encoder_hidden_states=x_d,
                     encoder_attention_mask=cross_mask,
                     position_embeddings=q_pos_embeds[layer.attention_type],
+                    lexical_match_mask=lexical_match_mask,
                 )
         return x_q
 
     def forward_inverted_transformer(
-        self, x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask=None
+        self,
+        x_q,
+        x_d,
+        q_self,
+        cross_mask,
+        q_pos_embeds,
+        exact_match_mask=None,
+        lexical_match_mask=None,
     ):
         """Inverted transformer architecture: Cross-Attention followed by Self-Attention."""
 
@@ -1363,6 +1435,7 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 key=layer.attn_norm(x_d),
                 value=layer.attn_norm(x_d),
                 attention_mask=cross_mask,
+                lexical_match_mask=lexical_match_mask,
             )[0]
             x_q = x_q + cross_out
 
@@ -1448,14 +1521,31 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         else:
             exact_match_mask = None
 
+        if self.lexical_bias:
+            lexical_match_mask = self.get_lexical_match_mask(query_ids, doc_ids)
+        else:
+            lexical_match_mask = None
+
         # 3. Process Query through Top Layers (with Cross-Attention to Doc)
         if self.cross_attn_first:
             x_q = self.forward_inverted_transformer(
-                x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask
+                x_q,
+                x_d,
+                q_self,
+                cross_mask,
+                q_pos_embeds,
+                exact_match_mask,
+                lexical_match_mask,
             )
         else:
             x_q = self.forward_vanilla_transformer(
-                x_q, x_d, q_self, cross_mask, q_pos_embeds, exact_match_mask
+                x_q,
+                x_d,
+                q_self,
+                cross_mask,
+                q_pos_embeds,
+                exact_match_mask,
+                lexical_match_mask,
             )
 
         # 4. Score (Use [CLS] of the Query)
@@ -1847,6 +1937,7 @@ def mice_scorer(
     compress_dim: float = 1.0,
     global_cls_token: bool = False,
     extra_attn_bias: bool = False,
+    lexical_bias: bool = False,
     pooling_method: Optional[str] = None,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
@@ -1902,6 +1993,7 @@ def mice_scorer(
         compress_dim=compress_dim,
         global_cls_token=global_cls_token,
         extra_attn_bias=extra_attn_bias,
+        lexical_bias=lexical_bias,
     )
 
     if "modernbert" in hf_id.lower() or "ettin" in hf_id.lower():

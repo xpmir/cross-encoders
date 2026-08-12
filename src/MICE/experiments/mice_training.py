@@ -89,6 +89,9 @@ class Mice_FineTuning(CE_FineTuning):
     extra_attn_bias: GridSearch[bool] = False
     """Whether to add an exact match cross-attention bias head."""
 
+    lexical_bias: GridSearch[bool] = False
+    """Whether to add a learnable lexical bias for top layers attention heads."""
+
     compress_dim: GridSearch[float] = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
 
@@ -118,6 +121,7 @@ def build_mice(cfg: Mice_FineTuning) -> Tuple[MiceCrossEncoder, List[Lightweight
         compress_dim=cfg.compress_dim,
         global_cls_token=cfg.global_cls_token,
         extra_attn_bias=cfg.extra_attn_bias,
+        lexical_bias=cfg.lexical_bias,
         pooling_method=cfg.pooling_method,
         max_length=max_len,
     )
@@ -141,15 +145,16 @@ def get_name_from_tags(model_tags: dict, cfg: Mice_FineTuning) -> str:
     extra_attn_bias = model_tags.get("extra_attn_bias", cfg.extra_attn_bias)
     bias = "-bias" if extra_attn_bias else ""
 
+    lexical_bias = model_tags.get("lexical_bias", cfg.lexical_bias)
+    lex_suffix = "-lexical" if lexical_bias else ""
+
     loss = model_tags.get("loss", "")
     loss = loss_names.get(loss, loss).replace("/", "-")
     # try to get prettier name
     if len(loss):
         loss = f"-{loss}"
 
-    return (
-        f"Mice-l{n_ctx_layers}{doc_suffix}+{n_inter_layers}{vanilla}{bias}-{base}{loss}"
-    )
+    return f"Mice-l{n_ctx_layers}{doc_suffix}+{n_inter_layers}{vanilla}{bias}{lex_suffix}-{base}{loss}"
 
 
 def TrainEvaluateLateInteractionScorer(

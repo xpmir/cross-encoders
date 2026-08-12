@@ -1,0 +1,20 @@
+id: train_v1_mice_ettin68m_l10+4_head_bias
+title: "Mice-Ettin-68m Training"
+description:
+    testing the lexical bias on the head only, reproducing the MICE-Ettin-68m-l10+4-Lex training from v1
+
+module: MICE.experiments.mice_training
+parent: ../../mice_v1/mice_ettin_68m.yaml
+
+
+max_length: 1024
+n_contextualization_layers: 10
+n_interaction_layers: 4
+extra_attn_bias: false
+
+#### Params that are grid searched
+grid_search:
+    lexical_bias:
+        values_list:
+            - true
+            - false

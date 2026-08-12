@@ -47,6 +47,7 @@ retrieval:
     batch_size: 64
 
 evaluation: #default = Minified tests
+    eval_checkpoint: "val"
     all_datasets: false
     in_domain: true
     beir13: true

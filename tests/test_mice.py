@@ -145,3 +145,71 @@ def test_mice(
         assert torch.allclose(
             model.classifier.weight, hf_model.classifier.weight
         ), "Classifier weights mismatch after HF roundtrip!"
+
+
+def test_lexical_bias():
+    from MICE.modeling.mice import mice_scorer
+    from xpmir.letor.records import PointwiseItems
+    import tempfile
+    from pathlib import Path
+
+    # 1. Instantiate the MICE model with lexical_bias=True
+    scorer_cfg, init_tasks = mice_scorer(
+        hf_id="jhu-clsp/ettin-encoder-17m",
+        n_contextualization_layers=2,
+        lexical_bias=True
+    )
+
+    for task in init_tasks:
+        task.instance().execute()
+
+    model = scorer_cfg.instance()
+    model.initialize()
+
+    # Verify model has the parameter and is initialized to zero
+    assert hasattr(model.top_layers[0].crossattention, "lexical_bias_weight"), "lexical_bias_weight not found on top layer cross-attention"
+    bias_weight = model.top_layers[0].crossattention.lexical_bias_weight
+    assert torch.allclose(bias_weight, torch.zeros_like(bias_weight)), "lexical_bias_weight not initialized to zero"
+
+    # 2. Verify backward pass and optimizer update
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-1)
+
+    query = "What is the capital of France?"
+    document = "Paris is the capital of France."
+    input_records = PointwiseItems.from_texts(topics=[query], documents=[document])
+
+    # Forward pass
+    scores = model(input_records)
+
+    # Dummy loss to compute gradients
+    loss = scores.sum()
+    loss.backward()
+
+    # Verify gradients are computed for the bias weight
+    assert bias_weight.grad is not None, "Gradients not computed for lexical_bias_weight"
+    assert not torch.allclose(bias_weight.grad, torch.zeros_like(bias_weight.grad)), "Gradients are all zero for lexical_bias_weight"
+
+    # Step the optimizer
+    prev_weight = bias_weight.clone()
+    optimizer.step()
+
+    # Verify parameter updated
+    assert not torch.allclose(bias_weight, prev_weight), "lexical_bias_weight did not update"
+
+    # 3. Persistence roundtrip check
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        save_path = tmp_path / "model"
+
+        # Save model
+        model.save_model(save_path)
+
+        # Reload model
+        loader_config = scorer_cfg.loader_config(save_path)
+        loader = loader_config.instance()
+        loader.execute()
+        reloaded_model = loader.model
+
+        # Verify reloaded weights are identical
+        reloaded_weight = reloaded_model.top_layers[0].crossattention.lexical_bias_weight
+        assert torch.allclose(bias_weight, reloaded_weight), "lexical_bias_weight mismatch after save/load"
