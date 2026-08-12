@@ -6,6 +6,12 @@ from samplers import prepare_collection
 from xpmir.evaluation import Evaluations, EvaluationsCollection
 from xpmir.measures import RR, nDCG, R, Success
 from configuration import Evaluation
+from experimaestro import Task, Param, pathgenerator
+from datamaestro_ir.data.csv import Topics as CSVTopics
+from datamaestro_ir.data.trec import TrecAdhocAssessments
+from datamaestro_ir.data import Adhoc
+from pathlib import Path
+from typing import Annotated
 
 import logging
 
@@ -174,6 +180,56 @@ BEIR13_DECONTAMINATED_KEYS = {
 }
 
 
+class FilterUnassessedTopics(Task):
+    """Filters a dataset to only keep topics that have at least one assessment/qrel"""
+
+    dataset: Param[Adhoc]
+    """The Adhoc dataset to filter"""
+
+    topics: Annotated[Path, pathgenerator("topics.tsv")]
+    """Filtered topics file"""
+
+    assessments: Annotated[Path, pathgenerator("assessments.tsv")]
+    """Filtered assessments file"""
+
+    def task_outputs(self, dep) -> Adhoc:
+        return dep(
+            Adhoc.C(
+                id=self.dataset.id + ".filtered" if self.dataset.id else "filtered",
+                topics=dep(CSVTopics.C(id="", path=self.topics)),
+                assessments=dep(TrecAdhocAssessments.C(id="", path=self.assessments)),
+                documents=self.dataset.documents,
+            )
+        )
+
+    def execute(self):
+        # 1. Identify all topic IDs with assessments
+        assessed_topic_ids = set()
+        for qrels in self.dataset.assessments.iter():
+            if len(qrels.assessments) > 0:
+                assessed_topic_ids.add(qrels.topic_id)
+
+        logger.info(
+            f"Filtering dataset {self.dataset.id or ''}: keeping {len(assessed_topic_ids)} topics with assessments"
+        )
+
+        # 2. Write filtered topics
+        self.topics.parent.mkdir(parents=True, exist_ok=True)
+        written_topic_ids = set()
+        with self.topics.open("wt") as fp:
+            for topic in self.dataset.topics.iter():
+                if topic["id"] in assessed_topic_ids:
+                    fp.write(f"{topic['id']}\t{topic['text_item'].text}\n")
+                    written_topic_ids.add(topic["id"])
+
+        # 3. Write assessments matching the written topics
+        with self.assessments.open("wt") as fp:
+            for qrels in self.dataset.assessments.iter():
+                if qrels.topic_id in written_topic_ids:
+                    for qrel in qrels.assessments:
+                        fp.write(f"{qrels.topic_id} 0 {qrel.doc_id} {qrel.rel}\n")
+
+
 @lru_cache
 def BEIR13_decontaminated_tests(
     test_topic_nb: int,
@@ -186,6 +242,8 @@ def BEIR13_decontaminated_tests(
     evals = {}
     for key, dataset_id in BEIR13_DECONTAMINATED_KEYS.items():
         ds = prepare_dataset(dataset_id, download=blocking)
+        # Apply the filter before taking the fold or evaluating
+        ds = FilterUnassessedTopics.C(dataset=ds).submit(launcher=launcher)
         ds = get_fold(ds, test_topic_nb, launcher=launcher)
         evals[key] = Evaluations(ds, measures=measures)
 
