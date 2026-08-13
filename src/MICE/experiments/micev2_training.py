@@ -229,11 +229,17 @@ def TrainEvaluateMiceV2(
         ### TRAINING CROSS ENCODER
 
         ce_trainer: LossTrainer = build_trainer(cfg)
-        if (
-            getattr(cfg, "utility_pred", False)
-            and getattr(cfg, "lambda_reg", 0.0) > 0.0
-        ):
-            ce_trainer.hooks.append(UtilityRegularizer.C(lambda_reg=cfg.lambda_reg))
+        if cfg.utility_pred and cfg.lambda_reg > 0.0:
+            histogram_interval = (
+                cfg.learner.validation_interval
+                * cfg.learner.optimization.steps_per_epoch
+            )
+            ce_trainer.hooks.append(
+                UtilityRegularizer.C(
+                    lambda_reg=cfg.lambda_reg,
+                    histogram_interval=histogram_interval,
+                )
+            )
 
         # Build the model using the provided factory
         model, model_init_tasks = build_model_fn(cfg)

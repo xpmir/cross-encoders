@@ -1,0 +1,29 @@
+id: train_micev2_ettin68m_l10+4_soft
+title: "Mice-Ettin-68m Training"
+description:
+    Base Training for Ettin-68m-based MICE model.
+
+module: MICE.experiments.micev2_training
+parent: ./_ettin68m.yaml
+nb_repetitions: 2
+
+evaluation: #default = Minified tests
+    eval_checkpoint: "both"
+    all_datasets: false
+    in_domain: true
+    beir13: true
+
+# Exceptionally use H100 for eval
+# retrieval:
+#     requirements: duration=1h & cpu(cores=16) & cuda(mem=40G)
+max_length: 1024
+max_query_length: 1024
+max_doc_length: 1024
+
+# Test
+utility_pred: true
+lambda_reg:
+    values_list:
+        - 1e-3
+        - 1e-2
+        - 1e-1

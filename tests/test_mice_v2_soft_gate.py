@@ -20,6 +20,7 @@ from MICE.modeling.mice_v2.modernbert_xpm import (
 )
 from xpmir.letor.records import PointwiseItems
 from xpm_torch.trainers import TrainerContext
+from xpm_torch.metrics import Metrics
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -70,6 +71,48 @@ def test_utility_regularizer_unpadded_fa2():
     assert len(losses) == 1
     assert losses[0].name == "utility_reg"
     assert losses[0].value.item() == pytest.approx(fa2_utilities.mean().item())
+
+
+def test_utility_regularizer_histogram_logging():
+    """Test UtilityRegularizer calling writer.add_histogram when step matches histogram_interval."""
+    reg_hook = UtilityRegularizer.C(lambda_reg=0.1, histogram_interval=100)
+
+    utilities = torch.rand((4, 16, 1))
+    doc_mask = torch.ones((4, 16), dtype=torch.long)
+
+    context = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    context.metrics = Metrics()
+
+    histogram_calls = []
+
+    class MockWriter:
+        def add_histogram(self, tag, values, global_step=None):
+            histogram_calls.append((tag, values.shape, global_step))
+
+    context._writer = MockWriter()
+
+    # Step 50: step % 100 != 0 -> should NOT log histogram
+    context.state.steps = 50
+    with context.losses():
+        reg_hook(context, utilities, doc_mask=doc_mask)
+    assert len(histogram_calls) == 0
+
+    # Step 100: step % 100 == 0 -> SHOULD log histogram
+    context.state.steps = 100
+    with context.losses():
+        reg_hook(context, utilities, doc_mask=doc_mask)
+    assert len(histogram_calls) == 1
+    assert histogram_calls[0][0] == "utility_distribution"
+    assert histogram_calls[0][2] == 100
 
 
 def test_modernbert_hf_soft_gate():
@@ -136,6 +179,7 @@ def test_modernbert_xpm_soft_gate_and_hook():
             optimizer=None,
             fabric=None,
         )
+        context.metrics = Metrics()
         reg_hook = UtilityRegularizer.C(lambda_reg=0.1)
         context.add_hook(reg_hook)
 
@@ -149,6 +193,11 @@ def test_modernbert_xpm_soft_gate_and_hook():
         assert reg_loss_item.name == "utility_reg"
         assert reg_loss_item.weight == 0.1
         assert reg_loss_item.value > 0.0
+
+        # Verify metrics logged to context
+        assert "utility_reg" in context.metrics.metrics
+        assert "utility_mean" in context.metrics.metrics
+        assert "utility_sparsity" in context.metrics.metrics
 
 
 def test_soft_gate_save_load():

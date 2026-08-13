@@ -8,19 +8,23 @@ import logging
 
 import torch
 import torch.nn as nn
+from transformers import AutoConfig, AutoModelForSequenceClassification
 
+from experimaestro import LightweightTask, Param, Meta, Constant, field
 from datamaestro_ir.data.base import IDTextRecord
+from xpmir.text.tokenizers import TokenizerOptions
+from xpmir.rankers.scorer import AbstractModuleScorer
+from xpmir.letor.records import BaseItems
 from xpmir.text.encoders import (
     TextEncoderBase,
     EncoderOutput,
     TokensEncoderOutput,
     TokensRepresentationOutput,
 )
-from xpmir.text.tokenizers import TokenizerOptions
-from experimaestro import LightweightTask, Param, Constant, field
-from xpmir.rankers.scorer import AbstractModuleScorer
-from xpmir.letor.records import BaseItems
 from xpm_torch.utils import to_device
+from xpm_torch.trainers import TrainingHook, TrainerContext
+from xpm_torch.losses import Loss
+from xpm_torch.metrics import ScalarMetric
 from xpm_torch.module import (
     SimpleModuleLoader,
     ReadmeSection,
@@ -31,19 +35,22 @@ from MICE.modeling.mice_v2.modernbert_hf import (
     ModernBertMiceConfig,
     ModernBertMiceForSequenceClassification,
 )
-from transformers import AutoConfig, AutoModelForSequenceClassification
-from xpm_torch.trainers import TrainingHook, TrainerContext
-from xpm_torch.losses import Loss
-from xpm_torch.metrics import ScalarMetric
+
 
 logger = logging.getLogger(__name__)
 
 
 class UtilityRegularizer(TrainingHook):
-    """Training hook for computing token utility L1 regularization loss"""
+    """Training hook for computing token utility L1 regularization loss and sparsity metrics"""
 
     lambda_reg: Param[float] = field(default=0.0)
     """Regularization weight for utility predictor L1 loss"""
+
+    sparsity_threshold: Param[float] = field(default=0.5)
+    """Threshold below which a token utility score is considered suppressed / sparse (default 0.5)"""
+
+    histogram_interval: Meta[int] = field(default=0)
+    """Interval in steps for writing utility distribution histograms to TensorBoard (0 to disable)"""
 
     def __call__(
         self,
@@ -62,14 +69,17 @@ class UtilityRegularizer(TrainingHook):
         ):  # we are using sdpa - need to mask tokens
             mask = doc_mask.unsqueeze(-1).bool()
             valid_utilities = utilities.masked_select(mask)
-            mean_utility = (
-                valid_utilities.mean()
-                if valid_utilities.numel() > 0
-                else utilities.mean()
-            )
+            if valid_utilities.numel() > 0:
+                mean_utility = valid_utilities.mean()
+                sparsity = (valid_utilities < self.sparsity_threshold).float().mean()
+            else:
+                mean_utility = utilities.mean()
+                sparsity = (utilities < self.sparsity_threshold).float().mean()
         else:
             # under FA2, padding tokens are already removed, so we can just take the mean over all tokens
             mean_utility = utilities.mean()
+            sparsity = (utilities < self.sparsity_threshold).float().mean()
+            valid_utilities = utilities.view(-1)
 
         reg_loss = mean_utility
         info.add_loss(Loss("utility_reg", reg_loss, self.lambda_reg))
@@ -84,7 +94,24 @@ class UtilityRegularizer(TrainingHook):
                 )
             )
             info.metrics.add(
-                ScalarMetric("utility_mean", float(mean_utility.item()), nrecords)
+                ScalarMetric("utility/mean", float(mean_utility.item()), nrecords)
+            )
+            info.metrics.add(
+                ScalarMetric("utility/sparsity", float(sparsity.item()), nrecords)
+            )
+
+        # Log TensorBoard histogram at validation interval boundaries
+        writer = getattr(info, "writer", None)
+        if (
+            self.histogram_interval > 0
+            and writer is not None
+            and (info.state.step % self.histogram_interval == 0)
+            and valid_utilities.numel() > 0
+        ):
+            writer.add_histogram(
+                "train/utility/distribution",
+                valid_utilities.detach(),
+                global_step=info.state.step,
             )
 
 
