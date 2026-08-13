@@ -38,13 +38,10 @@ evaluation:
         - nfcorpus
         - scifact
 
-#### Params that are grid searched
-grid_search:
-    learner.optimization.max_epochs:
-        values_list:
-            - 100
-            - 200
-            - 250
-    attn_implementation:
-        values_list:
-            - flash_attention_2
+# Test
+utility_pred: true
+lambda_reg:
+    values_list:
+        - 1e-3
+        - 1e-2
+        - 1e-1

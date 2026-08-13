@@ -32,8 +32,60 @@ from MICE.modeling.mice_v2.modernbert_hf import (
     ModernBertMiceForSequenceClassification,
 )
 from transformers import AutoConfig, AutoModelForSequenceClassification
+from xpm_torch.trainers import TrainingHook, TrainerContext
+from xpm_torch.losses import Loss
+from xpm_torch.metrics import ScalarMetric
 
 logger = logging.getLogger(__name__)
+
+
+class UtilityRegularizer(TrainingHook):
+    """Training hook for computing token utility L1 regularization loss"""
+
+    lambda_reg: Param[float] = field(default=0.0)
+    """Regularization weight for utility predictor L1 loss"""
+
+    def __call__(
+        self,
+        info: TrainerContext,
+        utilities: torch.Tensor,
+        doc_mask: Optional[torch.Tensor] = None,
+    ):
+        if self.lambda_reg <= 0.0 or utilities is None:
+            return
+
+        if (
+            doc_mask is not None
+            and utilities.ndim == 3
+            and utilities.shape[0] == doc_mask.shape[0]
+            and utilities.shape[1] == doc_mask.shape[1]
+        ):  # we are using sdpa - need to mask tokens
+            mask = doc_mask.unsqueeze(-1).bool()
+            valid_utilities = utilities.masked_select(mask)
+            mean_utility = (
+                valid_utilities.mean()
+                if valid_utilities.numel() > 0
+                else utilities.mean()
+            )
+        else:
+            # under FA2, padding tokens are already removed, so we can just take the mean over all tokens
+            mean_utility = utilities.mean()
+
+        reg_loss = mean_utility
+        info.add_loss(Loss("utility_reg", reg_loss, self.lambda_reg))
+
+        if getattr(info, "metrics", None) is not None:
+            nrecords = doc_mask.shape[0] if doc_mask is not None else 1
+            info.metrics.add(
+                ScalarMetric(
+                    "utility_reg",
+                    float((self.lambda_reg * mean_utility).item()),
+                    nrecords,
+                )
+            )
+            info.metrics.add(
+                ScalarMetric("utility_mean", float(mean_utility.item()), nrecords)
+            )
 
 
 class InitMICEV2ModernBERTFromHFID(LightweightTask):
@@ -139,6 +191,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     attn_implementation: Param[Optional[str]] = field(default=None, ignore_default=True)
     """Attention implementation (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
 
+    utility_pred: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to add a 2layer MLP utility predictor applied to the document hidden states before upper layers"""
+
     _version: Constant[str] = "2.0.1"
 
     hf_model: nn.Module
@@ -158,6 +213,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             mice_config = loaded_config
             if self.attn_implementation is not None:
                 mice_config._attn_implementation = self.attn_implementation
+            if self.utility_pred:
+                mice_config.utility_pred = True
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -169,6 +226,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 n_docs_ctx_layers=self.n_docs_ctx_layers,
                 n_interaction_layers=self.n_interaction_layers,
                 bound_bottom_layers=self.bound_bottom_layers,
+                utility_pred=self.utility_pred,
                 **config_kwargs,
             )
 
@@ -231,6 +289,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         inputs: Optional[BaseItems] = None,
         tokenized: Optional[MICETokenizedTexts] = None,
         doc_hidden_states: Optional[List[torch.Tensor]] = None,
+        info: Optional[TrainerContext] = None,
     ) -> torch.Tensor:
         if inputs is None and tokenized is None:
             raise ValueError("Either raw inputs or tokenized inputs must be provided.")
@@ -268,6 +327,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 doc_hidden=doc_hidden,
                 doc_mask=doc_mask,
             )
+            target_doc_mask = doc_mask
         else:
             tokenized_docs = to_device(tokenized.tokenized_docs, self.device)
             out = self.hf_model(
@@ -276,6 +336,14 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 doc_ids=tokenized_docs.ids,
                 doc_mask=tokenized_docs.mask,
             )
+            target_doc_mask = tokenized_docs.mask
+
+        if (
+            info is not None
+            and getattr(self.hf_model, "last_utilities", None) is not None
+        ):
+            for hook in info.hooks(UtilityRegularizer):
+                hook(info, self.hf_model.last_utilities, target_doc_mask)
 
         return out.logits.squeeze(-1)
 
@@ -535,6 +603,7 @@ def mice_v2_scorer(
     n_interaction_layers: Optional[int] = None,
     bound_bottom_layers: bool = True,
     attn_implementation: Optional[str] = None,
+    utility_pred: bool = False,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -557,6 +626,7 @@ def mice_v2_scorer(
         n_interaction_layers=n_interaction_layers,
         bound_bottom_layers=bound_bottom_layers,
         attn_implementation=attn_implementation,
+        utility_pred=utility_pred,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

@@ -101,6 +101,41 @@ def _unpad_input_with_posids(
     return unpadded_hidden, cu_seqlens, max_seqlen, indices, position_ids
 
 
+class UtilityPredictor(nn.Module):
+    """Two-layer MLP Utility Predictor using ModernBERT's GeGLU activation
+    and a Sigmoid output to produce per-token utility scores U in (0, 1).
+    """
+
+    def __init__(self, hidden_dim: int, bottleneck_dim: Optional[int] = None):
+        super().__init__()
+        if bottleneck_dim is None:
+            bottleneck_dim = hidden_dim * 2
+
+        self.wi = nn.Linear(hidden_dim, 2 * bottleneck_dim, bias=False)
+        self.wo = nn.Linear(bottleneck_dim, 1, bias=False)
+
+    def _init_weights(self):
+        # 1. Keep the output weights very small so input variance doesn't overpower the bias
+        nn.init.normal_(self.wo.weight, mean=0.0, std=0.01)
+
+        # 2. Set the bias to a high positive scalar.
+        # logit = 5.0 -> sigmoid(5.0) = 0.9933 (keeps ~99% of utility)
+        nn.init.constant_(self.wo.bias, 5.0)
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        """Args:
+            h: Hidden state tensor of shape (batch_size, seq_len, hidden_dim)
+               or (1, total_tokens, hidden_dim)
+
+        Returns:
+            u: Utility scores of shape (batch_size, seq_len, 1) or (1, total_tokens, 1) in (0, 1)
+        """
+        x_val, x_gate = self.wi(h).chunk(2, dim=-1)
+        geglu_out = x_val * torch.nn.functional.gelu(x_gate, approximate="none")
+        logits = self.wo(geglu_out)
+        return torch.sigmoid(logits)
+
+
 class ModernBertMiceConfig(ModernBertConfig):
     model_type = "modernbert_mice"
 
@@ -111,6 +146,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         n_interaction_layers: Optional[int] = None,
         bound_bottom_layers: bool = True,
         cross_attn_first: bool = True,
+        utility_pred: bool = False,
         num_labels: int = 1,
         **kwargs,
     ):
@@ -125,6 +161,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.n_interaction_layers = n_interaction_layers
         self.bound_bottom_layers = bound_bottom_layers
         self.cross_attn_first = cross_attn_first
+        self.utility_pred = utility_pred
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -536,6 +573,13 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             config.hidden_size,
             config.num_labels if hasattr(config, "num_labels") else 1,
         )
+
+        if getattr(config, "utility_pred", False):
+            self.utility_predictor = UtilityPredictor(config.hidden_size)
+        else:
+            self.utility_predictor = None
+        self.last_utilities = None
+
         self.post_init()
 
     def _forward_bottom(
@@ -620,6 +664,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
     ) -> torch.Tensor:
         """Encode documents through bottom contextualization layers."""
         d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
+        if self.utility_predictor is not None:
+            utilities = self.utility_predictor(d_hidden)
+            d_hidden = d_hidden * utilities
         return d_hidden
 
     def forward(
@@ -735,6 +782,13 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             else:
                 d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
                 cu_seqlens_d = max_seqlen_d = None
+
+        # 2b. Apply Soft Gating Utility Predictor if enabled
+        if self.utility_predictor is not None:
+            self.last_utilities = self.utility_predictor(d_hidden)
+            d_hidden = d_hidden * self.last_utilities
+        else:
+            self.last_utilities = None
 
         if use_unpadded:
             num_top = len(self.top_layers)

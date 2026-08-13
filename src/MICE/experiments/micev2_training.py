@@ -40,7 +40,10 @@ from training_utils import (
     process_experiment_results,
 )
 
-from MICE.modeling.mice_v2.modernbert_xpm import mice_v2_scorer
+from MICE.modeling.mice_v2.modernbert_xpm import (
+    mice_v2_scorer,
+    UtilityRegularizer,
+)
 from logging_utils import setup_logging
 
 setup_logging(level=logging.INFO)
@@ -63,6 +66,9 @@ class MiceV2_FineTuning(CE_FineTuning):
 
     attn_implementation: GridSearch[Optional[str]] = None
     """Attention implementation (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
+
+    utility_pred: GridSearch[bool] = False
+    """Whether to enable 2-layer MLP soft-gating utility predictor on document tokens"""
 
     lambda_reg: GridSearch[float] = 0.0
     """Regularization weight for the Utility predictor"""
@@ -87,6 +93,7 @@ def build_mice_v2(
         n_interaction_layers=cfg.n_interaction_layers,
         bound_bottom_layers=cfg.bound_bottom_layers,
         attn_implementation=attn_impl,
+        utility_pred=cfg.utility_pred,
         max_length=max_len,
     )
 
@@ -222,6 +229,11 @@ def TrainEvaluateMiceV2(
         ### TRAINING CROSS ENCODER
 
         ce_trainer: LossTrainer = build_trainer(cfg)
+        if (
+            getattr(cfg, "utility_pred", False)
+            and getattr(cfg, "lambda_reg", 0.0) > 0.0
+        ):
+            ce_trainer.hooks.append(UtilityRegularizer.C(lambda_reg=cfg.lambda_reg))
 
         # Build the model using the provided factory
         model, model_init_tasks = build_model_fn(cfg)

@@ -11,7 +11,7 @@ learner:
     validation: msmarco
 
 evaluation:
-    eval_checkpoint: "both"
+    eval_checkpoint: "val"
     in_domain: true
     beir13: true
 
