@@ -195,7 +195,7 @@ def test_hard_pruning_save_load():
         assert reloaded_model.hf_model.config.hard_prune_threshold == 0.5
 
 
-def test_init_mice_v2_from_checkpoint():
+def test_init_mice_v2_from_checkpoint(tmp_path):
     """Test InitMICEV2FromCheckpoint transferring weights from Phase 1 to Phase 2 model."""
     from MICE.modeling.mice_v2.modernbert_xpm import InitMICEV2FromCheckpoint
 
@@ -219,13 +219,55 @@ def test_init_mice_v2_from_checkpoint():
         hard_prune_threshold=0.5,
     )
 
+    ckpt_dir = tmp_path / "p1_job" / "checkpoints" / "epoch-00000005"
+    ckpt_dir.mkdir(parents=True)
+    p1_runs_dir = tmp_path / "p1_job" / "runs"
+    p1_runs_dir.mkdir(parents=True)
+    (p1_runs_dir / "events.out.tfevents.dummy").write_text("tb_event")
+
+    p1_model = p1_scorer_cfg.instance()
+    p1_model.initialize()
+    import json
+    p1_model.save_model(ckpt_dir / "model")
+    (ckpt_dir / "trainer.pth").write_text("trainer_dummy")
+    (ckpt_dir / "optimizer.pth").write_text("optimizer_dummy")
+    (ckpt_dir / "info.json").write_text(json.dumps({"epoch": 5, "steps": 250}))
+
+    from xpm_torch.module import SimpleModuleLoader
+
     p2_init_task_cfg = InitMICEV2FromCheckpoint.C(
-        scorer=p2_scorer_cfg, checkpoint_loader=p1_scorer_cfg
+        scorer=p2_scorer_cfg,
+        checkpoint_loader=SimpleModuleLoader.C(value=p1_scorer_cfg, path=ckpt_dir),
+        load_trainer_state=True,
     )
     p2_init_task = p2_init_task_cfg.instance()
+    p2_init_task.path = tmp_path / "task_out"
+    p2_init_task.path.mkdir(parents=True)
     p2_init_task.execute()
 
-    p2_model = p2_init_task.scorer
+    # Initialize Phase 2 model to test auto-freezing
+    p2_model = p2_scorer_cfg.instance()
+    p2_model.initialize()
+
+    # Verify trainer.pth, optimizer.pth, and model were copied into epoch-00000000
+    assert (p2_init_task.path / "epoch-00000000" / "trainer.pth").exists()
+    assert (p2_init_task.path / "epoch-00000000" / "optimizer.pth").exists()
+    assert (p2_init_task.path / "epoch-00000000" / "info.json").exists()
+    assert (p2_init_task.path / "epoch-00000000" / "model").exists()
+
+    # Verify info.json preserves steps=250 while resetting epoch=0
+    with (p2_init_task.path / "epoch-00000000" / "info.json").open() as fp:
+        info_data = json.load(fp)
+        assert info_data["epoch"] == 0
+        assert info_data["steps"] == 250
+
+    # Verify process cwd checkpoints/epoch-00000000 was populated
+    assert (Path.cwd() / "checkpoints" / "epoch-00000000" / "trainer.pth").exists()
+    assert (Path.cwd() / "checkpoints" / "epoch-00000000" / "optimizer.pth").exists()
+
+    # Verify runs/phase1 symlink
+    assert (p2_init_task.path / "runs" / "phase1").is_symlink()
+    assert (p2_init_task.path / "runs" / "phase1" / "events.out.tfevents.dummy").exists()
 
     # Verify parameters transferred & config updated
     assert p2_model.hf_model.config.hard_pruning is True

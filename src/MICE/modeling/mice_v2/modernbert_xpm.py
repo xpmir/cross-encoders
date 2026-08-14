@@ -3,8 +3,11 @@ Experimaestro-IR integration for ModernBERT MICE V2 architecture.
 """
 
 from pathlib import Path
-from typing import Optional, List, Tuple, Union
+from typing import Optional, List, Tuple
 import logging
+import shutil
+import json
+import os
 
 import torch
 import torch.nn as nn
@@ -52,6 +55,8 @@ class UtilityRegularizer(TrainingHook):
 
     histogram_interval: Meta[int] = field(default=0)
     """Interval in steps for writing utility distribution histograms to TensorBoard (0 to disable)"""
+
+    version: Constant[str] = "1.0.0"
 
     def __call__(
         self,
@@ -191,56 +196,123 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
         logger.info("Successfully initialized ModernBertMiceScorer weights.")
 
 
+def find_latest_epoch_dir(ckpt_path: Path) -> Optional[Path]:
+    """Finds the latest epoch checkpoint directory (e.g. epoch-00000150) containing trainer.pth & optimizer.pth."""
+    search_dirs = []
+    checkpoints_dir = next(
+        (p for p in [ckpt_path, *ckpt_path.parents] if p.name == "checkpoints"),
+        None,
+    )
+    if checkpoints_dir is not None:
+        search_dirs.append(checkpoints_dir)
+    search_dirs.extend([ckpt_path, ckpt_path.parent])
+
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        epoch_dirs = []
+        for f in d.glob("epoch-*"):
+            if f.is_dir():
+                try:
+                    epoch_num = int(f.name[len("epoch-") :])
+                    epoch_dirs.append((epoch_num, f))
+                except ValueError:
+                    pass
+        if epoch_dirs:
+            epoch_dirs.sort(key=lambda x: x[0], reverse=True)
+            for _, epoch_dir in epoch_dirs:
+                if (epoch_dir / "trainer.pth").exists() and (
+                    epoch_dir / "optimizer.pth"
+                ).exists():
+                    return epoch_dir
+    return None
+
+
 class InitMICEV2FromCheckpoint(LightweightTask):
     """Initializes a Phase 2 MICE V2 model from a Phase 1 trained checkpoint path/loader and freezes bottom layers & utility predictor."""
 
     scorer: Param["ModernBertMiceScorer"]
-    checkpoint_loader: Param[
-        Union[ModuleLoader, SimpleModuleLoader, LightweightTask, AbstractModuleScorer]
-    ]
+
+    checkpoint_loader: Param[ModuleLoader]
+    """Path or ModuleLoader to the Phase 1 trained checkpoint (should contain model.safetensors or model/ directory)."""
+
+    load_trainer_state: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to resume the state of optimizer/dataloader"""
 
     def execute(self):
-        scorer = self.scorer
-        scorer.initialize()
+        logger.info(
+            "[InitMICEV2] Current working directory (os.getcwd()): %s", os.getcwd()
+        )
+        if getattr(self, "path", None) is not None:
+            logger.info("[InitMICEV2] Task output path (self.path): %s", self.path)
 
-        ckpt_loader = self.checkpoint_loader
-        ckpt_path = None
-        if hasattr(ckpt_loader, "path") and ckpt_loader.path is not None:
-            ckpt_path = Path(ckpt_loader.path)
-        elif hasattr(ckpt_loader, "instance"):
-            try:
-                inst = ckpt_loader.instance()
-                if hasattr(inst, "path") and inst.path is not None:
-                    ckpt_path = Path(inst.path)
-            except Exception:
-                pass
+        ckpt_path = Path(self.checkpoint_loader.path)
+        logger.info("[InitMICEV2] Loading Phase 1 checkpoint from path: %s", ckpt_path)
 
-        if ckpt_path is not None:
-            logger.info(f"Loading Phase 1 checkpoint from path: {ckpt_path}")
-            scorer.load_model(ckpt_path)
-        else:
-            source = (
-                ckpt_loader.instance()
-                if hasattr(ckpt_loader, "instance")
-                else ckpt_loader
+        latest_epoch_dir = find_latest_epoch_dir(ckpt_path)
+        if latest_epoch_dir is None:
+            if (ckpt_path / "model").exists() or (
+                ckpt_path / "model.safetensors"
+            ).exists():
+                latest_epoch_dir = ckpt_path
+            elif (ckpt_path / "last").exists():
+                latest_epoch_dir = ckpt_path / "last"
+
+        if latest_epoch_dir is None:
+            logger.warning(
+                "[InitMICEV2] No valid epoch directory found near %s", ckpt_path
             )
-            if hasattr(source, "model"):
-                source = source.model
-            elif hasattr(source, "scorer"):
-                source = source.scorer
+            return
 
-            if hasattr(source, "initialize") and not hasattr(source, "hf_model"):
-                source.initialize()
-
-            if hasattr(source, "hf_model") and hasattr(scorer, "hf_model"):
-                scorer.hf_model.load_state_dict(source.hf_model.state_dict())
-                logger.info("Loaded Phase 1 state_dict into Phase 2 model.")
-            else:
-                raise ValueError(
-                    f"Could not extract checkpoint path or model from {ckpt_loader}"
+        # 1. Read Phase 1 step count from info.json
+        phase1_steps = 0
+        if (latest_epoch_dir / "info.json").exists():
+            try:
+                with (latest_epoch_dir / "info.json").open("rt") as fp:
+                    p1_info = json.load(fp)
+                    phase1_steps = p1_info.get("steps", 0)
+                logger.info(
+                    "[InitMICEV2] Preserving Phase 1 step count (%d) for TensorBoard continuity at epoch 0",
+                    phase1_steps,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[InitMICEV2] Could not read steps from Phase 1 info.json: %s", e
                 )
 
-        scorer.freeze_bottom_and_utility()
+        # Helper function to populate epoch-00000000 directory
+        def copy_to_epoch_zero(target_base_dir: Path):
+            epoch_zero = target_base_dir / "epoch-00000000"
+            epoch_zero.mkdir(parents=True, exist_ok=True)
+
+            # Copy trainer & optimizer state dicts if present
+            if (latest_epoch_dir / "trainer.pth").exists():
+                shutil.copy2(
+                    latest_epoch_dir / "trainer.pth", epoch_zero / "trainer.pth"
+                )
+            if (latest_epoch_dir / "optimizer.pth").exists():
+                shutil.copy2(
+                    latest_epoch_dir / "optimizer.pth", epoch_zero / "optimizer.pth"
+                )
+
+            # Write info.json resetting epoch to 0 but preserving total steps
+            with (epoch_zero / "info.json").open("wt") as fp:
+                json.dump({"epoch": 0, "steps": phase1_steps}, fp)
+
+            # Copy model weights directory directly without re-saving via PyTorch
+            src_model_dir = (
+                latest_epoch_dir / "model"
+                if (latest_epoch_dir / "model").exists()
+                else latest_epoch_dir
+            )
+            dst_model_dir = epoch_zero / "model"
+            if dst_model_dir.exists():
+                shutil.rmtree(dst_model_dir)
+            shutil.copytree(src_model_dir, dst_model_dir)
+            logger.info("[InitMICEV2] Populated epoch-00000000 at %s", epoch_zero)
+
+        # Populate process cwd checkpoints/epoch-00000000
+        copy_to_epoch_zero(Path.cwd() / "checkpoints")
 
 
 class ModernBertMiceScorer(AbstractModuleScorer):
@@ -330,6 +402,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
 
         hf_model = ModernBertMiceForSequenceClassification(mice_config)
         self.add_module("hf_model", hf_model)
+
+        if self.hard_pruning:
+            self.freeze_bottom_and_utility()
 
         attn_impl = getattr(hf_model.config, "_attn_implementation", "sdpa")
         if "flash" in str(attn_impl).lower():
@@ -622,6 +697,11 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 self._initialized = True
             else:
                 self.initialize()
+
+        if (path / "model" / "model.safetensors").exists() or (
+            path / "model" / "pytorch_model.bin"
+        ).exists():
+            path = path / "model"
 
         if (path / "model.safetensors").exists():
             from safetensors.torch import load_file

@@ -1,4 +1,4 @@
-id: train_micev2_ettin68m_l10+4_soft
+id: train_micev2_ettin68m_l10+4_tokcomp
 title: "Mice-Ettin-68m Training"
 description:
     Base Training for Ettin-68m-based MICE model.
@@ -8,7 +8,7 @@ parent: ./_ettin68m.yaml
 nb_repetitions: 2
 
 evaluation: #default = Minified tests
-    eval_checkpoint: "both"
+    eval_checkpoint: "last"
     all_datasets: false
     in_domain: true
     beir13: true
@@ -24,6 +24,6 @@ max_doc_length: 1024
 utility_pred: true
 lambda_reg:
     values_list:
-        - 1e-3
         - 1e-2
         - 1e-1
+        - 2e-1

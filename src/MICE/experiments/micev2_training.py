@@ -342,11 +342,6 @@ def TrainEvaluateMiceV2(
                 # Build the Phase 2 model for hard pruning fine-tuning
                 model_phase2, _ = build_mice_v2(cfg, phase_2=True)
 
-                p2_init_task = InitMICEV2FromCheckpoint.C(
-                    scorer=model_phase2,
-                    checkpoint_loader=outputs.learned_model,  # use outputs from phase 1 as init for phase 2
-                )
-
                 for k, v in cfg_tags.items():
                     model_phase2.tag(k, v)
                 model_phase2.tag("phase", 2)
@@ -372,6 +367,12 @@ def TrainEvaluateMiceV2(
                     fabric_config=cfg.learner.fabric.get_config(),
                 )
                 learners.append(learner_p2)
+
+                p2_init_task = InitMICEV2FromCheckpoint.C(
+                    scorer=model_phase2,
+                    checkpoint_loader=outputs.learned_model,  # use outputs from phase 1 as init for phase 2
+                    load_trainer_state=True,
+                )
 
                 outputs_p2 = learner_p2.submit(
                     launcher=launcher_learner,
