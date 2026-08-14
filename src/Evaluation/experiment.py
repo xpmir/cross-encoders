@@ -109,11 +109,17 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         )
     )
 
+    long_reqs = getattr(cfg.retrieval, "long_requirements", None)
+    long_launcher = find_launcher(long_reqs) if long_reqs else None
+
     # Built tests collections depending on config
     tests = build_tests(
         cfg.evaluation,
         retrievers_only=cfg.retrievers_only,
         launcher=launcher_preprocessing,
+        default_launcher=launcher_evaluate,
+        long_launcher=long_launcher,
+        long_evals=getattr(cfg.retrieval, "long_evals", None),
         check_docs=False,
         blocking=cfg.preprocessing.blocking_download,
     )

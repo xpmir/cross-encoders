@@ -141,9 +141,15 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
 
+    long_reqs = getattr(cfg.retrieval, "long_requirements", None)
+    long_launcher = find_launcher(long_reqs) if long_reqs else None
+
     tests = build_tests(
         cfg.evaluation,
         launcher=launcher_preprocessing,
+        default_launcher=launcher_evaluate,
+        long_launcher=long_launcher,
+        long_evals=getattr(cfg.retrieval, "long_evals", None),
         blocking=cfg.preprocessing.blocking_download,
     )
 
@@ -244,6 +250,13 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
         ce_trainer: LossTrainer = build_trainer(cfg)
 
+        hooks = [setmeta(GradientLogHook.C(), True)]
+        if cfg.learner.max_grad_norm > 0:
+            gradient_clipping_hook = GradientClippingHook.C(
+                max_norm=cfg.learner.max_grad_norm
+            )
+            hooks.append(gradient_clipping_hook)
+
         # Build the model
         if getattr(cfg, "use_st_scorer", False):
             scorer_model, scorer_hf_init_tasks = build_STCrossEncoder(cfg)
@@ -274,14 +287,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 ),
                 retriever_tag,
             )
-
-            hooks = [setmeta(GradientLogHook.C(), True)]
-
-            if cfg.learner.max_grad_norm > 0:
-                gradient_clipping_hook = GradientClippingHook.C(
-                    max_norm=cfg.learner.max_grad_norm
-                )
-                hooks.append(gradient_clipping_hook)
 
             # The learner trains the model
             learner = Learner.C(

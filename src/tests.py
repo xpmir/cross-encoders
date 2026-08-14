@@ -3,10 +3,15 @@ from datamaestro import prepare_dataset
 from typing import Union, List, Optional
 from xpmir.datasets.adapters import RandomFold
 from samplers import prepare_collection
-from xpmir.evaluation import Evaluations, EvaluationsCollection
+from xpmir.evaluation import (
+    Evaluations,
+    EvaluationsCollection as XpmirEvaluationsCollection,
+    Retriever,
+    RetrieverFactory,
+)
 from xpmir.measures import RR, nDCG, R, Success
 from configuration import Evaluation
-from experimaestro import Task, Param, pathgenerator
+from experimaestro import Task, Param, pathgenerator, Launcher
 from datamaestro_ir.data.csv import Topics as CSVTopics
 from datamaestro_ir.data.trec import TrecAdhocAssessments
 from datamaestro_ir.data import Adhoc
@@ -16,6 +21,79 @@ from typing import Annotated
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class EvaluationsCollection(XpmirEvaluationsCollection):
+    """Custom EvaluationsCollection that routes long/big datasets to a specialized launcher"""
+
+    long_evals: list[str]
+    default_launcher: Launcher
+    long_launcher: Launcher
+
+    def __init__(
+        self,
+        *args,
+        long_evals: Optional[list[str]] = None,
+        long_launcher: Optional[Launcher] = None,
+        default_launcher: Optional[Launcher] = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.long_evals = (
+            long_evals if long_evals is not None else ["fever", "ms_marco", "hotpotqa"]
+        )
+        self.long_launcher = long_launcher
+        self.default_launcher = default_launcher
+
+    def choose_launcher(self, dataset_name: str, launcher: Launcher = None) -> Launcher:
+        """Choose the appropriate launcher for a given dataset name by checking trigger substrings."""
+        if (
+            any(trigger in dataset_name for trigger in self.long_evals)
+            and self.long_launcher is not None
+        ):
+            logger.info(f"Using long launcher for dataset {dataset_name}")
+            return self.long_launcher
+        else:
+            return (
+                self.default_launcher if self.default_launcher is not None else launcher
+            )
+
+    # override the evaluate_retriever method with smart routing to the appropriate launcher based on dataset name
+    def evaluate_retriever(
+        self,
+        retriever: Union[Retriever, RetrieverFactory],
+        launcher: Launcher = None,
+        model_id: Optional[str] = None,
+        overwrite: bool = False,
+        with_run: bool = False,
+        init_tasks=[],
+        fabric_config=None,
+    ) -> list:
+        if model_id is not None and not overwrite:
+            assert model_id not in self.per_model, (
+                f"Model with ID `{model_id}` was already evaluated"
+            )
+
+        results = []
+        for key, evaluations in self.collection.items():
+            # Determine which launcher to use
+            launcher_to_use = self.choose_launcher(key, launcher)
+
+            result = evaluations.evaluate_retriever(
+                key,
+                retriever,
+                launcher_to_use,
+                init_tasks=init_tasks,
+                with_run=with_run,
+                fabric_config=fabric_config,
+            )
+            results.append(result)
+
+        # Adds to per model results
+        if model_id is not None:
+            self.per_model[model_id] = results
+
+        return results
 
 
 def check_datasets_docs(evaluations_collection: EvaluationsCollection):
@@ -440,6 +518,9 @@ def build_tests(
     retrievers_only: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
+    default_launcher=None,
+    long_launcher=None,
+    long_evals: Optional[List[str]] = None,
 ) -> EvaluationsCollection:
     """Build the tests to use for evaluation during training or at the end of it.
     :param cfg: Configuration for the evaluation
@@ -531,9 +612,9 @@ def build_tests(
                 blocking=blocking,
             )
         )
-    # 4. Specific datasets
+    # 4. Filter or add specific datasets if provided
     if cfg.datasets:
-        # We need a way to map dataset names to their respective prepare functions
+        # Check in predefined collections first
         beir13_all = BEIR_13_tests(
             cfg.test_max_topics,
             retrievers_only=retrievers_only,
@@ -568,7 +649,15 @@ def build_tests(
             blocking=blocking,
         )
 
-    tests = EvaluationsCollection(**all_evals)
+    if long_evals is None:
+        long_evals = ["fever", "ms_marco", "hotpotqa"]
+
+    tests = EvaluationsCollection(
+        long_evals=long_evals,
+        long_launcher=long_launcher,
+        default_launcher=default_launcher or launcher,
+        **all_evals,
+    )
 
     if check_docs:
         logger.info("Checking docs in datasets...")

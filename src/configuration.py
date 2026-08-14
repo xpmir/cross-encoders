@@ -94,6 +94,12 @@ class Retrieval:
     batch_size: GridSearch[int] = 128
     requirements: str = "duration=2 days & cuda(mem=24G)"
 
+    long_evals: List[str] = Factory(list)
+    """List of substrings. If a dataset name matches one, evaluation will route to the long_launcher."""
+
+    long_requirements: Optional[str] = None
+    """Requirements string used to instantiate the specialized long_launcher (e.g., requesting multi-GPU)."""
+
 
 @configuration()
 class Preprocessing:

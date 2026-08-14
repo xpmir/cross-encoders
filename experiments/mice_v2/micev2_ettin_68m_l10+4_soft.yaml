@@ -20,7 +20,7 @@ max_length: 1024
 max_query_length: 1024
 max_doc_length: 1024
 
-# Test
+# Test Utility Soft Gating & Phase 2 Hard Token Pruning
 utility_pred: true
 lambda_reg:
     values_list:

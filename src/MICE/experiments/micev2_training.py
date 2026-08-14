@@ -86,6 +86,7 @@ class MiceV2_FineTuning(CE_FineTuning):
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
+    phase_2: bool = False,
 ) -> Tuple[AbstractModuleScorer, List[LightweightTask]]:
     """Build the MICE V2 model using the modernbert_xpm factory."""
     default_max_len = get_default_max_len(cfg.base)
@@ -96,16 +97,36 @@ def build_mice_v2(
 
     attn_impl = cfg.attn_implementation or cfg.pref_attn_implementation
 
-    return mice_v2_scorer(
-        hf_id=cfg.base,
-        n_contextualization_layers=cfg.n_contextualization_layers,
-        n_docs_ctx_layers=cfg.n_docs_ctx_layers,
-        n_interaction_layers=cfg.n_interaction_layers,
-        bound_bottom_layers=cfg.bound_bottom_layers,
-        attn_implementation=attn_impl,
-        utility_pred=cfg.utility_pred,
-        max_length=max_len,
-    )
+    if phase_2:
+        logging.info(
+            f"[Phase 2] Building MICE V2 model for hard pruning fine-tuning (threshold={cfg.hard_prune_threshold})"
+        )
+        return mice_v2_scorer(
+            hf_id=cfg.base,
+            n_contextualization_layers=cfg.n_contextualization_layers,
+            n_docs_ctx_layers=cfg.n_docs_ctx_layers,
+            n_interaction_layers=cfg.n_interaction_layers,
+            bound_bottom_layers=cfg.bound_bottom_layers,
+            attn_implementation=attn_impl,
+            utility_pred=True,
+            hard_pruning=True,
+            hard_prune_threshold=cfg.hard_prune_threshold,
+            max_length=max_len,
+        )
+    else:
+        logging.info(
+            f"[Phase 1] Building MICE V2 model for soft gating training (utility_pred={cfg.utility_pred})"
+        )
+        return mice_v2_scorer(
+            hf_id=cfg.base,
+            n_contextualization_layers=cfg.n_contextualization_layers,
+            n_docs_ctx_layers=cfg.n_docs_ctx_layers,
+            n_interaction_layers=cfg.n_interaction_layers,
+            bound_bottom_layers=cfg.bound_bottom_layers,
+            attn_implementation=attn_impl,
+            utility_pred=cfg.utility_pred,
+            max_length=max_len,
+        )
 
 
 def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
@@ -133,7 +154,6 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
 def TrainEvaluateMiceV2(
     helper: LearningExperimentHelper,
     cfg: CE_FineTuning,
-    build_model_fn: Callable,
     get_model_name_fn: Callable,
 ) -> PaperResults:
     """Generic training and evaluation experiment for late interaction models."""
@@ -141,10 +161,14 @@ def TrainEvaluateMiceV2(
     launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
+    long_reqs = cfg.retrieval.long_requirements
+    long_launcher = find_launcher(long_reqs) if long_reqs else None
 
     tests = build_tests(
         cfg.evaluation,
         launcher=launcher_preprocessing,
+        default_launcher=launcher_evaluate,
+        long_launcher=long_launcher,
         blocking=cfg.preprocessing.blocking_download,
     )
 
@@ -239,6 +263,17 @@ def TrainEvaluateMiceV2(
         ### TRAINING CROSS ENCODER
 
         ce_trainer: LossTrainer = build_trainer(cfg)
+
+        # Base hooks shared by all training phases across all seed repetitions
+        learner_hooks = [setmeta(GradientLogHook.C(), True)]
+        if cfg.learner.max_grad_norm > 0:
+            gradient_clipping_hook = GradientClippingHook.C(
+                max_norm=cfg.learner.max_grad_norm
+            )
+            learner_hooks.append(gradient_clipping_hook)
+
+        # Phase 1 hooks: base hooks + UtilityRegularizer (if soft gating utility prediction is active)
+
         if cfg.utility_pred and cfg.lambda_reg > 0.0:
             histogram_interval = (
                 cfg.learner.validation_interval
@@ -246,14 +281,14 @@ def TrainEvaluateMiceV2(
             )
             ce_trainer.hooks.append(
                 UtilityRegularizer.C(
-                    lambda_reg=cfg.lambda_reg,
-                    histogram_interval=histogram_interval,
+                    lambda_reg=cfg.lambda_reg, histogram_interval=histogram_interval
                 )
             )
 
         # Build the model using the provided factory
-        model, model_init_tasks = build_model_fn(cfg)
+        model, model_init_tasks = build_mice_v2(cfg)
 
+        # tag the model with the configuration tags for monitoring and logging
         for k, v in cfg_tags.items():
             model.tag(k, v)
 
@@ -271,14 +306,6 @@ def TrainEvaluateMiceV2(
                 retriever_tag,
             )
 
-            hooks = [setmeta(GradientLogHook.C(), True)]
-
-            if cfg.learner.max_grad_norm > 0:
-                gradient_clipping_hook = GradientClippingHook.C(
-                    max_norm=cfg.learner.max_grad_norm
-                )
-                hooks.append(gradient_clipping_hook)
-
             # The learner trains the model
             learner = Learner.C(
                 # Misc settings
@@ -293,7 +320,7 @@ def TrainEvaluateMiceV2(
                 # The listeners (here, for validation)
                 listeners=stop_tags(validations),  # don't grab tags for validation
                 # The hook used for evaluation
-                hooks=hooks,
+                hooks=learner_hooks,
                 # fabric settings
                 fabric_config=cfg.learner.fabric.get_config(),
             )
@@ -312,36 +339,17 @@ def TrainEvaluateMiceV2(
                 logging.info(
                     f"[Phase 2] Launching Hard Pruning Fine-Tuning (threshold={cfg.hard_prune_threshold}, max_epochs={cfg.phase2_max_epochs})"
                 )
-                phase1_base_ckpt = outputs.learned_model
-
-                default_max_len = get_default_max_len(cfg.base)
-                max_len = (
-                    cfg.max_length
-                    if (cfg.max_length and default_max_len > cfg.max_length)
-                    else default_max_len
-                )
-                attn_impl = cfg.attn_implementation or cfg.pref_attn_implementation
-
-                model_phase2, _ = mice_v2_scorer(
-                    hf_id=cfg.base,
-                    n_contextualization_layers=cfg.n_contextualization_layers,
-                    n_docs_ctx_layers=cfg.n_docs_ctx_layers,
-                    n_interaction_layers=cfg.n_interaction_layers,
-                    bound_bottom_layers=cfg.bound_bottom_layers,
-                    attn_implementation=attn_impl,
-                    utility_pred=True,
-                    hard_pruning=True,
-                    hard_prune_threshold=cfg.hard_prune_threshold,
-                    max_length=max_len,
-                )
-                for k, v in cfg_tags.items():
-                    model_phase2.tag(k, v)
-                model_phase2.tag("phase", 2)
+                # Build the Phase 2 model for hard pruning fine-tuning
+                model_phase2, _ = build_mice_v2(cfg, phase_2=True)
 
                 p2_init_task = InitMICEV2FromCheckpoint.C(
                     scorer=model_phase2,
-                    checkpoint_loader=phase1_base_ckpt,
+                    checkpoint_loader=outputs.learned_model,  # use outputs from phase 1 as init for phase 2
                 )
+
+                for k, v in cfg_tags.items():
+                    model_phase2.tag(k, v)
+                model_phase2.tag("phase", 2)
 
                 validations_p2, tracked_validations_p2 = validation_set.build_listeners(
                     model_phase2,
@@ -351,14 +359,16 @@ def TrainEvaluateMiceV2(
 
                 learner_p2 = Learner.C(
                     random=random,
-                    trainer=ce_trainer,
+                    trainer=build_trainer(
+                        cfg
+                    ),  # Build a new trainer for phase 2, as it may have different hooks (e.g., no utility regularizer)
                     model=model_phase2,
                     steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
                     optimizers=cfg.learner.optimization.optimizer,
                     max_epochs=cfg.phase2_max_epochs,
                     checkpoint_interval=cfg.learner.checkpoint_interval,
                     listeners=stop_tags(validations_p2),
-                    hooks=hooks,
+                    hooks=learner_hooks,
                     fabric_config=cfg.learner.fabric.get_config(),
                 )
                 learners.append(learner_p2)
@@ -520,6 +530,5 @@ def run(helper: LearningExperimentHelper, cfg: MiceV2_FineTuning) -> PaperResult
     return TrainEvaluateMiceV2(
         helper=helper,
         cfg=cfg,
-        build_model_fn=build_mice_v2,
         get_model_name_fn=get_name_from_tags,
     )
