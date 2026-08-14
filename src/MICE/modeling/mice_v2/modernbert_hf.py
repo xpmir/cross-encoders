@@ -112,15 +112,48 @@ class UtilityPredictor(nn.Module):
             bottleneck_dim = hidden_dim * 2
 
         self.wi = nn.Linear(hidden_dim, 2 * bottleneck_dim, bias=False)
-        self.wo = nn.Linear(bottleneck_dim, 1, bias=False)
+        self.wo = nn.Linear(bottleneck_dim, 1, bias=True)
+        self._init_weights()
 
     def _init_weights(self):
-        # 1. Keep the output weights very small so input variance doesn't overpower the bias
+        # 1. Initialize wi with standard small weights
+        nn.init.normal_(self.wi.weight, mean=0.0, std=0.02)
+
+        # 2. Keep the output weights very small so input variance doesn't overpower the bias
         nn.init.normal_(self.wo.weight, mean=0.0, std=0.01)
 
-        # 2. Set the bias to a high positive scalar.
+        # 3. Set the bias to a high positive scalar.
         # logit = 5.0 -> sigmoid(5.0) = 0.9933 (keeps ~99% of utility)
-        nn.init.constant_(self.wo.bias, 5.0)
+        if self.wo.bias is not None:
+            nn.init.constant_(self.wo.bias, 5.0)
+
+    # TODO MonkeyPatch for aval - Remove this in next release
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        bias_key = prefix + "wo.bias"
+        if bias_key not in state_dict and self.wo.bias is not None:
+            # Handle backward compatibility for legacy checkpoints saved with wo.bias=False:
+            # Set bias to 0.0 to preserve the exact weights/logits of the trained legacy checkpoint
+            state_dict[bias_key] = torch.tensor(
+                [0.0], device=self.wo.weight.device, dtype=self.wo.weight.dtype
+            )
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
         """Args:
@@ -136,6 +169,105 @@ class UtilityPredictor(nn.Module):
         return torch.sigmoid(logits)
 
 
+def _hard_prune_unpadded_documents(
+    d_hidden: torch.Tensor,
+    d_pos_ids: torch.Tensor,
+    cu_seqlens_d: torch.Tensor,
+    utilities: torch.Tensor,
+    threshold: float = 0.5,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    """
+    Hard-prunes document tokens whose utility score < threshold from 1D unpadded FA2 sequence.
+    Retains original positional indices (d_pos_ids) for RoPE embeddings in top layers.
+    Rebuilds cu_seqlens_d and max_seqlen_d for remaining unpruned tokens.
+    """
+    batch_size = cu_seqlens_d.shape[0] - 1
+    keep_mask = utilities.squeeze(-1).squeeze(0) >= threshold  # [total_tokens]
+
+    cu = cu_seqlens_d.cpu().tolist()
+    kept_per_doc = []
+    for i in range(batch_size):
+        start, end = cu[i], cu[i + 1]
+        if end > start:
+            doc_keep = keep_mask[start:end]
+            num_kept = doc_keep.sum().item()
+            if num_kept == 0:
+                # Ensure each doc keeps at least 1 token (token with highest utility)
+                doc_utils = utilities[0, start:end, 0]
+                best_idx = start + torch.argmax(doc_utils).item()
+                keep_mask[best_idx] = True
+                num_kept = 1
+            kept_per_doc.append(num_kept)
+        else:
+            kept_per_doc.append(0)
+
+    pruned_d_hidden = d_hidden[:, keep_mask, :]
+    pruned_d_pos_ids = d_pos_ids[:, keep_mask] if d_pos_ids is not None else None
+
+    new_cu_seqlens_d = torch.zeros(
+        batch_size + 1, dtype=torch.int32, device=d_hidden.device
+    )
+    new_cu_seqlens_d[1:] = torch.cumsum(
+        torch.tensor(kept_per_doc, device=d_hidden.device, dtype=torch.int32), dim=0
+    )
+    new_max_seqlen_d = max(kept_per_doc) if len(kept_per_doc) > 0 else 0
+
+    return pruned_d_hidden, pruned_d_pos_ids, new_cu_seqlens_d, new_max_seqlen_d
+
+
+def _hard_prune_padded_documents(
+    d_hidden: torch.Tensor,
+    doc_mask: torch.Tensor,
+    utilities: torch.Tensor,
+    threshold: float = 0.5,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Hard-prunes document tokens whose utility score < threshold from 3D padded sequence [B, L_d, D].
+    Constructs new 3D padded tensor [B, max_kept_len, D], new mask [B, max_kept_len],
+    and retained position_ids [B, max_kept_len] preserving original token positions for RoPE.
+    """
+    batch_size, seq_len, hidden_size = d_hidden.shape
+    valid_mask = (utilities.squeeze(-1) >= threshold) & doc_mask.bool()  # [B, L_d]
+
+    for i in range(batch_size):
+        if valid_mask[i].sum().item() == 0:
+            doc_valid = doc_mask[i].bool()
+            if doc_valid.any():
+                doc_utils = utilities[i, :, 0]
+                doc_utils_masked = torch.where(
+                    doc_valid, doc_utils, torch.tensor(-1.0, device=d_hidden.device)
+                )
+                best_idx = torch.argmax(doc_utils_masked).item()
+                valid_mask[i, best_idx] = True
+
+    num_kept = valid_mask.sum(dim=1)  # [B]
+    max_kept_len = int(num_kept.max().item())
+
+    new_d_hidden = torch.zeros(
+        (batch_size, max_kept_len, hidden_size),
+        dtype=d_hidden.dtype,
+        device=d_hidden.device,
+    )
+    new_doc_mask = torch.zeros(
+        (batch_size, max_kept_len), dtype=doc_mask.dtype, device=doc_mask.device
+    )
+    new_pos_ids = torch.zeros(
+        (batch_size, max_kept_len), dtype=torch.long, device=d_hidden.device
+    )
+
+    orig_pos = torch.arange(seq_len, device=d_hidden.device)
+
+    for i in range(batch_size):
+        kept_indices = torch.nonzero(valid_mask[i], as_tuple=False).squeeze(-1)
+        k = len(kept_indices)
+        if k > 0:
+            new_d_hidden[i, :k] = d_hidden[i, kept_indices]
+            new_doc_mask[i, :k] = 1
+            new_pos_ids[i, :k] = orig_pos[kept_indices]
+
+    return new_d_hidden, new_doc_mask, new_pos_ids
+
+
 class ModernBertMiceConfig(ModernBertConfig):
     model_type = "modernbert_mice"
 
@@ -147,6 +279,8 @@ class ModernBertMiceConfig(ModernBertConfig):
         bound_bottom_layers: bool = True,
         cross_attn_first: bool = True,
         utility_pred: bool = False,
+        hard_pruning: bool = False,
+        hard_prune_threshold: float = 0.5,
         num_labels: int = 1,
         **kwargs,
     ):
@@ -162,6 +296,8 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.bound_bottom_layers = bound_bottom_layers
         self.cross_attn_first = cross_attn_first
         self.utility_pred = utility_pred
+        self.hard_pruning = hard_pruning
+        self.hard_prune_threshold = hard_prune_threshold
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -582,6 +718,11 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
 
         self.post_init()
 
+    def _init_weights(self, module):
+        super()._init_weights(module)
+        if isinstance(module, UtilityPredictor):
+            module._init_weights()
+
     def _forward_bottom(
         self,
         sequence_input: torch.Tensor,
@@ -656,6 +797,75 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
             return last_hidden, pos_emb_top
 
+    def freeze_bottom_and_utility(self):
+        """Freezes bottom contextualization layers, embeddings, and utility predictor for Phase 2 training."""
+        for param in self.model.embeddings.parameters():
+            param.requires_grad = False
+
+        for param in self.model.layers.parameters():
+            param.requires_grad = False
+
+        if self.utility_predictor is not None:
+            for param in self.utility_predictor.parameters():
+                param.requires_grad = False
+
+        if hasattr(self.model, "rotary_emb"):
+            for param in self.model.rotary_emb.parameters():
+                param.requires_grad = False
+
+        logger.info(
+            "[MICE v2] Frozen embeddings, bottom layers, and utility predictor for Phase 2 training."
+        )
+
+    def _process_document_utilities_and_pruning(
+        self,
+        d_hidden: torch.Tensor,
+        doc_mask: Optional[torch.Tensor] = None,
+        use_unpadded: bool = False,
+        cu_seqlens_d: Optional[torch.Tensor] = None,
+        max_seqlen_d: Optional[int] = None,
+        d_pos_ids: Optional[torch.Tensor] = None,
+    ):
+        """
+        Calculates token utilities and applies soft gating or hard token pruning.
+        Returns updated (d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids).
+        """
+        if self.utility_predictor is not None:
+            self.last_utilities = self.utility_predictor(d_hidden)
+            hard_prune = getattr(self.config, "hard_pruning", False)
+            threshold = getattr(self.config, "hard_prune_threshold", 0.5)
+
+            if hard_prune:
+                if use_unpadded and cu_seqlens_d is not None:
+                    (
+                        d_hidden,
+                        d_pos_ids,
+                        cu_seqlens_d,
+                        max_seqlen_d,
+                    ) = _hard_prune_unpadded_documents(
+                        d_hidden,
+                        d_pos_ids,
+                        cu_seqlens_d,
+                        self.last_utilities,
+                        threshold=threshold,
+                    )
+                else:
+                    if doc_mask is None:
+                        doc_mask = torch.ones(
+                            (d_hidden.shape[0], d_hidden.shape[1]),
+                            dtype=torch.bool,
+                            device=d_hidden.device,
+                        )
+                    d_hidden, doc_mask, d_pos_ids = _hard_prune_padded_documents(
+                        d_hidden, doc_mask, self.last_utilities, threshold=threshold
+                    )
+            else:
+                d_hidden = d_hidden * self.last_utilities
+        else:
+            self.last_utilities = None
+
+        return d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids
+
     def encode_documents(
         self,
         doc_ids: torch.LongTensor,
@@ -664,9 +874,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
     ) -> torch.Tensor:
         """Encode documents through bottom contextualization layers."""
         d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
-        if self.utility_predictor is not None:
-            utilities = self.utility_predictor(d_hidden)
-            d_hidden = d_hidden * utilities
+        d_hidden, _, _, _, _ = self._process_document_utilities_and_pruning(
+            d_hidden, doc_mask, use_unpadded=False
+        )
         return d_hidden
 
     def forward(
@@ -783,12 +993,17 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
                 cu_seqlens_d = max_seqlen_d = None
 
-        # 2b. Apply Soft Gating Utility Predictor if enabled
-        if self.utility_predictor is not None:
-            self.last_utilities = self.utility_predictor(d_hidden)
-            d_hidden = d_hidden * self.last_utilities
-        else:
-            self.last_utilities = None
+        # 2b. Apply Utility Predictor (Soft Gating or Hard Pruning)
+        d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids = (
+            self._process_document_utilities_and_pruning(
+                d_hidden,
+                doc_mask,
+                use_unpadded=use_unpadded,
+                cu_seqlens_d=cu_seqlens_d,
+                max_seqlen_d=max_seqlen_d,
+                d_pos_ids=d_pos_ids if use_unpadded else None,
+            )
+        )
 
         if use_unpadded:
             num_top = len(self.top_layers)

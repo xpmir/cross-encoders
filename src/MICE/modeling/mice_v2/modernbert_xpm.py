@@ -3,7 +3,7 @@ Experimaestro-IR integration for ModernBERT MICE V2 architecture.
 """
 
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Union
 import logging
 
 import torch
@@ -26,6 +26,7 @@ from xpm_torch.trainers import TrainingHook, TrainerContext
 from xpm_torch.losses import Loss
 from xpm_torch.metrics import ScalarMetric
 from xpm_torch.module import (
+    ModuleLoader,
     SimpleModuleLoader,
     ReadmeSection,
     fallback_fa2_if_incompatible_precision,
@@ -190,6 +191,58 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
         logger.info("Successfully initialized ModernBertMiceScorer weights.")
 
 
+class InitMICEV2FromCheckpoint(LightweightTask):
+    """Initializes a Phase 2 MICE V2 model from a Phase 1 trained checkpoint path/loader and freezes bottom layers & utility predictor."""
+
+    scorer: Param["ModernBertMiceScorer"]
+    checkpoint_loader: Param[
+        Union[ModuleLoader, SimpleModuleLoader, LightweightTask, AbstractModuleScorer]
+    ]
+
+    def execute(self):
+        scorer = self.scorer
+        scorer.initialize()
+
+        ckpt_loader = self.checkpoint_loader
+        ckpt_path = None
+        if hasattr(ckpt_loader, "path") and ckpt_loader.path is not None:
+            ckpt_path = Path(ckpt_loader.path)
+        elif hasattr(ckpt_loader, "instance"):
+            try:
+                inst = ckpt_loader.instance()
+                if hasattr(inst, "path") and inst.path is not None:
+                    ckpt_path = Path(inst.path)
+            except Exception:
+                pass
+
+        if ckpt_path is not None:
+            logger.info(f"Loading Phase 1 checkpoint from path: {ckpt_path}")
+            scorer.load_model(ckpt_path)
+        else:
+            source = (
+                ckpt_loader.instance()
+                if hasattr(ckpt_loader, "instance")
+                else ckpt_loader
+            )
+            if hasattr(source, "model"):
+                source = source.model
+            elif hasattr(source, "scorer"):
+                source = source.scorer
+
+            if hasattr(source, "initialize") and not hasattr(source, "hf_model"):
+                source.initialize()
+
+            if hasattr(source, "hf_model") and hasattr(scorer, "hf_model"):
+                scorer.hf_model.load_state_dict(source.hf_model.state_dict())
+                logger.info("Loaded Phase 1 state_dict into Phase 2 model.")
+            else:
+                raise ValueError(
+                    f"Could not extract checkpoint path or model from {ckpt_loader}"
+                )
+
+        scorer.freeze_bottom_and_utility()
+
+
 class ModernBertMiceScorer(AbstractModuleScorer):
     """
     Experimaestro wrapper for ModernBERT MICE V2 Architecture.
@@ -221,9 +274,22 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     utility_pred: Param[bool] = field(default=False, ignore_default=True)
     """Whether to add a 2layer MLP utility predictor applied to the document hidden states before upper layers"""
 
+    hard_pruning: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to hard-prune tokens with utility < hard_prune_threshold in Phase 2 training"""
+
+    hard_prune_threshold: Param[float] = field(default=0.5, ignore_default=True)
+    """Utility threshold below which tokens are hard-pruned in Phase 2 training (default 0.5)"""
+
     _version: Constant[str] = "2.0.1"
 
     hf_model: nn.Module
+
+    def freeze_bottom_and_utility(self):
+        """Freezes bottom layers, embeddings, and utility predictor."""
+        if hasattr(self, "hf_model") and hasattr(
+            self.hf_model, "freeze_bottom_and_utility"
+        ):
+            self.hf_model.freeze_bottom_and_utility()
 
     def __initialize__(self):
         super().__initialize__()
@@ -242,6 +308,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 mice_config._attn_implementation = self.attn_implementation
             if self.utility_pred:
                 mice_config.utility_pred = True
+            if self.hard_pruning:
+                mice_config.hard_pruning = True
+                mice_config.hard_prune_threshold = self.hard_prune_threshold
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -254,6 +323,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 n_interaction_layers=self.n_interaction_layers,
                 bound_bottom_layers=self.bound_bottom_layers,
                 utility_pred=self.utility_pred,
+                hard_pruning=self.hard_pruning,
+                hard_prune_threshold=self.hard_prune_threshold,
                 **config_kwargs,
             )
 
@@ -631,6 +702,8 @@ def mice_v2_scorer(
     bound_bottom_layers: bool = True,
     attn_implementation: Optional[str] = None,
     utility_pred: bool = False,
+    hard_pruning: bool = False,
+    hard_prune_threshold: float = 0.5,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -654,6 +727,8 @@ def mice_v2_scorer(
         bound_bottom_layers=bound_bottom_layers,
         attn_implementation=attn_implementation,
         utility_pred=utility_pred,
+        hard_pruning=hard_pruning,
+        hard_prune_threshold=hard_prune_threshold,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

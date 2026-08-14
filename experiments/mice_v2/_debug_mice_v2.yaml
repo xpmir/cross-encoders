@@ -15,13 +15,13 @@ learner:
     loss: MSE_mixedbread_large
     optimization:
         steps_per_epoch: 100
-        max_epochs: 200 #  x 128 x 100 = ~26M Samples < 145M in full dataset
+        max_epochs: 150 #  x 128 x 100 = ~26M Samples < 145M in full dataset
         batch_size: 256 #is 256 in ettin-reranker-v1
     fabric:
         precision: bf16-mixed
     # sample_max: 2_000_000
     checkpoint_interval: 50
-    validation_interval: 10
+    validation_interval: 5
     requirements: duration=2h & cpu(cores=16) & cuda(mem=80G)
 
 retrieval:
@@ -38,10 +38,14 @@ evaluation:
         - nfcorpus
         - scifact
 
-# Test
+# Test Utility Soft Gating & Phase 2 Hard Token Pruning
 utility_pred: true
 lambda_reg:
     values_list:
-        - 1e-3
         - 1e-2
         - 1e-1
+        # - 1e-3
+
+phase2_training: true
+hard_prune_threshold: 0.5
+phase2_max_epochs: 200

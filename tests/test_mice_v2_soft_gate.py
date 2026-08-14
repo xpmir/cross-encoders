@@ -36,6 +36,7 @@ def test_utility_predictor_direct():
 
     assert utilities.shape == (batch_size, seq_len, 1), f"Expected shape {(batch_size, seq_len, 1)}, got {utilities.shape}"
     assert (utilities >= 0.0).all() and (utilities <= 1.0).all(), "Utility scores must be strictly bounded in (0, 1)"
+    assert utilities.mean().item() > 0.95, f"Expected initial mean utility > 0.95, got {utilities.mean().item()}"
 
     # Test unpadded 1D input tensor [1, total_tokens, d_model]
     unpadded_hidden = torch.randn(1, 100, d_model)
@@ -111,7 +112,7 @@ def test_utility_regularizer_histogram_logging():
     with context.losses():
         reg_hook(context, utilities, doc_mask=doc_mask)
     assert len(histogram_calls) == 1
-    assert histogram_calls[0][0] == "utility_distribution"
+    assert histogram_calls[0][0] == "train/utility/distribution"
     assert histogram_calls[0][2] == 100
 
 
@@ -144,6 +145,7 @@ def test_modernbert_hf_soft_gate():
     assert model.last_utilities is not None, "model.last_utilities should be populated when utility_pred=True"
     assert model.last_utilities.shape == (2, 16, 1), f"Expected utilities shape (2, 16, 1), got {model.last_utilities.shape}"
     assert (model.last_utilities >= 0.0).all() and (model.last_utilities <= 1.0).all()
+    assert model.last_utilities.mean().item() > 0.95, f"Expected initial mean utility > 0.95, got {model.last_utilities.mean().item()}"
 
 
 def test_modernbert_xpm_soft_gate_and_hook():
@@ -196,8 +198,8 @@ def test_modernbert_xpm_soft_gate_and_hook():
 
         # Verify metrics logged to context
         assert "utility_reg" in context.metrics.metrics
-        assert "utility_mean" in context.metrics.metrics
-        assert "utility_sparsity" in context.metrics.metrics
+        assert "utility/mean" in context.metrics.metrics
+        assert "utility/sparsity" in context.metrics.metrics
 
 
 def test_soft_gate_save_load():
@@ -223,3 +225,25 @@ def test_soft_gate_save_load():
         # Reload model weights into new instance
         reloaded_model = ModernBertMiceForSequenceClassification.from_pretrained(save_path)
         assert reloaded_model.utility_predictor is not None, "Reloaded model must instantiate utility_predictor"
+
+
+def test_legacy_checkpoint_loading_without_wo_bias():
+    """Test loading a legacy checkpoint state_dict where utility_predictor.wo.bias is missing."""
+    config = ModernBertMiceConfig(
+        n_contextualization_layers=2,
+        num_hidden_layers=4,
+        hidden_size=128,
+        num_attention_heads=4,
+        intermediate_size=256,
+        utility_pred=True,
+    )
+    model = ModernBertMiceForSequenceClassification(config)
+
+    sd = model.state_dict()
+    assert "utility_predictor.wo.bias" in sd
+    del sd["utility_predictor.wo.bias"]
+
+    new_model = ModernBertMiceForSequenceClassification(config)
+    new_model.load_state_dict(sd, strict=True)
+    assert new_model.utility_predictor.wo.bias is not None
+    assert new_model.utility_predictor.wo.bias.item() == 0.0

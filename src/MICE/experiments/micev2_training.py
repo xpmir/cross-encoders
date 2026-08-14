@@ -43,6 +43,7 @@ from training_utils import (
 from MICE.modeling.mice_v2.modernbert_xpm import (
     mice_v2_scorer,
     UtilityRegularizer,
+    InitMICEV2FromCheckpoint,
 )
 from logging_utils import setup_logging
 
@@ -72,6 +73,15 @@ class MiceV2_FineTuning(CE_FineTuning):
 
     lambda_reg: GridSearch[float] = 0.0
     """Regularization weight for the Utility predictor"""
+
+    phase2_training: GridSearch[bool] = False
+    """Whether to run Phase 2 hard token pruning fine-tuning after Phase 1 soft gating"""
+
+    hard_prune_threshold: GridSearch[float] = 0.5
+    """Utility threshold below which document tokens are hard dropped in Phase 2"""
+
+    phase2_max_epochs: GridSearch[int] = 3
+    """Number of training epochs for Phase 2 top layer fine-tuning"""
 
 
 def build_mice_v2(
@@ -298,17 +308,87 @@ def TrainEvaluateMiceV2(
             if helper.xp.run_mode == RunMode.NORMAL:
                 helper.tensorboard_service.add(learner, learner.logpath)
 
+            if cfg.phase2_training:
+                logging.info(
+                    f"[Phase 2] Launching Hard Pruning Fine-Tuning (threshold={cfg.hard_prune_threshold}, max_epochs={cfg.phase2_max_epochs})"
+                )
+                phase1_base_ckpt = outputs.learned_model
+
+                default_max_len = get_default_max_len(cfg.base)
+                max_len = (
+                    cfg.max_length
+                    if (cfg.max_length and default_max_len > cfg.max_length)
+                    else default_max_len
+                )
+                attn_impl = cfg.attn_implementation or cfg.pref_attn_implementation
+
+                model_phase2, _ = mice_v2_scorer(
+                    hf_id=cfg.base,
+                    n_contextualization_layers=cfg.n_contextualization_layers,
+                    n_docs_ctx_layers=cfg.n_docs_ctx_layers,
+                    n_interaction_layers=cfg.n_interaction_layers,
+                    bound_bottom_layers=cfg.bound_bottom_layers,
+                    attn_implementation=attn_impl,
+                    utility_pred=True,
+                    hard_pruning=True,
+                    hard_prune_threshold=cfg.hard_prune_threshold,
+                    max_length=max_len,
+                )
+                for k, v in cfg_tags.items():
+                    model_phase2.tag(k, v)
+                model_phase2.tag("phase", 2)
+
+                p2_init_task = InitMICEV2FromCheckpoint.C(
+                    scorer=model_phase2,
+                    checkpoint_loader=phase1_base_ckpt,
+                )
+
+                validations_p2, tracked_validations_p2 = validation_set.build_listeners(
+                    model_phase2,
+                    val_run_retriever_factory,
+                    retriever_tag,
+                )
+
+                learner_p2 = Learner.C(
+                    random=random,
+                    trainer=ce_trainer,
+                    model=model_phase2,
+                    steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
+                    optimizers=cfg.learner.optimization.optimizer,
+                    max_epochs=cfg.phase2_max_epochs,
+                    checkpoint_interval=cfg.learner.checkpoint_interval,
+                    listeners=stop_tags(validations_p2),
+                    hooks=hooks,
+                    fabric_config=cfg.learner.fabric.get_config(),
+                )
+                learners.append(learner_p2)
+
+                outputs_p2 = learner_p2.submit(
+                    launcher=launcher_learner,
+                    init_tasks=[p2_init_task],
+                )
+                if helper.xp.run_mode == RunMode.NORMAL:
+                    helper.tensorboard_service.add(learner_p2, learner_p2.logpath)
+
+                eval_outputs = outputs_p2
+                eval_tracked_validations = tracked_validations_p2
+                eval_model = model_phase2
+            else:
+                eval_outputs = outputs
+                eval_tracked_validations = tracked_validations
+                eval_model = model
+
             # Build list of models to evaluate: (model_id, load_model, label)
             models_to_evaluate = []
             checkpoint_mode = cfg.evaluation.get_checkpoint_mode()
 
             # 1. Best validation checkpoints
             if checkpoint_mode in (CheckpointSelection.VAL, CheckpointSelection.BOTH):
-                for name, tracked_validation in tracked_validations.items():
+                for name, tracked_validation in eval_tracked_validations.items():
                     logging.info(f"Adding validation model for evaluation: {name}")
                     for metric_name in tracked_validation.monitored():
                         load_model = (
-                            outputs.listeners[tracked_validation.id][metric_name]
+                            eval_outputs.listeners[tracked_validation.id][metric_name]
                             .tag("checkpoint", name)
                             .tag("seed", seed)
                             .tag("first_stage", retriever_tag)
@@ -322,7 +402,7 @@ def TrainEvaluateMiceV2(
             if checkpoint_mode in (CheckpointSelection.LAST, CheckpointSelection.BOTH):
                 logging.info("Adding last checkpoint for evaluation")
                 last_model = (
-                    outputs.learned_model.tag("checkpoint", "last")
+                    eval_outputs.learned_model.tag("checkpoint", "last")
                     .tag("seed", seed)
                     .tag("first_stage", retriever_tag)
                 )
@@ -340,7 +420,7 @@ def TrainEvaluateMiceV2(
                 tests.evaluate_retriever(
                     partial(
                         scorer_retriever,
-                        scorer=model,
+                        scorer=eval_model,
                         retrievers=test_run_retriever_factory,
                         batch_size=cfg.retrieval.batch_size,
                     ),
@@ -356,7 +436,7 @@ def TrainEvaluateMiceV2(
                     logging.info(f"Running PLAID-style evaluation for: {label}")
                     # 1) Build the Retriever factory for first stage + model + Plaid
                     mice_plaid_factory = MicePlaidRetrieverFactory(
-                        mice_model=model,
+                        mice_model=eval_model,
                         first_stage_factory=test_run_retriever_factory,
                         topk=cfg.retrieval.k,
                         batchsize=cfg.retrieval.batch_size,
