@@ -3,10 +3,12 @@ Tests for MICE V2 Phase 2 Hard Token Pruning & Layer Freezing.
 Run with: `uv run pytest tests/test_mice_v2_hard_pruning.py -v`
 """
 
+import os
 import tempfile
 from pathlib import Path
 import pytest
 import torch
+
 
 from MICE.modeling.mice_v2.modernbert_hf import (
     UtilityPredictor,
@@ -193,3 +195,29 @@ def test_hard_pruning_save_load():
 
         assert reloaded_model.hf_model.config.hard_pruning is True
         assert reloaded_model.hf_model.config.hard_prune_threshold == 0.5
+
+
+def test_init_micev2_rank_zero_guard():
+    """Test that is_rank_zero correctly identifies non-zero ranks and skips execution."""
+    from MICE.modeling.mice_v2.modernbert_xpm import is_rank_zero, InitMICEV2FromCheckpoint, mice_v2_scorer
+    from xpm_torch.module import SimpleModuleLoader
+
+    # Standard environment rank 0
+    assert is_rank_zero() is True
+
+    # Simulate non-zero rank
+    os.environ["RANK"] = "1"
+    try:
+        assert is_rank_zero() is False
+        p2_scorer_cfg, _ = mice_v2_scorer(
+            hf_id="jhu-clsp/ettin-encoder-17m",
+            n_contextualization_layers=2,
+        )
+        init_task = InitMICEV2FromCheckpoint.C(
+            scorer=p2_scorer_cfg,
+            checkpoint_loader=SimpleModuleLoader.C(value=p2_scorer_cfg, path=Path(".")),
+        ).instance()
+        # Should return early without raising AttributeError or FileNotFoundError
+        init_task.execute()
+    finally:
+        os.environ.pop("RANK", None)

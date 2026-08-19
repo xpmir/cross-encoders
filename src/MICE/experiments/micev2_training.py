@@ -385,7 +385,6 @@ def TrainEvaluateMiceV2(
                 p2_init_task = InitMICEV2FromCheckpoint.C(
                     scorer=model_phase2,
                     checkpoint_loader=outputs.learned_model,  # use outputs from phase 1 as init for phase 2
-                    load_trainer_state=True,
                 )
 
                 outputs_p2 = learner_p2.submit(

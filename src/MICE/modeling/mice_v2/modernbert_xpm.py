@@ -228,6 +228,21 @@ def find_latest_epoch_dir(ckpt_path: Path) -> Optional[Path]:
     return None
 
 
+def is_rank_zero() -> bool:
+    """Returns True if this is global rank 0 or running in a single-process environment."""
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return torch.distributed.get_rank() == 0
+
+    for env_var in ("RANK", "LOCAL_RANK", "SLURM_PROCID"):
+        val = os.environ.get(env_var)
+        if val is not None:
+            try:
+                return int(val) == 0
+            except ValueError:
+                pass
+    return True
+
+
 class InitMICEV2FromCheckpoint(LightweightTask):
     """Initializes a Phase 2 MICE V2 model from a Phase 1 trained checkpoint path/loader and freezes bottom layers & utility predictor."""
 
@@ -236,33 +251,24 @@ class InitMICEV2FromCheckpoint(LightweightTask):
     checkpoint_loader: Param[ModuleLoader]
     """Path or ModuleLoader to the Phase 1 trained checkpoint (should contain model.safetensors or model/ directory)."""
 
-    load_trainer_state: Param[bool] = field(default=True, ignore_default=True)
-    """Whether to resume the state of optimizer/dataloader"""
-
     def execute(self):
-        logger.info(
-            "[InitMICEV2] Current working directory (os.getcwd()): %s", os.getcwd()
-        )
-        if getattr(self, "path", None) is not None:
-            logger.info("[InitMICEV2] Task output path (self.path): %s", self.path)
+        if not is_rank_zero():
+            logger.info(
+                "[InitMICEV2] Skipping checkpoint initialization on non-zero rank (RANK=%s, LOCAL_RANK=%s)",
+                os.environ.get("RANK", "unknown"),
+                os.environ.get("LOCAL_RANK", "unknown"),
+            )
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                torch.distributed.barrier()
+            return
 
         ckpt_path = Path(self.checkpoint_loader.path)
-        logger.info("[InitMICEV2] Loading Phase 1 checkpoint from path: %s", ckpt_path)
+        logger.info("[InitMICEV2] Copying Phase 1 checkpoint at: %s", ckpt_path)
 
         latest_epoch_dir = find_latest_epoch_dir(ckpt_path)
-        if latest_epoch_dir is None:
-            if (ckpt_path / "model").exists() or (
-                ckpt_path / "model.safetensors"
-            ).exists():
-                latest_epoch_dir = ckpt_path
-            elif (ckpt_path / "last").exists():
-                latest_epoch_dir = ckpt_path / "last"
-
-        if latest_epoch_dir is None:
-            logger.warning(
-                "[InitMICEV2] No valid epoch directory found near %s", ckpt_path
-            )
-            return
+        assert latest_epoch_dir is not None, (
+            f"[InitMICEV2] No valid epoch directory found in {ckpt_path}"
+        )
 
         # 1. Read Phase 1 step count from info.json
         phase1_steps = 0
@@ -305,6 +311,9 @@ class InitMICEV2FromCheckpoint(LightweightTask):
 
         # Populate process cwd checkpoints/epoch-00000000
         copy_to_epoch_zero(Path.cwd() / "checkpoints")
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.barrier()
 
 
 class ModernBertMiceScorer(AbstractModuleScorer):
