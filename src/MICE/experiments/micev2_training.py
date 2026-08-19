@@ -306,6 +306,16 @@ def TrainEvaluateMiceV2(
                 retriever_tag,
             )
 
+            optimizers = cfg.learner.optimization.optimizer
+            if cfg.phase2_training:
+                total_epochs = (
+                    cfg.learner.optimization.max_epochs + cfg.phase2_max_epochs
+                )
+                total_steps = total_epochs * cfg.learner.optimization.steps_per_epoch
+                optimizers = cfg.learner.optimization.get_optimizers_with_total_steps(
+                    total_steps
+                )
+
             # The learner trains the model
             learner = Learner.C(
                 # Misc settings
@@ -314,7 +324,7 @@ def TrainEvaluateMiceV2(
                 model=model,  # The model to train
                 # Optimization settings
                 steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
-                optimizers=cfg.learner.optimization.optimizer,
+                optimizers=optimizers,
                 max_epochs=cfg.learner.optimization.max_epochs,
                 checkpoint_interval=cfg.learner.checkpoint_interval,
                 # The listeners (here, for validation)
@@ -336,8 +346,12 @@ def TrainEvaluateMiceV2(
                 helper.tensorboard_service.add(learner, learner.logpath)
 
             if cfg.phase2_training:
+                total_epochs = (
+                    cfg.learner.optimization.max_epochs + cfg.phase2_max_epochs
+                )
+
                 logging.info(
-                    f"[Phase 2] Launching Hard Pruning Fine-Tuning (threshold={cfg.hard_prune_threshold}, max_epochs={cfg.phase2_max_epochs})"
+                    f"[Phase 2] Launching Hard Pruning Fine-Tuning (threshold={cfg.hard_prune_threshold}, max_epochs={cfg.phase2_max_epochs}, total_epochs={total_epochs})"
                 )
                 # Build the Phase 2 model for hard pruning fine-tuning
                 model_phase2, _ = build_mice_v2(cfg, phase_2=True)
@@ -359,7 +373,7 @@ def TrainEvaluateMiceV2(
                     ),  # Build a new trainer for phase 2, as it may have different hooks (e.g., no utility regularizer)
                     model=model_phase2,
                     steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
-                    optimizers=cfg.learner.optimization.optimizer,
+                    optimizers=optimizers,
                     max_epochs=cfg.phase2_max_epochs,
                     checkpoint_interval=cfg.learner.checkpoint_interval,
                     listeners=stop_tags(validations_p2),

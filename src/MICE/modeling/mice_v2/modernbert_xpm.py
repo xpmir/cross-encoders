@@ -283,32 +283,24 @@ class InitMICEV2FromCheckpoint(LightweightTask):
         # Helper function to populate epoch-00000000 directory
         def copy_to_epoch_zero(target_base_dir: Path):
             epoch_zero = target_base_dir / "epoch-00000000"
-            epoch_zero.mkdir(parents=True, exist_ok=True)
+            if epoch_zero.exists():
+                logging.warning(
+                    "[InitMICEV2] Removing existing epoch-00000000 directory at %s",
+                    epoch_zero,
+                )
+                shutil.rmtree(epoch_zero)
+
+            shutil.copytree(latest_epoch_dir, epoch_zero)
 
             # Copy trainer & optimizer state dicts if present
             if (latest_epoch_dir / "trainer.pth").exists():
                 shutil.copy2(
                     latest_epoch_dir / "trainer.pth", epoch_zero / "trainer.pth"
                 )
-            if (latest_epoch_dir / "optimizer.pth").exists():
-                shutil.copy2(
-                    latest_epoch_dir / "optimizer.pth", epoch_zero / "optimizer.pth"
-                )
-
             # Write info.json resetting epoch to 0 but preserving total steps
             with (epoch_zero / "info.json").open("wt") as fp:
                 json.dump({"epoch": 0, "steps": phase1_steps}, fp)
 
-            # Copy model weights directory directly without re-saving via PyTorch
-            src_model_dir = (
-                latest_epoch_dir / "model"
-                if (latest_epoch_dir / "model").exists()
-                else latest_epoch_dir
-            )
-            dst_model_dir = epoch_zero / "model"
-            if dst_model_dir.exists():
-                shutil.rmtree(dst_model_dir)
-            shutil.copytree(src_model_dir, dst_model_dir)
             logger.info("[InitMICEV2] Populated epoch-00000000 at %s", epoch_zero)
 
         # Populate process cwd checkpoints/epoch-00000000
