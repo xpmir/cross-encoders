@@ -47,11 +47,11 @@ logger = logging.getLogger(__name__)
 class UtilityRegularizer(TrainingHook):
     """Training hook for computing token utility L1 regularization loss and sparsity metrics"""
 
-    lambda_reg: Param[float] = field(default=0.0)
+    lambda_reg: Param[float] = field(default=0.1)
     """Regularization weight for utility predictor L1 loss"""
 
-    sparsity_threshold: Param[float] = field(default=0.5)
-    """Threshold below which a token utility score is considered suppressed / sparse (default 0.5)"""
+    sparsity_threshold: Meta[float] = field(default=0.5)
+    """Threshold below which a token utility score is considered suppressed / sparse (default 0.5) affects sparsity metric computation only"""
 
     histogram_interval: Meta[int] = field(default=0)
     """Interval in steps for writing utility distribution histograms to TensorBoard (0 to disable)"""
