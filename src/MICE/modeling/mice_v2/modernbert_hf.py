@@ -281,6 +281,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         utility_pred: bool = False,
         hard_pruning: bool = False,
         hard_prune_threshold: float = 0.5,
+        normalize_doc_embeds: bool = False,
         num_labels: int = 1,
         **kwargs,
     ):
@@ -298,6 +299,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.utility_pred = utility_pred
         self.hard_pruning = hard_pruning
         self.hard_prune_threshold = hard_prune_threshold
+        self.normalize_doc_embeds = normalize_doc_embeds
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -874,6 +876,8 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
     ) -> torch.Tensor:
         """Encode documents through bottom contextualization layers."""
         d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
+        if getattr(self.config, "normalize_doc_embeds", False):
+            d_hidden = torch.nn.functional.normalize(d_hidden, p=2, dim=-1)
         d_hidden, _, _, _, _ = self._process_document_utilities_and_pruning(
             d_hidden, doc_mask, use_unpadded=False
         )
@@ -992,6 +996,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             else:
                 d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
                 cu_seqlens_d = max_seqlen_d = None
+
+            if getattr(self.config, "normalize_doc_embeds", False):
+                d_hidden = torch.nn.functional.normalize(d_hidden, p=2, dim=-1)
 
         # 2b. Apply Utility Predictor (Soft Gating or Hard Pruning)
         d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids = (

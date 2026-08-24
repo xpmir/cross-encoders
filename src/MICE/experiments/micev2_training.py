@@ -80,6 +80,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     hard_prune_threshold: GridSearch[float] = 0.5
     """Utility threshold below which document tokens are hard dropped in Phase 2"""
 
+    normalize_doc_embeds: GridSearch[bool] = False
+    """Whether to L2-normalize document hidden states before utility prediction and upper interaction layers"""
+
     phase2_max_epochs: GridSearch[int] = 3
     """Number of training epochs for Phase 2 top layer fine-tuning"""
 
@@ -111,6 +114,7 @@ def build_mice_v2(
             utility_pred=True,
             hard_pruning=True,
             hard_prune_threshold=cfg.hard_prune_threshold,
+            normalize_doc_embeds=cfg.normalize_doc_embeds,
             max_length=max_len,
         )
     else:
@@ -125,6 +129,7 @@ def build_mice_v2(
             bound_bottom_layers=cfg.bound_bottom_layers,
             attn_implementation=attn_impl,
             utility_pred=cfg.utility_pred,
+            normalize_doc_embeds=cfg.normalize_doc_embeds,
             max_length=max_len,
         )
 
