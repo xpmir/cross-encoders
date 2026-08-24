@@ -228,6 +228,21 @@ def find_latest_epoch_dir(ckpt_path: Path) -> Optional[Path]:
     return None
 
 
+def is_rank_zero() -> bool:
+    """Returns True if this is global rank 0 or running in a single-process environment."""
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return torch.distributed.get_rank() == 0
+
+    for env_var in ("RANK", "LOCAL_RANK", "SLURM_PROCID"):
+        val = os.environ.get(env_var)
+        if val is not None:
+            try:
+                return int(val) == 0
+            except ValueError:
+                pass
+    return True
+
+
 class InitMICEV2FromCheckpoint(LightweightTask):
     """Initializes a Phase 2 MICE V2 model from a Phase 1 trained checkpoint path/loader and freezes bottom layers & utility predictor."""
 
@@ -236,33 +251,24 @@ class InitMICEV2FromCheckpoint(LightweightTask):
     checkpoint_loader: Param[ModuleLoader]
     """Path or ModuleLoader to the Phase 1 trained checkpoint (should contain model.safetensors or model/ directory)."""
 
-    load_trainer_state: Param[bool] = field(default=True, ignore_default=True)
-    """Whether to resume the state of optimizer/dataloader"""
-
     def execute(self):
-        logger.info(
-            "[InitMICEV2] Current working directory (os.getcwd()): %s", os.getcwd()
-        )
-        if getattr(self, "path", None) is not None:
-            logger.info("[InitMICEV2] Task output path (self.path): %s", self.path)
+        if not is_rank_zero():
+            logger.info(
+                "[InitMICEV2] Skipping checkpoint initialization on non-zero rank (RANK=%s, LOCAL_RANK=%s)",
+                os.environ.get("RANK", "unknown"),
+                os.environ.get("LOCAL_RANK", "unknown"),
+            )
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                torch.distributed.barrier()
+            return
 
         ckpt_path = Path(self.checkpoint_loader.path)
-        logger.info("[InitMICEV2] Loading Phase 1 checkpoint from path: %s", ckpt_path)
+        logger.info("[InitMICEV2] Copying Phase 1 checkpoint at: %s", ckpt_path)
 
         latest_epoch_dir = find_latest_epoch_dir(ckpt_path)
-        if latest_epoch_dir is None:
-            if (ckpt_path / "model").exists() or (
-                ckpt_path / "model.safetensors"
-            ).exists():
-                latest_epoch_dir = ckpt_path
-            elif (ckpt_path / "last").exists():
-                latest_epoch_dir = ckpt_path / "last"
-
-        if latest_epoch_dir is None:
-            logger.warning(
-                "[InitMICEV2] No valid epoch directory found near %s", ckpt_path
-            )
-            return
+        assert latest_epoch_dir is not None, (
+            f"[InitMICEV2] No valid epoch directory found in {ckpt_path}"
+        )
 
         # 1. Read Phase 1 step count from info.json
         phase1_steps = 0
@@ -283,36 +289,31 @@ class InitMICEV2FromCheckpoint(LightweightTask):
         # Helper function to populate epoch-00000000 directory
         def copy_to_epoch_zero(target_base_dir: Path):
             epoch_zero = target_base_dir / "epoch-00000000"
-            epoch_zero.mkdir(parents=True, exist_ok=True)
+            if epoch_zero.exists():
+                logging.warning(
+                    "[InitMICEV2] Removing existing epoch-00000000 directory at %s",
+                    epoch_zero,
+                )
+                shutil.rmtree(epoch_zero)
+
+            shutil.copytree(latest_epoch_dir, epoch_zero)
 
             # Copy trainer & optimizer state dicts if present
             if (latest_epoch_dir / "trainer.pth").exists():
                 shutil.copy2(
                     latest_epoch_dir / "trainer.pth", epoch_zero / "trainer.pth"
                 )
-            if (latest_epoch_dir / "optimizer.pth").exists():
-                shutil.copy2(
-                    latest_epoch_dir / "optimizer.pth", epoch_zero / "optimizer.pth"
-                )
-
             # Write info.json resetting epoch to 0 but preserving total steps
             with (epoch_zero / "info.json").open("wt") as fp:
                 json.dump({"epoch": 0, "steps": phase1_steps}, fp)
 
-            # Copy model weights directory directly without re-saving via PyTorch
-            src_model_dir = (
-                latest_epoch_dir / "model"
-                if (latest_epoch_dir / "model").exists()
-                else latest_epoch_dir
-            )
-            dst_model_dir = epoch_zero / "model"
-            if dst_model_dir.exists():
-                shutil.rmtree(dst_model_dir)
-            shutil.copytree(src_model_dir, dst_model_dir)
             logger.info("[InitMICEV2] Populated epoch-00000000 at %s", epoch_zero)
 
         # Populate process cwd checkpoints/epoch-00000000
         copy_to_epoch_zero(Path.cwd() / "checkpoints")
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.barrier()
 
 
 class ModernBertMiceScorer(AbstractModuleScorer):
@@ -352,6 +353,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     hard_prune_threshold: Param[float] = field(default=0.5, ignore_default=True)
     """Utility threshold below which tokens are hard-pruned in Phase 2 training (default 0.5)"""
 
+    normalize_doc_embeds: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to L2-normalize document hidden states before utility prediction and upper interaction layers"""
+
     _version: Constant[str] = "2.0.1"
 
     hf_model: nn.Module
@@ -383,6 +387,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             if self.hard_pruning:
                 mice_config.hard_pruning = True
                 mice_config.hard_prune_threshold = self.hard_prune_threshold
+            if self.normalize_doc_embeds:
+                mice_config.normalize_doc_embeds = True
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -397,6 +403,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 utility_pred=self.utility_pred,
                 hard_pruning=self.hard_pruning,
                 hard_prune_threshold=self.hard_prune_threshold,
+                normalize_doc_embeds=self.normalize_doc_embeds,
                 **config_kwargs,
             )
 
@@ -784,6 +791,7 @@ def mice_v2_scorer(
     utility_pred: bool = False,
     hard_pruning: bool = False,
     hard_prune_threshold: float = 0.5,
+    normalize_doc_embeds: bool = False,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -809,6 +817,7 @@ def mice_v2_scorer(
         utility_pred=utility_pred,
         hard_pruning=hard_pruning,
         hard_prune_threshold=hard_prune_threshold,
+        normalize_doc_embeds=normalize_doc_embeds,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

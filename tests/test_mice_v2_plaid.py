@@ -89,3 +89,51 @@ def test_mice_v2_doc_hidden_states_forward(model_id):
 
     assert torch.allclose(standard_scores, plaid_scores, atol=1e-4), \
         f"Mismatch between standard forward ({standard_scores}) and PLAID doc_hidden forward ({plaid_scores})"
+
+
+@pytest.mark.parametrize("model_id", ["jhu-clsp/ettin-encoder-17m"])
+def test_mice_v2_normalize_doc_embeds(model_id):
+    """Test document state L2 normalization when normalize_doc_embeds=True."""
+    scorer_cfg, init_tasks = mice_v2_scorer(
+        hf_id=model_id,
+        n_contextualization_layers=2,
+        normalize_doc_embeds=True,
+    )
+    scorer = scorer_cfg.instance()
+    for task in init_tasks:
+        task.instance().execute()
+    scorer.initialize()
+    scorer.eval()
+
+    docs = [
+        IDTextRecord(id="doc1", text="Paris is the capital of France."),
+        IDTextRecord(id="doc2", text="Berlin is the capital of Germany."),
+    ]
+    doc_encoder = scorer_cfg.get_document_encoder().instance()
+    doc_encoder.model = scorer
+    doc_encoder.eval()
+
+    with torch.no_grad():
+        token_embs = doc_encoder.document_token_embeddings(docs)
+
+    for i, emb in enumerate(token_embs):
+        norms = torch.norm(emb, p=2, dim=-1)
+        logging.info(f"Doc {i} token norms (normalize_doc_embeds=True): {norms}")
+        assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5), \
+            f"Expected unit L2 norm (1.0), got {norms}"
+
+    # Verify parity between standard forward pass and pre-encoded doc_hidden_states
+    queries = ["What is the capital of France?", "Where is Berlin?"]
+    documents = ["Paris is the capital of France.", "Berlin is the capital of Germany."]
+    input_records = PointwiseItems.from_texts(topics=queries, documents=documents)
+
+    with torch.no_grad():
+        standard_scores = scorer(input_records)
+        tokenized_q = scorer.batch_tokenize(input_records, input_nature=QueryDocInput.QUERY)
+        plaid_scores = scorer(
+            tokenized=MICETokenizedTexts(tokenized_q=tokenized_q, tokenized_docs=None),
+            doc_hidden_states=token_embs,
+        )
+
+    assert torch.allclose(standard_scores, plaid_scores, atol=1e-4), \
+        f"Score mismatch with normalize_doc_embeds=True: {standard_scores} vs {plaid_scores}"

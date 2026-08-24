@@ -80,6 +80,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     hard_prune_threshold: GridSearch[float] = 0.5
     """Utility threshold below which document tokens are hard dropped in Phase 2"""
 
+    normalize_doc_embeds: GridSearch[bool] = False
+    """Whether to L2-normalize document hidden states before utility prediction and upper interaction layers"""
+
     phase2_max_epochs: GridSearch[int] = 3
     """Number of training epochs for Phase 2 top layer fine-tuning"""
 
@@ -111,6 +114,7 @@ def build_mice_v2(
             utility_pred=True,
             hard_pruning=True,
             hard_prune_threshold=cfg.hard_prune_threshold,
+            normalize_doc_embeds=cfg.normalize_doc_embeds,
             max_length=max_len,
         )
     else:
@@ -125,6 +129,7 @@ def build_mice_v2(
             bound_bottom_layers=cfg.bound_bottom_layers,
             attn_implementation=attn_impl,
             utility_pred=cfg.utility_pred,
+            normalize_doc_embeds=cfg.normalize_doc_embeds,
             max_length=max_len,
         )
 
@@ -306,6 +311,16 @@ def TrainEvaluateMiceV2(
                 retriever_tag,
             )
 
+            optimizers = cfg.learner.optimization.optimizer
+            if cfg.phase2_training:
+                total_epochs = (
+                    cfg.learner.optimization.max_epochs + cfg.phase2_max_epochs
+                )
+                total_steps = total_epochs * cfg.learner.optimization.steps_per_epoch
+                optimizers = cfg.learner.optimization.get_optimizers_with_total_steps(
+                    total_steps
+                )
+
             # The learner trains the model
             learner = Learner.C(
                 # Misc settings
@@ -314,7 +329,7 @@ def TrainEvaluateMiceV2(
                 model=model,  # The model to train
                 # Optimization settings
                 steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
-                optimizers=cfg.learner.optimization.optimizer,
+                optimizers=optimizers,
                 max_epochs=cfg.learner.optimization.max_epochs,
                 checkpoint_interval=cfg.learner.checkpoint_interval,
                 # The listeners (here, for validation)
@@ -336,8 +351,12 @@ def TrainEvaluateMiceV2(
                 helper.tensorboard_service.add(learner, learner.logpath)
 
             if cfg.phase2_training:
+                total_epochs = (
+                    cfg.learner.optimization.max_epochs + cfg.phase2_max_epochs
+                )
+
                 logging.info(
-                    f"[Phase 2] Launching Hard Pruning Fine-Tuning (threshold={cfg.hard_prune_threshold}, max_epochs={cfg.phase2_max_epochs})"
+                    f"[Phase 2] Launching Hard Pruning Fine-Tuning (threshold={cfg.hard_prune_threshold}, max_epochs={cfg.phase2_max_epochs}, total_epochs={total_epochs})"
                 )
                 # Build the Phase 2 model for hard pruning fine-tuning
                 model_phase2, _ = build_mice_v2(cfg, phase_2=True)
@@ -359,7 +378,7 @@ def TrainEvaluateMiceV2(
                     ),  # Build a new trainer for phase 2, as it may have different hooks (e.g., no utility regularizer)
                     model=model_phase2,
                     steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
-                    optimizers=cfg.learner.optimization.optimizer,
+                    optimizers=optimizers,
                     max_epochs=cfg.phase2_max_epochs,
                     checkpoint_interval=cfg.learner.checkpoint_interval,
                     listeners=stop_tags(validations_p2),
@@ -371,7 +390,6 @@ def TrainEvaluateMiceV2(
                 p2_init_task = InitMICEV2FromCheckpoint.C(
                     scorer=model_phase2,
                     checkpoint_loader=outputs.learned_model,  # use outputs from phase 1 as init for phase 2
-                    load_trainer_state=True,
                 )
 
                 outputs_p2 = learner_p2.submit(

@@ -4,7 +4,6 @@ parent: ./_common.yaml
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:
-    loss: MSE_mixedbread_large
     optimization:
         steps_per_epoch: 100
         batch_size: 256 #is 256 in ettin-reranker-v1
@@ -13,6 +12,7 @@ learner:
         weight_decay: 0.00
         lr: 3e-5 #tom aarsen value
         eps: 1.0e-8
+    loss: MSE_mixedbread_large
     fabric:
         precision: bf16-mixed
     # sample_max: 2_000_000

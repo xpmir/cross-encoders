@@ -10,7 +10,7 @@ parent: ./_ettin68m.yaml
 
 nb_repetitions: 2
 
-# Shared Training hyperparameters for all the Mini Mice Models
+# Smaller training, more validation, and more frequent checkpoints for debugging purposes
 learner:
     loss: MSE_mixedbread_large
     optimization:
@@ -24,29 +24,10 @@ learner:
     validation_interval: 5
     requirements: duration=2h & cpu(cores=16) & cuda(mem=80G)
 
-retrieval:
-    #fast evals don't need multiple GPUs
-    # requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
-    requirements: duration=2h & cpu(cores=8) & cuda(mem=50G) # debug on H100
-    long_requirements: duration=2h & cpu(cores=16) & cuda(mem=80G) * 2
-
 evaluation:
-    fabric:
-        precision: bf16-mixed
     all_datasets: false
     in_domain: true
     datasets:
         - nfcorpus
         - scifact
-
-# Test Utility Soft Gating & Phase 2 Hard Token Pruning
-utility_pred: true
-lambda_reg:
-    values_list:
-        - 1e-2
-        - 1e-1
-        # - 1e-3
-
-phase2_training: true
-hard_prune_threshold: 0.5
-phase2_max_epochs: 200
+        - trec-covid
