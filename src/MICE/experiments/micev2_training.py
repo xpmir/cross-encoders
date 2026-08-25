@@ -288,7 +288,7 @@ def TrainEvaluateMiceV2(
                 UtilityRegularizer.C(
                     lambda_reg=cfg.lambda_reg,
                     histogram_interval=histogram_interval,
-                    sparsity_threshold=cfg.utility_sparsity_threshold,
+                    sparsity_threshold=cfg.hard_prune_threshold,
                 )
             )
 

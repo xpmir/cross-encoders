@@ -20,9 +20,6 @@ evaluation: #default = Minified tests
 # Exceptionally use H100 for eval
 # retrieval:
 #     requirements: duration=1h & cpu(cores=16) & cuda(mem=40G)
-max_length: 1024
-max_query_length: 1024
-max_doc_length: 1024
 
 # Test Utility Soft Gating & Phase 2 Hard Token Pruning
 utility_pred: true

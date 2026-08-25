@@ -29,7 +29,6 @@ ettin_subset_exclude: [] # Train on full reranker-v1 data
 nb_repetitions: 2
 
 base: jhu-clsp/ettin-encoder-68m
-max_length: 1024
 n_contextualization_layers: 10
 n_interaction_layers: 4
 pref_attn_implementation: flash_attention_2
