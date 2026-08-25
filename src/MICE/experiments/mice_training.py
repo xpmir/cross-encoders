@@ -124,6 +124,8 @@ def build_mice(cfg: Mice_FineTuning) -> Tuple[MiceCrossEncoder, List[Lightweight
         lexical_bias=cfg.lexical_bias,
         pooling_method=cfg.pooling_method,
         max_length=max_len,
+        max_query_length=cfg.max_query_length,
+        max_doc_length=cfg.max_doc_length,
     )
 
 

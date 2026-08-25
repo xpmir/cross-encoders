@@ -116,6 +116,8 @@ def build_mice_v2(
             hard_prune_threshold=cfg.hard_prune_threshold,
             normalize_doc_embeds=cfg.normalize_doc_embeds,
             max_length=max_len,
+            max_query_length=cfg.max_query_length,
+            max_doc_length=cfg.max_doc_length,
         )
     else:
         logging.info(
@@ -131,6 +133,8 @@ def build_mice_v2(
             utility_pred=cfg.utility_pred,
             normalize_doc_embeds=cfg.normalize_doc_embeds,
             max_length=max_len,
+            max_query_length=cfg.max_query_length,
+            max_doc_length=cfg.max_doc_length,
         )
 
 
