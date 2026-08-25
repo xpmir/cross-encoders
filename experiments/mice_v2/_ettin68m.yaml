@@ -7,7 +7,7 @@ learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 256 #is 256 in ettin-reranker-v1
-        max_epochs: 3000 #  x 128 x 100 = ~76M Samples < 145M in full dataset
+        max_epochs: 3000 #  x 256 x 100 = ~76M Samples < 145M in full dataset
         num_warmup_steps: 20000 # Follows the original setup
         weight_decay: 0.00
         lr: 3e-5 #tom aarsen value
