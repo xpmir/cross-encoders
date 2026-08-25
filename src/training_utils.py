@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from experimaestro import RunMode
 from experimaestro.launcherfinder import find_launcher
 from experimaestro.annotations import tags as get_tags
 
@@ -533,11 +534,9 @@ def process_experiment_results(
         add_mean=True,  # will add 'mean' dataset at the end
     )
 
-    save_raw_results(df_with_aggs, helper.xp.resultspath)
-
     # keep only results with a base tag (all our models have it)
     # We ensure it's not NaN and not an empty string to exclude first-stage only results
-    scorer_only_df = df_with_aggs[
+    scorer_only_df = df_with_aggs.copy()[
         df_with_aggs["base"].notna()
         & (df_with_aggs["base"].astype(str) != "")
         & (df_with_aggs["base"].astype(str) != "nan")
@@ -576,6 +575,12 @@ def process_experiment_results(
         group_by_tags=best_model_group_tags,
     )
     logging.info(f"df with only best models:\n{best_models_df}")
+
+    if helper.xp.run_mode != RunMode.NORMAL:
+        logger.info("Dry-run mode: skipping disk writes for best models and results")
+        return
+    # Save raw results to disk
+    save_raw_results(df_with_aggs, helper.xp.resultspath)
 
     best_models_list = []
     if not best_models_df.empty and cfg.export_trained_models:
