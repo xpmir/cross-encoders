@@ -819,7 +819,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             "[MICE v2] Frozen embeddings, bottom layers, and utility predictor for Phase 2 training."
         )
 
-    def _process_document_utilities_and_pruning(
+    def _document_embed_post_process(
         self,
         d_hidden: torch.Tensor,
         doc_mask: Optional[torch.Tensor] = None,
@@ -829,9 +829,15 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         d_pos_ids: Optional[torch.Tensor] = None,
     ):
         """
-        Calculates token utilities and applies soft gating or hard token pruning.
+        Postprocessing of the contextualized token representations: 
+        First centering the hs and L2 norm for FastPLAID index and calculating
+        token utilities and applies soft gating or hard token pruning.
         Returns updated (d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids).
         """
+        if getattr(self.config, "normalize_doc_embeds", False):
+            d_hidden = d_hidden - torch.mean(d_hidden, dim=-1, keepdim=True)
+            d_hidden = torch.nn.functional.normalize(d_hidden, p=2, dim=-1)
+
         if self.utility_predictor is not None:
             self.last_utilities = self.utility_predictor(d_hidden)
             hard_prune = getattr(self.config, "hard_pruning", False)
@@ -876,9 +882,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
     ) -> torch.Tensor:
         """Encode documents through bottom contextualization layers."""
         d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
-        if getattr(self.config, "normalize_doc_embeds", False):
-            d_hidden = torch.nn.functional.normalize(d_hidden, p=2, dim=-1)
-        d_hidden, _, _, _, _ = self._process_document_utilities_and_pruning(
+        d_hidden, _, _, _, _ = self._document_embed_post_process(
             d_hidden, doc_mask, use_unpadded=False
         )
         return d_hidden
@@ -997,12 +1001,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
                 cu_seqlens_d = max_seqlen_d = None
 
-            if getattr(self.config, "normalize_doc_embeds", False):
-                d_hidden = torch.nn.functional.normalize(d_hidden, p=2, dim=-1)
-
         # 2b. Apply Utility Predictor (Soft Gating or Hard Pruning)
         d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids = (
-            self._process_document_utilities_and_pruning(
+            self._document_embed_post_process(
                 d_hidden,
                 doc_mask,
                 use_unpadded=use_unpadded,
