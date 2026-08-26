@@ -6,7 +6,7 @@ from typing import Callable
 from pathlib import Path
 import numpy as np
 import pandas as pd
-
+from functools import lru_cache
 from experimaestro import RunMode
 from experimaestro.launcherfinder import find_launcher
 from experimaestro.annotations import tags as get_tags
@@ -42,6 +42,7 @@ from pointwise_distillation import (
     PointwiseDistillationSampler,
     PointwiseDistillationTrainer,
     PointwiseMSELoss,
+    FlattenAndShuffleDataset,
 )
 from samplers import prepare_collection
 from configuration import Losses, CE_FineTuning
@@ -208,25 +209,12 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         if not selected_configs:
             raise ValueError("All Ettin subsets are excluded. Nothing to train on!")
 
-        # Using streaming=false to download and cache the data locally as requested
-        samples_list = []
-        for name in selected_configs:
-            dataset_id = (
-                f"cross_encoder.ettin_reranker_v1_data[name={name},streaming=false]"
-            )
-            dataset_config = prepare_collection(
-                dataset_id, download=cfg.preprocessing.blocking_download
-            )
-            samples_list.append(dataset_config)
-
-        from pointwise_distillation import FlattenAndShuffleDataset
-
-        # Submit the preprocessing task to the indexing launcher
-        launcher_indexing = find_launcher(cfg.preprocessing.requirements)
-        seed = getattr(cfg, "seed", 42)
-        shuffled_dataset_config = FlattenAndShuffleDataset.C(
-            samples=samples_list, seed=seed
-        ).submit(launcher=launcher_indexing)
+        shuffled_dataset_config = build_ettin_reranker_v1_data(
+            tuple(selected_configs),
+            seed=getattr(cfg, "seed", 42),
+            requirements=cfg.preprocessing.requirements,
+            download=True,
+        )
 
         return PointwiseDistillationTrainer.C(
             sampler=PointwiseDistillationSampler.C(dataset=shuffled_dataset_config),
@@ -238,6 +226,32 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         raise NotImplementedError(
             f"Loss function {cfg.learner.loss} is not implemented yet."
         )
+
+
+@lru_cache(maxsize=None)
+def build_ettin_reranker_v1_data(
+    selected_configs: tuple[str],
+    seed: int = 42,
+    requirements: str = None,
+    download: bool = True,
+):
+    """Builds the Ettin v1 reranker dataset based on selected configurations."""
+
+    # Using streaming=false to download and cache the data locally as requested
+    samples_list = []
+    for name in selected_configs:
+        dataset_id = (
+            f"cross_encoder.ettin_reranker_v1_data[name={name},streaming=false]"
+        )
+        dataset_config = prepare_collection(dataset_id, download=download)
+        samples_list.append(dataset_config)
+
+    # Submit the preprocessing task to the indexing launcher
+    launcher_indexing = find_launcher(requirements)
+
+    return FlattenAndShuffleDataset.C(samples=samples_list, seed=seed).submit(
+        launcher=launcher_indexing
+    )
 
 
 def save_raw_results(df: pd.DataFrame, resultspath: Path):

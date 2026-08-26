@@ -35,7 +35,7 @@ retrieval:
     batch_size: 64
     long_evals: #evals that trigger the long_launcher (faster multi-GPU) instead of default_launcher
         - fever
-        - ms_marco
+        - msmarco
         - hotpotqa
         - arguana
     requirements: duration=4h & cpu(cores=16) & cuda(mem=30G)

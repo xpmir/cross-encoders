@@ -32,3 +32,9 @@ lambda_reg:
 phase2_training: true
 hard_prune_threshold: 0.1
 phase2_max_epochs: 3000
+eval_phase_1: true
+
+#override just for this experiment so spare compute (doesn't change much)
+max_length: 1024
+max_query_length: null
+max_doc_length: null
