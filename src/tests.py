@@ -257,6 +257,53 @@ BEIR13_DECONTAMINATED_KEYS = {
     "trec_covid_decontaminated": "ai.lighton.beir_decontaminated.trec_covid.test",
 }
 
+BEIR_KEYS = {
+    "scifact": "org.beir.scifact.test",
+    "touche": "org.beir.webis.touche2020.v2",
+    "fiqa": "org.beir.fiqa.test",
+    "nfcorpus": "org.beir.nfcorpus.test",
+    "arguana": "org.beir.arguana",
+    "climate_fever": "org.beir.climate.fever",
+    "dbpedia": "org.beir.dbpedia.entity.test",
+    "fever": "org.beir.fever.test",
+    "hotpotqa": "org.beir.hotpotqa.test",
+    "nq": "org.beir.nq",
+    "quora": "org.beir.quora.test",
+    "scidocs": "org.beir.scidocs",
+    "trec_covid": "org.beir.trec.covid",
+}
+
+INDOMAIN_KEYS = {
+    "msmarco_dev": "com.microsoft.msmarco.passage.dev.small",
+    "trec2019": "com.microsoft.msmarco.passage.trec2019.judged",
+    "trec2020": "com.microsoft.msmarco.passage.trec2020.judged",
+}
+
+LOTTE_KEYS = {
+    "lotte_writing": "edu.stanford.lotte.writing.test.search",
+    "lotte_recreation": "edu.stanford.lotte.recreation.test.search",
+    "lotte_science": "edu.stanford.lotte.science.test.search",
+    "lotte_technology": "edu.stanford.lotte.technology.test.search",
+    "lotte_lifestyle": "edu.stanford.lotte.lifestyle.test.search",
+}
+
+
+def get_decontaminated_test(
+    key: str,
+    test_topic_nb: int,
+    retrievers_only: bool = False,
+    launcher=None,
+    blocking: Optional[bool] = None,
+) -> Evaluations:
+    """Build a single LightOn decontaminated BEIR dataset evaluation."""
+    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+    dataset_id = BEIR13_DECONTAMINATED_KEYS[key]
+    ds = prepare_dataset(dataset_id, download=blocking)
+    # Apply the filter before taking the fold or evaluating
+    ds = FilterUnassessedTopics.C(dataset=ds).submit(launcher=launcher)
+    ds = get_fold(ds, test_topic_nb, launcher=launcher)
+    return Evaluations(ds, measures=measures)
+
 
 class FilterUnassessedTopics(Task):
     """Filters a dataset to only keep topics that have at least one assessment/qrel"""
@@ -316,14 +363,15 @@ def BEIR13_decontaminated_tests(
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
     """All 13 LightOn decontaminated BEIR datasets."""
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
     evals = {}
-    for key, dataset_id in BEIR13_DECONTAMINATED_KEYS.items():
-        ds = prepare_dataset(dataset_id, download=blocking)
-        # Apply the filter before taking the fold or evaluating
-        ds = FilterUnassessedTopics.C(dataset=ds).submit(launcher=launcher)
-        ds = get_fold(ds, test_topic_nb, launcher=launcher)
-        evals[key] = Evaluations(ds, measures=measures)
+    for key in BEIR13_DECONTAMINATED_KEYS:
+        evals[key] = get_decontaminated_test(
+            key,
+            test_topic_nb,
+            retrievers_only=retrievers_only,
+            launcher=launcher,
+            blocking=blocking,
+        )
 
     return EvaluationsCollection(**evals)
 
@@ -614,30 +662,63 @@ def build_tests(
         )
     # 4. Filter or add specific datasets if provided
     if cfg.datasets:
-        # Check in predefined collections first
-        beir13_all = BEIR_13_tests(
-            cfg.test_max_topics,
-            retrievers_only=retrievers_only,
-            launcher=launcher,
-            blocking=blocking,
-        )
-        beir13_decont_all = BEIR13_decontaminated_tests(
-            cfg.test_max_topics,
-            retrievers_only=retrievers_only,
-            launcher=launcher,
-            blocking=blocking,
-        )
+        beir13_all = None
         for ds_name in cfg.datasets:
-            if ds_name in beir13_all.collection:
-                if ds_name not in all_evals:
-                    all_evals[ds_name] = beir13_all.collection[ds_name]
-            elif ds_name in beir13_decont_all.collection:
-                if ds_name not in all_evals:
-                    all_evals[ds_name] = beir13_decont_all.collection[ds_name]
-            else:
-                logger.warning(
-                    f"Dataset {ds_name} not found in BEIR13, BEIR13_decontaminated, or supported list"
+            if ds_name in all_evals:
+                continue
+
+            if ds_name in BEIR13_DECONTAMINATED_KEYS:
+                all_evals[ds_name] = get_decontaminated_test(
+                    ds_name,
+                    cfg.test_max_topics,
+                    retrievers_only=retrievers_only,
+                    launcher=launcher,
+                    blocking=blocking,
                 )
+            elif ds_name in BEIR_KEYS:
+                if beir13_all is None:
+                    beir13_all = BEIR_13_tests(
+                        cfg.test_max_topics,
+                        retrievers_only=retrievers_only,
+                        launcher=launcher,
+                        blocking=blocking,
+                    )
+                all_evals[ds_name] = beir13_all.collection[ds_name]
+            elif ds_name in INDOMAIN_KEYS:
+                ds_id = INDOMAIN_KEYS[ds_name]
+                if "dev.small" in ds_id:
+                    ds = prepare_collection(ds_id, download=blocking)
+                else:
+                    ds = prepare_dataset(ds_id, download=blocking)
+                ds = get_fold(ds, cfg.test_max_topics, launcher=launcher)
+                measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+                all_evals[ds_name] = Evaluations(ds, measures=measures)
+            elif ds_name in NANO_BEIR_KEYS:
+                nano_all = nano_beir_tests(
+                    cfg.test_max_topics,
+                    retrievers_only=retrievers_only,
+                    launcher=launcher,
+                    blocking=blocking,
+                )
+                all_evals[ds_name] = nano_all.collection[ds_name]
+            elif ds_name in LOTTE_KEYS:
+                lotte_all = LoTTE_tests(
+                    cfg.test_max_topics,
+                    retrievers_only=retrievers_only,
+                    launcher=launcher,
+                    blocking=blocking,
+                )
+                all_evals[ds_name] = lotte_all.collection[ds_name]
+            elif ds_name == "robust04":
+                rob_all = Robust04_test(
+                    cfg.test_max_topics,
+                    retrievers_only=retrievers_only,
+                    launcher=launcher,
+                    blocking=blocking,
+                )
+                all_evals[ds_name] = rob_all.collection["robust04"]
+            else:
+                logger.warning(f"Dataset {ds_name} not found in supported dataset list")
 
     # If nothing was selected, use minified_tests as default (original behavior)
     if not all_evals and not cfg.all_datasets:

@@ -7,7 +7,7 @@ learner:
     optimization:
         steps_per_epoch: 100
         batch_size: 256 #is 256 in ettin-reranker-v1
-        max_epochs: 3000 #  x 128 x 100 = ~76M Samples < 145M in full dataset
+        max_epochs: 5000 #  x 256 x 100 = ~76M Samples < 145M in full dataset
         num_warmup_steps: 20000 # Follows the original setup
         weight_decay: 0.00
         lr: 3e-5 #tom aarsen value
@@ -29,7 +29,6 @@ ettin_subset_exclude: [] # Train on full reranker-v1 data
 nb_repetitions: 2
 
 base: jhu-clsp/ettin-encoder-68m
-max_length: 1024
 n_contextualization_layers: 10
 n_interaction_layers: 4
 pref_attn_implementation: flash_attention_2

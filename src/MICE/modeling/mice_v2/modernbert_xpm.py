@@ -47,11 +47,11 @@ logger = logging.getLogger(__name__)
 class UtilityRegularizer(TrainingHook):
     """Training hook for computing token utility L1 regularization loss and sparsity metrics"""
 
-    lambda_reg: Param[float] = field(default=0.0)
+    lambda_reg: Param[float] = field(default=0.1)
     """Regularization weight for utility predictor L1 loss"""
 
-    sparsity_threshold: Param[float] = field(default=0.5)
-    """Threshold below which a token utility score is considered suppressed / sparse (default 0.5)"""
+    sparsity_threshold: Meta[float] = field(default=0.5)
+    """Threshold below which a token utility score is considered suppressed / sparse (default 0.5) affects sparsity metric computation only"""
 
     histogram_interval: Meta[int] = field(default=0)
     """Interval in steps for writing utility distribution histograms to TensorBoard (0 to disable)"""
@@ -626,6 +626,49 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         self._last_export_dir = save_path
         self.save_model(save_path)
 
+    def _write_st_metadata(self, save_directory: Path):
+        """Write native SentenceTransformers metadata files for CrossEncoder compatibility."""
+        import json
+
+        save_directory = Path(save_directory)
+
+        # 1. modules.json
+        modules = [
+            {
+                "idx": 0,
+                "name": "0",
+                "path": "",
+                "type": "sentence_transformers.base.modules.transformer.Transformer",
+            }
+        ]
+        (save_directory / "modules.json").write_text(json.dumps(modules, indent=2))
+
+        # 2. config_sentence_transformers.json
+        st_config = {
+            "activation_fn": "torch.nn.modules.linear.Identity",
+            "default_prompt_name": None,
+            "model_type": "CrossEncoder",
+            "prompts": {},
+        }
+        (save_directory / "config_sentence_transformers.json").write_text(
+            json.dumps(st_config, indent=2)
+        )
+
+        # 3. sentence_bert_config.json
+        sb_config = {
+            "transformer_task": "sequence-classification",
+            "modality_config": {
+                "text": {
+                    "method": "forward",
+                    "method_output_name": "logits",
+                }
+            },
+            "module_output_name": "scores",
+        }
+        (save_directory / "sentence_bert_config.json").write_text(
+            json.dumps(sb_config, indent=2)
+        )
+
     def export_to_st(
         self,
         save_directory: str,
@@ -643,6 +686,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             self._export_metadata = metadata
 
         self.write_hub_extras(save_path)
+        self._write_st_metadata(save_path)
         sections = self.hub_readme_sections()
         if sections:
             readme = assemble_readme_sections([], sections)

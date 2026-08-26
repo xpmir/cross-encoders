@@ -1,0 +1,35 @@
+id: eval_scorer_top100_debug
+title: cross_scorer_evaluation
+description: Debug Evalutation of pushed HF Models
+
+parent: ../_common.yaml
+module: Evaluation.experiment
+pre_experiment: pre_experiment
+
+
+scorers_st_id:
+  - cross-encoder/ettin-reranker-150m-v1
+  - VictorMorand/MiceV2-l10-ettin-68m
+scorers_hf_id:
+  - VictorMorand/MiceV2-l10-ettin-68m
+
+retrievers_hf_id:
+  - naver/splade-v3-distilbert
+
+indexation:
+  requirements: duration=8h & cpu(cores=4, mem=10G) & cuda(mem=30G)
+  sparse2bmp_requirements: duration=8h & cpu(cores=8)
+  batch_size: 128
+
+retrieval:
+  requirements: duration=19h & cpu(cores=4, mem=50G) & cuda(mem=20G)
+  batch_size: 64
+  k: 100
+
+evaluation:
+  #just for debugging
+  in_domain: false
+  beir13: false
+  datasets:
+    - nfcorpus
+    - scifact

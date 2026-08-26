@@ -406,9 +406,6 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
     # Process Results shared
-    if helper.xp.run_mode == RunMode.NORMAL:
-        process_experiment_results(
-            tests, all_tags, config_map, cfg, helper, learners, all_weights, get_ce_name
-        )
-    else:
-        logging.info("Dry-run mode: skipping results processing")
+    process_experiment_results(
+        tests, all_tags, config_map, cfg, helper, learners, all_weights, get_ce_name
+    )
