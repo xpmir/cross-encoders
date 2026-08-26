@@ -247,3 +247,72 @@ def test_legacy_checkpoint_loading_without_wo_bias():
     new_model.load_state_dict(sd, strict=True)
     assert new_model.utility_predictor.wo.bias is not None
     assert new_model.utility_predictor.wo.bias.item() == 0.0
+
+
+def test_top_layers_doc_ln_toggle():
+    """Test top_layers_doc_ln=True vs top_layers_doc_ln=False behavior and LayerNorm instantiation."""
+    # 1. top_layers_doc_ln=False (Default legacy mode)
+    config_false = ModernBertMiceConfig(
+        n_contextualization_layers=2,
+        num_hidden_layers=4,
+        hidden_size=128,
+        num_attention_heads=4,
+        intermediate_size=256,
+        utility_pred=True,
+        top_layers_doc_ln=False,
+    )
+    model_false = ModernBertMiceForSequenceClassification(config_false)
+    assert isinstance(model_false.top_layers[0].doc_cross_attn_norm, torch.nn.Identity)
+
+    # 2. top_layers_doc_ln=True (Post-LN gating mode)
+    config_true = ModernBertMiceConfig(
+        n_contextualization_layers=2,
+        num_hidden_layers=4,
+        hidden_size=128,
+        num_attention_heads=4,
+        intermediate_size=256,
+        utility_pred=True,
+        top_layers_doc_ln=True,
+    )
+    model_true = ModernBertMiceForSequenceClassification(config_true)
+    assert isinstance(model_true.top_layers[0].doc_cross_attn_norm, torch.nn.LayerNorm)
+
+    # Verify forward pass for both
+    query_ids = torch.randint(0, 1000, (2, 8))
+    query_mask = torch.ones((2, 8), dtype=torch.long)
+    doc_ids = torch.randint(0, 1000, (2, 16))
+    doc_mask = torch.ones((2, 16), dtype=torch.long)
+
+    with torch.no_grad():
+        out_false = model_false(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask)
+        out_true = model_true(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask)
+
+    assert out_false.logits.shape == (2, 1)
+    assert out_true.logits.shape == (2, 1)
+    assert model_false.last_utilities.shape == (2, 16, 1)
+    assert model_true.last_utilities.shape == (2, 16, 1)
+
+
+def test_top_layers_doc_ln_backbone_seeding():
+    """Test InitMICEV2ModernBERTFromHFID copying LayerNorm weights into top_layer.doc_cross_attn_norm."""
+    from transformers import AutoModelForSequenceClassification
+
+    scorer_cfg, init_tasks = mice_v2_scorer(
+        hf_id="jhu-clsp/ettin-encoder-17m",
+        n_contextualization_layers=2,
+        utility_pred=True,
+        top_layers_doc_ln=True,
+    )
+    for task in init_tasks:
+        inst_task = task.instance()
+        inst_task.execute()
+        scorer = inst_task.scorer
+
+    full_backbone = AutoModelForSequenceClassification.from_pretrained("jhu-clsp/ettin-encoder-17m")
+
+    assert isinstance(scorer.hf_model.top_layers[0].doc_cross_attn_norm, torch.nn.LayerNorm)
+    # Check that weight was populated from backbone layer 2 attn_norm
+    doc_ln = scorer.hf_model.top_layers[0].doc_cross_attn_norm
+    src_attn_norm = full_backbone.model.layers[2].attn_norm
+    assert doc_ln.weight is not None
+    assert torch.equal(doc_ln.weight, src_attn_norm.weight)

@@ -283,6 +283,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         hard_prune_threshold: float = 0.5,
         normalize_doc_embeds: bool = False,
         use_upper_rope: bool = True,
+        top_layers_doc_ln: bool = False,
         num_labels: int = 1,
         **kwargs,
     ):
@@ -302,6 +303,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.hard_prune_threshold = hard_prune_threshold
         self.normalize_doc_embeds = normalize_doc_embeds
         self.use_upper_rope = use_upper_rope
+        self.top_layers_doc_ln = top_layers_doc_ln
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -528,6 +530,13 @@ class ModernBertMiceTopLayer(nn.Module):
         self.cross_attn_norm = nn.LayerNorm(
             config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
         )
+        if getattr(config, "top_layers_doc_ln", False):
+            self.doc_cross_attn_norm = nn.LayerNorm(
+                config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
+            )
+        else:
+            self.doc_cross_attn_norm = nn.Identity()
+
         self.cross_attn = ModernBertMiceCrossAttention(config, layer_idx=layer_idx)
 
         self.self_attn_norm = nn.LayerNorm(
@@ -544,6 +553,7 @@ class ModernBertMiceTopLayer(nn.Module):
         self,
         q_hidden: torch.Tensor,
         d_hidden: torch.Tensor,
+        d_utilities: Optional[torch.Tensor] = None,
         q_mask: Optional[torch.Tensor] = None,
         d_mask: Optional[torch.Tensor] = None,
         q_attn_mask: Optional[torch.Tensor] = None,
@@ -556,10 +566,15 @@ class ModernBertMiceTopLayer(nn.Module):
         max_seqlen_d: Optional[int] = None,
         **kwargs,
     ) -> torch.Tensor:
-        # 1. Cross Attention
+        # 1. Apply doc_cross_attn_norm (or Identity) to d_hidden
+        norm_d_hidden = self.doc_cross_attn_norm(d_hidden)
+        if d_utilities is not None:
+            norm_d_hidden = norm_d_hidden * d_utilities
+
+        # Cross Attention
         cross_out = self.cross_attn(
             self.cross_attn_norm(q_hidden),
-            d_hidden,
+            norm_d_hidden,
             q_mask=q_mask,
             d_mask=d_mask,
             cu_seqlens_q=cu_seqlens_q,
@@ -881,7 +896,12 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                         d_hidden, doc_mask, self.last_utilities, threshold=threshold
                     )
             else:
-                d_hidden = d_hidden * self.last_utilities
+                if not getattr(self.config, "top_layers_doc_ln", False):
+                    # Legacy soft gating: multiply in post-processing
+                    d_hidden = d_hidden * self.last_utilities
+                else:
+                    # Defer soft gating to top_layers (applied post-doc_cross_attn_norm)
+                    pass
         else:
             self.last_utilities = None
 
@@ -1029,12 +1049,23 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
         )
 
+        d_utilities = (
+            self.last_utilities
+            if (
+                self.utility_predictor is not None
+                and not getattr(self.config, "hard_pruning", False)
+                and getattr(self.config, "top_layers_doc_ln", False)
+            )
+            else None
+        )
+
         if use_unpadded:
             num_top = len(self.top_layers)
             for i, top_layer in enumerate(self.top_layers):
                 q_hidden = top_layer(
                     q_hidden,
                     d_hidden,
+                    d_utilities=d_utilities,
                     q_position_embeddings=q_pos_emb_top,
                     is_last_layer=(i == num_top - 1),
                     cu_seqlens_q=cu_seqlens_q,
@@ -1065,6 +1096,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 q_hidden = top_layer(
                     q_hidden,
                     d_hidden,
+                    d_utilities=d_utilities,
                     q_mask=query_mask,
                     d_mask=doc_mask,
                     q_attn_mask=q_attn_mask,

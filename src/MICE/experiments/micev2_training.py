@@ -92,6 +92,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     use_upper_rope: GridSearch[bool] = True
     """Whether to use Rotary Position Embedding (RoPE) in upper interaction layers"""
 
+    top_layers_doc_ln: GridSearch[bool] = False
+    """Whether to use a document LayerNorm in top interaction layers and multiply token utilities post-LayerNorm"""
+
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
@@ -122,6 +125,7 @@ def build_mice_v2(
             hard_prune_threshold=cfg.hard_prune_threshold,
             normalize_doc_embeds=cfg.normalize_doc_embeds,
             use_upper_rope=cfg.use_upper_rope,
+            top_layers_doc_ln=cfg.top_layers_doc_ln,
             max_length=max_len,
             max_query_length=cfg.max_query_length,
             max_doc_length=cfg.max_doc_length,
@@ -140,6 +144,7 @@ def build_mice_v2(
             utility_pred=cfg.utility_pred,
             normalize_doc_embeds=cfg.normalize_doc_embeds,
             use_upper_rope=cfg.use_upper_rope,
+            top_layers_doc_ln=cfg.top_layers_doc_ln,
             max_length=max_len,
             max_query_length=cfg.max_query_length,
             max_doc_length=cfg.max_doc_length,
@@ -160,6 +165,9 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     use_upper_rope = model_tags.get("use_upper_rope", cfg.use_upper_rope)
     rope_suffix = "" if use_upper_rope else "-norope"
 
+    top_layers_doc_ln = model_tags.get("top_layers_doc_ln", cfg.top_layers_doc_ln)
+    doc_ln_suffix = "-docln" if top_layers_doc_ln else ""
+
     attn_impl = model_tags.get("attn_implementation", cfg.attn_implementation)
     attn_suffix = f"-{attn_impl}" if attn_impl else ""
 
@@ -168,7 +176,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(
