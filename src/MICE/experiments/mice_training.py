@@ -124,6 +124,8 @@ def build_mice(cfg: Mice_FineTuning) -> Tuple[MiceCrossEncoder, List[Lightweight
         lexical_bias=cfg.lexical_bias,
         pooling_method=cfg.pooling_method,
         max_length=max_len,
+        max_query_length=cfg.max_query_length,
+        max_doc_length=cfg.max_doc_length,
     )
 
 
@@ -450,19 +452,16 @@ def TrainEvaluateLateInteractionScorer(
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
 
-    if helper.xp.run_mode == RunMode.NORMAL:
-        process_experiment_results(
-            tests=tests,
-            all_tags=all_tags,
-            config_map=config_map,
-            cfg=cfg,
-            helper=helper,
-            learners=learners,
-            all_weights=all_weights,
-            get_name_fn=partial(get_model_name_fn, cfg=all_configs[0]),
-        )
-    else:
-        logging.info("Dry-run mode: skipping results processing")
+    process_experiment_results(
+        tests=tests,
+        all_tags=all_tags,
+        config_map=config_map,
+        cfg=cfg,
+        helper=helper,
+        learners=learners,
+        all_weights=all_weights,
+        get_name_fn=partial(get_model_name_fn, cfg=all_configs[0]),
+    )
 
 
 @learning_experiment()

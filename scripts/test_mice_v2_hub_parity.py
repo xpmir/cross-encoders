@@ -224,17 +224,21 @@ def main():
         str(export_dir), device=str(device), trust_remote_code=True
     )
     st_scores = np.array(st_cross_encoder.predict(test_pairs))
-    expected_st_scores = torch.sigmoid(torch.tensor(baseline_pair_scores)).numpy()
+    activation_fn = getattr(st_cross_encoder, "activation_fn", None)
+    if activation_fn is not None and type(activation_fn).__name__ != "Identity":
+        expected_st_scores = activation_fn(torch.tensor(baseline_pair_scores)).numpy()
+    else:
+        expected_st_scores = baseline_pair_scores
 
     logger.info("SentenceTransformers CrossEncoder raw output:     %s", st_scores)
-    logger.info("Expected ST output (Sigmoid of baseline logits): %s", expected_st_scores)
+    logger.info("Expected ST output:                             %s", expected_st_scores)
 
     if not np.allclose(expected_st_scores, st_scores, atol=1e-5):
         raise ValueError(
-            f"Output parity check failed between Sigmoid(baseline) and SentenceTransformers CrossEncoder!\n"
+            f"Output parity check failed between baseline and SentenceTransformers CrossEncoder!\n"
             f"Expected: {expected_st_scores}\nST CrossEncoder: {st_scores}"
         )
-    logger.info("[SUCCESS] Baseline Pair (Sigmoid) vs. SentenceTransformers CrossEncoder parity check PASSED!")
+    logger.info("[SUCCESS] Baseline Pair vs. SentenceTransformers CrossEncoder parity check PASSED!")
 
     # 6. Optional Hub Push & Remote Reloading
     if args.repo_id:

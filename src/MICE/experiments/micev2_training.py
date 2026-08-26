@@ -86,6 +86,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     phase2_max_epochs: GridSearch[int] = 3
     """Number of training epochs for Phase 2 top layer fine-tuning"""
 
+    eval_phase_1: GridSearch[bool] = False
+    """Whether to also evaluate the Phase 1 model (soft gating without hard pruning) when phase2_training is enabled."""
+
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
@@ -116,6 +119,8 @@ def build_mice_v2(
             hard_prune_threshold=cfg.hard_prune_threshold,
             normalize_doc_embeds=cfg.normalize_doc_embeds,
             max_length=max_len,
+            max_query_length=cfg.max_query_length,
+            max_doc_length=cfg.max_doc_length,
         )
     else:
         logging.info(
@@ -131,6 +136,8 @@ def build_mice_v2(
             utility_pred=cfg.utility_pred,
             normalize_doc_embeds=cfg.normalize_doc_embeds,
             max_length=max_len,
+            max_query_length=cfg.max_query_length,
+            max_doc_length=cfg.max_doc_length,
         )
 
 
@@ -286,7 +293,9 @@ def TrainEvaluateMiceV2(
             )
             ce_trainer.hooks.append(
                 UtilityRegularizer.C(
-                    lambda_reg=cfg.lambda_reg, histogram_interval=histogram_interval
+                    lambda_reg=cfg.lambda_reg,
+                    histogram_interval=histogram_interval,
+                    sparsity_threshold=cfg.hard_prune_threshold,
                 )
             )
 
@@ -301,6 +310,7 @@ def TrainEvaluateMiceV2(
         for i in range(cfg.nb_repetitions):
             seed = np.random.RandomState(cfg.seed + i).randint((2**32) - 1)
             random = Random.C(seed=seed).tag("seed", seed)
+            phases_to_evaluate = []
 
             # The validation listener evaluates the full retriever
             # (retriever + scorer) and keep the best performing model
@@ -339,6 +349,9 @@ def TrainEvaluateMiceV2(
                 # fabric settings
                 fabric_config=cfg.learner.fabric.get_config(),
             )
+            if cfg.phase2_training:
+                learner.tag("phase", 1)
+
             learners.append(learner)
 
             # Submit job and link
@@ -363,7 +376,6 @@ def TrainEvaluateMiceV2(
 
                 for k, v in cfg_tags.items():
                     model_phase2.tag(k, v)
-                model_phase2.tag("phase", 2)
 
                 validations_p2, tracked_validations_p2 = validation_set.build_listeners(
                     model_phase2,
@@ -373,9 +385,8 @@ def TrainEvaluateMiceV2(
 
                 learner_p2 = Learner.C(
                     random=random,
-                    trainer=build_trainer(
-                        cfg
-                    ),  # Build a new trainer for phase 2, as it may have different hooks (e.g., no utility regularizer)
+                    # Build a new trainer for phase 2, as it may have different hooks (e.g., no utility regularizer)
+                    trainer=build_trainer(cfg),
                     model=model_phase2,
                     steps_per_epoch=cfg.learner.optimization.steps_per_epoch,
                     optimizers=optimizers,
@@ -384,12 +395,15 @@ def TrainEvaluateMiceV2(
                     listeners=stop_tags(validations_p2),
                     hooks=learner_hooks,
                     fabric_config=cfg.learner.fabric.get_config(),
-                )
+                ).tag("phase", 2)
+
                 learners.append(learner_p2)
 
                 p2_init_task = InitMICEV2FromCheckpoint.C(
                     scorer=model_phase2,
-                    checkpoint_loader=outputs.learned_model,  # use outputs from phase 1 as init for phase 2
+                    checkpoint_loader=stop_tags(
+                        outputs.learned_model
+                    ),  # use outputs from phase 1 as init for phase 2
                 )
 
                 outputs_p2 = learner_p2.submit(
@@ -399,49 +413,79 @@ def TrainEvaluateMiceV2(
                 if helper.xp.run_mode == RunMode.NORMAL:
                     helper.tensorboard_service.add(learner_p2, learner_p2.logpath)
 
-                eval_outputs = outputs_p2
-                eval_tracked_validations = tracked_validations_p2
-                eval_model = model_phase2
-            else:
-                eval_outputs = outputs
-                eval_tracked_validations = tracked_validations
-                eval_model = model
+                phases_to_evaluate.append(
+                    (2, model_phase2, outputs_p2, tracked_validations_p2)
+                )
 
-            # Build list of models to evaluate: (model_id, load_model, label)
+                if cfg.eval_phase_1:
+                    phases_to_evaluate.append((1, model, outputs, tracked_validations))
+
+            else:
+                phases_to_evaluate.append((1, model, outputs, tracked_validations))
+
+            # Build list of models to evaluate: (model_id, load_model, label, eval_model)
+
             models_to_evaluate = []
             checkpoint_mode = cfg.evaluation.get_checkpoint_mode()
 
-            # 1. Best validation checkpoints
-            if checkpoint_mode in (CheckpointSelection.VAL, CheckpointSelection.BOTH):
-                for name, tracked_validation in eval_tracked_validations.items():
-                    logging.info(f"Adding validation model for evaluation: {name}")
-                    for metric_name in tracked_validation.monitored():
-                        load_model = (
-                            eval_outputs.listeners[tracked_validation.id][metric_name]
-                            .tag("checkpoint", name)
-                            .tag("seed", seed)
-                            .tag("first_stage", retriever_tag)
-                        )
-                        for k, v in cfg_tags.items():
-                            load_model.tag(k, v)
-                        model_id = f"{grid_search_id}-{name}-{metric_name}-{seed}"
-                        models_to_evaluate.append((model_id, load_model, name))
+            for (
+                phase_num,
+                current_model,
+                current_outputs,
+                current_tracked_validations,
+            ) in phases_to_evaluate:
+                phase_prefix = f"-p{phase_num}" if cfg.phase2_training else ""
 
-            # 2. Last checkpoint
-            if checkpoint_mode in (CheckpointSelection.LAST, CheckpointSelection.BOTH):
-                logging.info("Adding last checkpoint for evaluation")
-                last_model = (
-                    eval_outputs.learned_model.tag("checkpoint", "last")
-                    .tag("seed", seed)
-                    .tag("first_stage", retriever_tag)
-                )
-                for k, v in cfg_tags.items():
-                    last_model.tag(k, v)
-                model_id = f"{grid_search_id}-last-{seed}"
-                models_to_evaluate.append((model_id, last_model, "last"))
+                # 1. Best validation checkpoints
+                if checkpoint_mode in (
+                    CheckpointSelection.VAL,
+                    CheckpointSelection.BOTH,
+                ):
+                    for name, tracked_validation in current_tracked_validations.items():
+                        logging.info(
+                            f"Adding validation model for evaluation (Phase {phase_num}): {name}"
+                        )
+                        for metric_name in tracked_validation.monitored():
+                            load_model = (
+                                current_outputs.listeners[tracked_validation.id][
+                                    metric_name
+                                ]
+                                .tag("checkpoint", name)
+                                .tag("seed", seed)
+                                .tag("first_stage", retriever_tag)
+                            )
+                            if cfg.phase2_training:
+                                load_model.tag("phase", phase_num)
+                            for k, v in cfg_tags.items():
+                                load_model.tag(k, v)
+                            model_id = f"{grid_search_id}{phase_prefix}-{name}-{metric_name}-{seed}"
+                            models_to_evaluate.append(
+                                (model_id, load_model, name, current_model)
+                            )
+
+                # 2. Last checkpoint
+                if checkpoint_mode in (
+                    CheckpointSelection.LAST,
+                    CheckpointSelection.BOTH,
+                ):
+                    logging.info(
+                        f"Adding last checkpoint for evaluation (Phase {phase_num})"
+                    )
+                    last_model = (
+                        current_outputs.learned_model.tag("checkpoint", "last")
+                        .tag("seed", seed)
+                        .tag("first_stage", retriever_tag)
+                    )
+
+                    for k, v in cfg_tags.items():
+                        last_model.tag(k, v)
+                    model_id = f"{grid_search_id}{phase_prefix}-last-{seed}"
+                    models_to_evaluate.append(
+                        (model_id, last_model, "last", current_model)
+                    )
 
             # Shared evaluation execution loop (Standard & PLAID)
-            for model_id, load_model, label in models_to_evaluate:
+            for model_id, load_model, label, eval_model in models_to_evaluate:
                 if cfg.plaid.use_plaid:
                     load_model.tag("plaid_retriever", False)
 
@@ -528,19 +572,16 @@ def TrainEvaluateMiceV2(
     # Wait for all the experiments in the loop to finish before processing the dataframes
     helper.xp.wait()
 
-    if helper.xp.run_mode == RunMode.NORMAL:
-        process_experiment_results(
-            tests=tests,
-            all_tags=all_tags,
-            config_map=config_map,
-            cfg=cfg,
-            helper=helper,
-            learners=learners,
-            all_weights=all_weights,
-            get_name_fn=partial(get_model_name_fn, cfg=all_configs[0]),
-        )
-    else:
-        logging.info("Dry-run mode: skipping results processing")
+    process_experiment_results(
+        tests=tests,
+        all_tags=all_tags,
+        config_map=config_map,
+        cfg=cfg,
+        helper=helper,
+        learners=learners,
+        all_weights=all_weights,
+        get_name_fn=partial(get_model_name_fn, cfg=all_configs[0]),
+    )
 
 
 @learning_experiment()

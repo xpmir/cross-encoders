@@ -23,6 +23,7 @@ from attrs import Factory
 from functools import partial
 import pandas as pd
 
+from experimaestro import RunMode
 from experimaestro.launcherfinder import find_launcher
 from experimaestro.experiments.grid import generate_grid
 
@@ -297,22 +298,25 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     logging.info(f"Final DataFrame:\n{df}")
 
     # save results
-    if not helper.xp.resultspath.exists():
-        helper.xp.resultspath.mkdir(parents=True, exist_ok=True)
+    if helper.xp.run_mode == RunMode.NORMAL:
+        if not helper.xp.resultspath.exists():
+            helper.xp.resultspath.mkdir(parents=True, exist_ok=True)
 
-    output_file = helper.xp.resultspath / "results.csv"
-    df.to_csv(output_file, index=False)
-    logging.info(f"Results saved to {output_file}")
+        output_file = helper.xp.resultspath / "results.csv"
+        df.to_csv(output_file, index=False)
+        logging.info(f"Results saved to {output_file}")
 
-    # Generate and save LaTeX table
-    latex_table = dataframe_to_latex(
-        df,
-        caption="Evaluation Results",
-        label="tab:eval_results",
-        sig_df=None,
-        metric_col="nDCG@10" if not cfg.retrievers_only else "R@1000",
-    )
-    latex_output_file = helper.xp.resultspath / "results.tex"
-    with open(latex_output_file, "w") as f:
-        f.write(latex_table)
-    logging.info(f"LaTeX table saved to {latex_output_file}")
+        # Generate and save LaTeX table
+        latex_table = dataframe_to_latex(
+            df,
+            caption="Evaluation Results",
+            label="tab:eval_results",
+            sig_df=None,
+            metric_col="nDCG@10" if not cfg.retrievers_only else "R@1000",
+        )
+        latex_output_file = helper.xp.resultspath / "results.tex"
+        with open(latex_output_file, "w") as f:
+            f.write(latex_table)
+        logging.info(f"LaTeX table saved to {latex_output_file}")
+    else:
+        logging.info("Dry-run mode: skipping saving results to disk")
