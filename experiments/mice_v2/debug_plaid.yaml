@@ -32,3 +32,9 @@ evaluation: # Build Plaid index and Evaluate only on 3 small datasets
 
 retrieval:
     requirements: duration=3h & cpu(cores=16) & cuda(mem=20G)
+
+
+#override just for this experiment so spare compute (doesn't change much)
+max_length: 1024
+max_query_length: null
+max_doc_length: null

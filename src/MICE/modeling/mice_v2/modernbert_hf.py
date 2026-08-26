@@ -282,6 +282,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         hard_pruning: bool = False,
         hard_prune_threshold: float = 0.5,
         normalize_doc_embeds: bool = False,
+        use_upper_rope: bool = True,
         num_labels: int = 1,
         **kwargs,
     ):
@@ -300,6 +301,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.hard_pruning = hard_pruning
         self.hard_prune_threshold = hard_prune_threshold
         self.normalize_doc_embeds = normalize_doc_embeds
+        self.use_upper_rope = use_upper_rope
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -569,6 +571,17 @@ class ModernBertMiceTopLayer(nn.Module):
         q_hidden = q_hidden + cross_out
 
         # 2. Self Attention
+        if q_position_embeddings is None:
+            head_dim = self.config.hidden_size // self.config.num_attention_heads
+            seq_len = q_hidden.shape[1]
+            cos = torch.ones(
+                (1, seq_len, head_dim), dtype=q_hidden.dtype, device=q_hidden.device
+            )
+            sin = torch.zeros(
+                (1, seq_len, head_dim), dtype=q_hidden.dtype, device=q_hidden.device
+            )
+            q_position_embeddings = (cos, sin)
+
         if cu_seqlens_q is not None:
             # Unpadded Flash Attention 2 query self-attention
             self_out, _ = self.self_attn(
@@ -829,7 +842,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         d_pos_ids: Optional[torch.Tensor] = None,
     ):
         """
-        Postprocessing of the contextualized token representations: 
+        Postprocessing of the contextualized token representations:
         First centering the hs and L2 norm for FastPLAID index and calculating
         token utilities and applies soft gating or hard token pruning.
         Returns updated (d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids).
@@ -963,6 +976,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 query_ids, mask=query_mask, **kwargs
             )
             cu_seqlens_q = max_seqlen_q = None
+
+        if not getattr(self.config, "use_upper_rope", True):
+            q_pos_emb_top = None
 
         # 2. Document Bottom Layers (Bypassed if doc_hidden is given)
         if doc_hidden is not None:

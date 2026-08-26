@@ -89,6 +89,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     eval_phase_1: GridSearch[bool] = False
     """Whether to also evaluate the Phase 1 model (soft gating without hard pruning) when phase2_training is enabled."""
 
+    use_upper_rope: GridSearch[bool] = True
+    """Whether to use Rotary Position Embedding (RoPE) in upper interaction layers"""
+
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
@@ -118,6 +121,7 @@ def build_mice_v2(
             hard_pruning=True,
             hard_prune_threshold=cfg.hard_prune_threshold,
             normalize_doc_embeds=cfg.normalize_doc_embeds,
+            use_upper_rope=cfg.use_upper_rope,
             max_length=max_len,
             max_query_length=cfg.max_query_length,
             max_doc_length=cfg.max_doc_length,
@@ -135,6 +139,7 @@ def build_mice_v2(
             attn_implementation=attn_impl,
             utility_pred=cfg.utility_pred,
             normalize_doc_embeds=cfg.normalize_doc_embeds,
+            use_upper_rope=cfg.use_upper_rope,
             max_length=max_len,
             max_query_length=cfg.max_query_length,
             max_doc_length=cfg.max_doc_length,
@@ -152,6 +157,9 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     n_docs_layers = model_tags.get("n_docs_ctx_layers", cfg.n_docs_ctx_layers)
     doc_suffix = f"-d{n_docs_layers}" if n_docs_layers is not None else ""
 
+    use_upper_rope = model_tags.get("use_upper_rope", cfg.use_upper_rope)
+    rope_suffix = "" if use_upper_rope else "-norope"
+
     attn_impl = model_tags.get("attn_implementation", cfg.attn_implementation)
     attn_suffix = f"-{attn_impl}" if attn_impl else ""
 
@@ -160,7 +168,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(

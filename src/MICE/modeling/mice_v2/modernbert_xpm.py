@@ -356,7 +356,10 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     normalize_doc_embeds: Param[bool] = field(default=False, ignore_default=True)
     """Whether to L2-normalize document hidden states before utility prediction and upper interaction layers"""
 
-    _version: Constant[str] = "2.0.1"
+    use_upper_rope: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to use Rotary Position Embedding (RoPE) in upper interaction layers"""
+
+    _version: Constant[str] = "2.0.2"
 
     hf_model: nn.Module
 
@@ -389,6 +392,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 mice_config.hard_prune_threshold = self.hard_prune_threshold
             if self.normalize_doc_embeds:
                 mice_config.normalize_doc_embeds = True
+            if not self.use_upper_rope:
+                mice_config.use_upper_rope = False
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -404,6 +409,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 hard_pruning=self.hard_pruning,
                 hard_prune_threshold=self.hard_prune_threshold,
                 normalize_doc_embeds=self.normalize_doc_embeds,
+                use_upper_rope=self.use_upper_rope,
                 **config_kwargs,
             )
 
@@ -836,6 +842,7 @@ def mice_v2_scorer(
     hard_pruning: bool = False,
     hard_prune_threshold: float = 0.5,
     normalize_doc_embeds: bool = False,
+    use_upper_rope: bool = True,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -862,6 +869,7 @@ def mice_v2_scorer(
         hard_pruning=hard_pruning,
         hard_prune_threshold=hard_prune_threshold,
         normalize_doc_embeds=normalize_doc_embeds,
+        use_upper_rope=use_upper_rope,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

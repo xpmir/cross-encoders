@@ -1,0 +1,10 @@
+description:
+    Smaller variant of the base ettin 68 xp, allowing to validate architectural choices before full scale training.
+parent: ../_ettin68m.yaml
+
+# This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
+learner:
+    optimization:
+        max_epochs: 2000 #  x 256 x 100 = ??M Samples < 145M in full dataset
+        # 2k epochs is arnoud 4h training with 2 * H100 80G
+        num_warmup_steps: 20000

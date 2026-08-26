@@ -116,3 +116,30 @@ def test_mice_v2(
         scores = st_cross_encoder.predict([["What is the capital of France?", "Paris is the capital of France."]])
         assert scores is not None
         assert len(scores) == 1
+
+
+@pytest.mark.parametrize("use_upper_rope", [True, False])
+def test_mice_v2_use_upper_rope(use_upper_rope):
+    """Tests MICE V2 forward pass and serialization with use_upper_rope enabled vs disabled."""
+    model_id = "jhu-clsp/ettin-encoder-17m"
+    scorer_cfg, init_tasks = mice_v2_scorer(
+        hf_id=model_id,
+        n_contextualization_layers=2,
+        use_upper_rope=use_upper_rope,
+    )
+
+    test_forward_task = TestMiceV2ForwardTask.C(scorer=scorer_cfg).instance()
+    for init_task in init_tasks:
+        init_task.instance().execute()
+
+    test_forward_task.execute()
+    scorer = test_forward_task.scorer
+
+    assert scorer.hf_model.config.use_upper_rope == use_upper_rope
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = Path(tmpdir) / "model"
+        scorer.save_model(save_path)
+
+        standalone_model = AutoModelForSequenceClassification.from_pretrained(save_path)
+        assert standalone_model.config.use_upper_rope == use_upper_rope
