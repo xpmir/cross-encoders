@@ -159,6 +159,36 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                 src_layer_idx = scorer.n_contextualization_layers + idx
                 if src_layer_idx < len(full_backbone.model.layers):
                     src_layer = full_backbone.model.layers[src_layer_idx]
+                    norm_to_copy = (
+                        src_layer.attn_norm
+                        if hasattr(src_layer, "attn_norm")
+                        and isinstance(src_layer.attn_norm, nn.LayerNorm)
+                        else (
+                            src_layer.mlp_norm
+                            if hasattr(src_layer, "mlp_norm")
+                            and isinstance(src_layer.mlp_norm, nn.LayerNorm)
+                            else None
+                        )
+                    )
+                    if norm_to_copy is not None:
+                        top_layer.cross_attn_norm.load_state_dict(
+                            norm_to_copy.state_dict()
+                        )
+                        top_layer.self_attn_norm.load_state_dict(
+                            norm_to_copy.state_dict()
+                        )
+                        if isinstance(top_layer.doc_cross_attn_norm, nn.LayerNorm):
+                            top_layer.doc_cross_attn_norm.load_state_dict(
+                                norm_to_copy.state_dict()
+                            )
+
+                    if hasattr(src_layer, "mlp_norm") and isinstance(
+                        src_layer.mlp_norm, nn.LayerNorm
+                    ):
+                        top_layer.mlp_norm.load_state_dict(
+                            src_layer.mlp_norm.state_dict()
+                        )
+
                     top_layer.self_attn.load_state_dict(src_layer.attn.state_dict())
                     top_layer.cross_attn.Wqkv.load_state_dict(
                         src_layer.attn.Wqkv.state_dict()
@@ -169,16 +199,24 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                     top_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
 
         # 4. Rotary embeddings
-        if hasattr(full_backbone.model, "rotary_emb"):
-            logger.info("Seeding rotary_emb from backbone")
-            scorer.hf_model.model.rotary_emb.load_state_dict(
-                full_backbone.model.rotary_emb.state_dict()
-            )
+        logger.info("Seeding rotary_emb from backbone")
+        scorer.hf_model.model.rotary_emb.load_state_dict(
+            full_backbone.model.rotary_emb.state_dict()
+        )
 
         # 5. Final LayerNorm
-        if hasattr(full_backbone.model, "final_norm"):
-            logger.info("Seeding final_norm from backbone")
+        if getattr(scorer.hf_model.config, "bottom_final_norm", True):
+            logger.info("Seeding bottom final_norm from backbone")
             scorer.hf_model.model.final_norm.load_state_dict(
+                full_backbone.model.final_norm.state_dict()
+            )
+
+        if (
+            hasattr(scorer.hf_model, "top_final_norm")
+            and scorer.hf_model.top_final_norm is not None
+        ):
+            logger.info("Seeding top_final_norm from backbone")
+            scorer.hf_model.top_final_norm.load_state_dict(
                 full_backbone.model.final_norm.state_dict()
             )
 
@@ -356,7 +394,19 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     normalize_doc_embeds: Param[bool] = field(default=False, ignore_default=True)
     """Whether to L2-normalize document hidden states before utility prediction and upper interaction layers"""
 
-    _version: Constant[str] = "2.0.1"
+    use_upper_rope: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to use Rotary Position Embedding (RoPE) for query tokens in upper interaction layers (disabled for documents)"""
+
+    top_layers_doc_ln: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to use a document LayerNorm in top interaction layers and multiply token utilities post-LayerNorm"""
+
+    bottom_final_norm: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to apply LayerNorm at the output of bottom contextualization layers"""
+
+    top_final_norm: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to apply LayerNorm at the output of top interaction layers before classifier"""
+
+    _version: Constant[str] = "2.0.2"
 
     hf_model: nn.Module
 
@@ -389,6 +439,14 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 mice_config.hard_prune_threshold = self.hard_prune_threshold
             if self.normalize_doc_embeds:
                 mice_config.normalize_doc_embeds = True
+            if not self.use_upper_rope:
+                mice_config.use_upper_rope = False
+            if self.top_layers_doc_ln:
+                mice_config.top_layers_doc_ln = True
+            if not self.bottom_final_norm:
+                mice_config.bottom_final_norm = False
+            if self.top_final_norm:
+                mice_config.top_final_norm = True
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -404,6 +462,10 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 hard_pruning=self.hard_pruning,
                 hard_prune_threshold=self.hard_prune_threshold,
                 normalize_doc_embeds=self.normalize_doc_embeds,
+                use_upper_rope=self.use_upper_rope,
+                top_layers_doc_ln=self.top_layers_doc_ln,
+                bottom_final_norm=self.bottom_final_norm,
+                top_final_norm=self.top_final_norm,
                 **config_kwargs,
             )
 
@@ -836,6 +898,10 @@ def mice_v2_scorer(
     hard_pruning: bool = False,
     hard_prune_threshold: float = 0.5,
     normalize_doc_embeds: bool = False,
+    use_upper_rope: bool = True,
+    top_layers_doc_ln: bool = False,
+    bottom_final_norm: bool = True,
+    top_final_norm: bool = False,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -862,6 +928,10 @@ def mice_v2_scorer(
         hard_pruning=hard_pruning,
         hard_prune_threshold=hard_prune_threshold,
         normalize_doc_embeds=normalize_doc_embeds,
+        use_upper_rope=use_upper_rope,
+        top_layers_doc_ln=top_layers_doc_ln,
+        bottom_final_norm=bottom_final_norm,
+        top_final_norm=top_final_norm,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

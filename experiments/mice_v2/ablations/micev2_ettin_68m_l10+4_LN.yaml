@@ -1,0 +1,13 @@
+id: train_micev2_ettin68m_l10+4_abl_LN
+title: "Mice-Ettin-68m Training"
+description:
+    Trying with one document LN at the end of contextualization vs one for each interaction layers.
+
+module: MICE.experiments.micev2_training
+parent: ./_ettin68m_abl.yaml
+nb_repetitions: 2
+
+top_layers_doc_ln:
+    values_list:
+        - true
+        - false

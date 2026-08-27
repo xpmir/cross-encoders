@@ -19,7 +19,10 @@ from transformers.models.modernbert.modeling_modernbert import (
     ModernBertPreTrainedModel,
     eager_attention_forward,
 )
-from transformers.masking_utils import create_bidirectional_mask
+from transformers.masking_utils import (
+    create_bidirectional_mask,
+    create_bidirectional_sliding_window_mask,
+)
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.utils import is_flash_attn_2_available
@@ -282,6 +285,10 @@ class ModernBertMiceConfig(ModernBertConfig):
         hard_pruning: bool = False,
         hard_prune_threshold: float = 0.5,
         normalize_doc_embeds: bool = False,
+        use_upper_rope: bool = True,
+        top_layers_doc_ln: bool = False,
+        bottom_final_norm: bool = True,
+        top_final_norm: bool = False,
         num_labels: int = 1,
         **kwargs,
     ):
@@ -300,6 +307,10 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.hard_pruning = hard_pruning
         self.hard_prune_threshold = hard_prune_threshold
         self.normalize_doc_embeds = normalize_doc_embeds
+        self.use_upper_rope = use_upper_rope
+        self.top_layers_doc_ln = top_layers_doc_ln
+        self.bottom_final_norm = bottom_final_norm
+        self.top_final_norm = top_final_norm
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -526,6 +537,13 @@ class ModernBertMiceTopLayer(nn.Module):
         self.cross_attn_norm = nn.LayerNorm(
             config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
         )
+        if getattr(config, "top_layers_doc_ln", False):
+            self.doc_cross_attn_norm = nn.LayerNorm(
+                config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
+            )
+        else:
+            self.doc_cross_attn_norm = nn.Identity()
+
         self.cross_attn = ModernBertMiceCrossAttention(config, layer_idx=layer_idx)
 
         self.self_attn_norm = nn.LayerNorm(
@@ -542,6 +560,7 @@ class ModernBertMiceTopLayer(nn.Module):
         self,
         q_hidden: torch.Tensor,
         d_hidden: torch.Tensor,
+        d_utilities: Optional[torch.Tensor] = None,
         q_mask: Optional[torch.Tensor] = None,
         d_mask: Optional[torch.Tensor] = None,
         q_attn_mask: Optional[torch.Tensor] = None,
@@ -554,10 +573,15 @@ class ModernBertMiceTopLayer(nn.Module):
         max_seqlen_d: Optional[int] = None,
         **kwargs,
     ) -> torch.Tensor:
-        # 1. Cross Attention
+        # 1. Apply doc_cross_attn_norm (or Identity) to d_hidden
+        norm_d_hidden = self.doc_cross_attn_norm(d_hidden)
+        if d_utilities is not None:
+            norm_d_hidden = norm_d_hidden * d_utilities
+
+        # Cross Attention
         cross_out = self.cross_attn(
             self.cross_attn_norm(q_hidden),
-            d_hidden,
+            norm_d_hidden,
             q_mask=q_mask,
             d_mask=d_mask,
             cu_seqlens_q=cu_seqlens_q,
@@ -569,6 +593,17 @@ class ModernBertMiceTopLayer(nn.Module):
         q_hidden = q_hidden + cross_out
 
         # 2. Self Attention
+        if q_position_embeddings is None:
+            head_dim = self.config.hidden_size // self.config.num_attention_heads
+            seq_len = q_hidden.shape[1]
+            cos = torch.ones(
+                (1, seq_len, head_dim), dtype=q_hidden.dtype, device=q_hidden.device
+            )
+            sin = torch.zeros(
+                (1, seq_len, head_dim), dtype=q_hidden.dtype, device=q_hidden.device
+            )
+            q_position_embeddings = (cos, sin)
+
         if cu_seqlens_q is not None:
             # Unpadded Flash Attention 2 query self-attention
             self_out, _ = self.self_attn(
@@ -712,6 +747,13 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             config.num_labels if hasattr(config, "num_labels") else 1,
         )
 
+        if getattr(config, "top_final_norm", False):
+            self.top_final_norm = nn.LayerNorm(
+                config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
+            )
+        else:
+            self.top_final_norm = None
+
         if getattr(config, "utility_pred", False):
             self.utility_predictor = UtilityPredictor(config.hidden_size)
         else:
@@ -772,7 +814,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     max_length_k=int(max_seqlen),
                     **kwargs,
                 )
-            if hasattr(self.model, "final_norm") and self.model.final_norm is not None:
+            if getattr(self.config, "bottom_final_norm", True):
                 hidden = self.model.final_norm(hidden)
 
             pos_emb_top = position_embeddings.get(
@@ -781,16 +823,59 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             return hidden, pos_emb_top
         else:
             # Standard 3D Padded Path
-            if sequence_input.dtype in (torch.int32, torch.int64, torch.long):
-                outputs = self.model(
-                    input_ids=sequence_input, attention_mask=mask, **kwargs
-                )
-            else:
-                outputs = self.model(
-                    inputs_embeds=sequence_input, attention_mask=mask, **kwargs
-                )
+            if getattr(self.config, "bottom_final_norm", True):
+                if sequence_input.dtype in (torch.int32, torch.int64, torch.long):
+                    outputs = self.model(
+                        input_ids=sequence_input, attention_mask=mask, **kwargs
+                    )
+                else:
+                    outputs = self.model(
+                        inputs_embeds=sequence_input, attention_mask=mask, **kwargs
+                    )
 
-            last_hidden = outputs.last_hidden_state
+                last_hidden = outputs.last_hidden_state
+            else:
+                if sequence_input.dtype in (torch.int32, torch.int64, torch.long):
+                    inputs_embeds = self.model.embeddings(input_ids=sequence_input)
+                else:
+                    inputs_embeds = sequence_input
+
+                mask_kwargs = {
+                    "config": self.config,
+                    "inputs_embeds": inputs_embeds,
+                    "attention_mask": mask,
+                }
+                attention_mask_mapping = {
+                    "full_attention": create_bidirectional_mask(**mask_kwargs),
+                    "sliding_attention": create_bidirectional_sliding_window_mask(
+                        **mask_kwargs
+                    ),
+                }
+
+                position_ids = torch.arange(
+                    inputs_embeds.shape[1], device=inputs_embeds.device
+                ).unsqueeze(0)
+                position_embeddings = {}
+                for layer_type in set(self.config.layer_types):
+                    position_embeddings[layer_type] = self.model.rotary_emb(
+                        inputs_embeds, position_ids, layer_type
+                    )
+
+                hidden = inputs_embeds
+                for encoder_layer in self.model.layers:
+                    layer_type = getattr(
+                        encoder_layer,
+                        "attention_type",
+                        getattr(encoder_layer.attn, "layer_type", "full_attention"),
+                    )
+                    hidden = encoder_layer(
+                        hidden,
+                        attention_mask=attention_mask_mapping[layer_type],
+                        position_embeddings=position_embeddings[layer_type],
+                        **kwargs,
+                    )
+                last_hidden = hidden
+
             position_ids = torch.arange(
                 last_hidden.shape[1], device=last_hidden.device
             ).unsqueeze(0)
@@ -829,7 +914,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         d_pos_ids: Optional[torch.Tensor] = None,
     ):
         """
-        Postprocessing of the contextualized token representations: 
+        Postprocessing of the contextualized token representations:
         First centering the hs and L2 norm for FastPLAID index and calculating
         token utilities and applies soft gating or hard token pruning.
         Returns updated (d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids).
@@ -868,7 +953,12 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                         d_hidden, doc_mask, self.last_utilities, threshold=threshold
                     )
             else:
-                d_hidden = d_hidden * self.last_utilities
+                if not getattr(self.config, "top_layers_doc_ln", False):
+                    # Legacy soft gating: multiply in post-processing
+                    d_hidden = d_hidden * self.last_utilities
+                else:
+                    # Defer soft gating to top_layers (applied post-doc_cross_attn_norm)
+                    pass
         else:
             self.last_utilities = None
 
@@ -964,6 +1054,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
             cu_seqlens_q = max_seqlen_q = None
 
+        if not getattr(self.config, "use_upper_rope", True):
+            q_pos_emb_top = None
+
         # 2. Document Bottom Layers (Bypassed if doc_hidden is given)
         if doc_hidden is not None:
             if doc_mask is None:
@@ -1013,12 +1106,23 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
         )
 
+        d_utilities = (
+            self.last_utilities
+            if (
+                self.utility_predictor is not None
+                and not getattr(self.config, "hard_pruning", False)
+                and getattr(self.config, "top_layers_doc_ln", False)
+            )
+            else None
+        )
+
         if use_unpadded:
             num_top = len(self.top_layers)
             for i, top_layer in enumerate(self.top_layers):
                 q_hidden = top_layer(
                     q_hidden,
                     d_hidden,
+                    d_utilities=d_utilities,
                     q_position_embeddings=q_pos_emb_top,
                     is_last_layer=(i == num_top - 1),
                     cu_seqlens_q=cu_seqlens_q,
@@ -1049,6 +1153,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 q_hidden = top_layer(
                     q_hidden,
                     d_hidden,
+                    d_utilities=d_utilities,
                     q_mask=query_mask,
                     d_mask=doc_mask,
                     q_attn_mask=q_attn_mask,
@@ -1057,6 +1162,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     is_last_layer=(i == num_top - 1),
                 )
             cls_hidden = q_hidden[:, 0]
+
+        if self.top_final_norm is not None:
+            cls_hidden = self.top_final_norm(cls_hidden)
 
         logits = self.classifier(cls_hidden)
 

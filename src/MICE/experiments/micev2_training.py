@@ -89,6 +89,18 @@ class MiceV2_FineTuning(CE_FineTuning):
     eval_phase_1: GridSearch[bool] = False
     """Whether to also evaluate the Phase 1 model (soft gating without hard pruning) when phase2_training is enabled."""
 
+    use_upper_rope: GridSearch[bool] = True
+    """Whether to use Rotary Position Embedding (RoPE) in upper interaction layers"""
+
+    top_layers_doc_ln: GridSearch[bool] = False
+    """Whether to use a document LayerNorm in top interaction layers and multiply token utilities post-LayerNorm"""
+
+    bottom_final_norm: GridSearch[bool] = True
+    """Whether to apply LayerNorm at the output of bottom contextualization layers"""
+
+    top_final_norm: GridSearch[bool] = False
+    """Whether to apply LayerNorm at the output of top interaction layers before classifier"""
+
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
@@ -103,42 +115,39 @@ def build_mice_v2(
 
     attn_impl = cfg.attn_implementation or cfg.pref_attn_implementation
 
+    kwargs = dict(
+        hf_id=cfg.base,
+        n_contextualization_layers=cfg.n_contextualization_layers,
+        n_docs_ctx_layers=cfg.n_docs_ctx_layers,
+        n_interaction_layers=cfg.n_interaction_layers,
+        bound_bottom_layers=cfg.bound_bottom_layers,
+        attn_implementation=attn_impl,
+        utility_pred=cfg.utility_pred,
+        normalize_doc_embeds=cfg.normalize_doc_embeds,
+        use_upper_rope=cfg.use_upper_rope,
+        top_layers_doc_ln=cfg.top_layers_doc_ln,
+        bottom_final_norm=cfg.bottom_final_norm,
+        top_final_norm=cfg.top_final_norm,
+        max_length=max_len,
+        max_query_length=cfg.max_query_length,
+        max_doc_length=cfg.max_doc_length,
+    )
+
     if phase_2:
         logging.info(
             f"[Phase 2] Building MICE V2 model for hard pruning fine-tuning (threshold={cfg.hard_prune_threshold})"
         )
-        return mice_v2_scorer(
-            hf_id=cfg.base,
-            n_contextualization_layers=cfg.n_contextualization_layers,
-            n_docs_ctx_layers=cfg.n_docs_ctx_layers,
-            n_interaction_layers=cfg.n_interaction_layers,
-            bound_bottom_layers=cfg.bound_bottom_layers,
-            attn_implementation=attn_impl,
+        kwargs.update(
             utility_pred=True,
             hard_pruning=True,
             hard_prune_threshold=cfg.hard_prune_threshold,
-            normalize_doc_embeds=cfg.normalize_doc_embeds,
-            max_length=max_len,
-            max_query_length=cfg.max_query_length,
-            max_doc_length=cfg.max_doc_length,
         )
     else:
         logging.info(
             f"[Phase 1] Building MICE V2 model for soft gating training (utility_pred={cfg.utility_pred})"
         )
-        return mice_v2_scorer(
-            hf_id=cfg.base,
-            n_contextualization_layers=cfg.n_contextualization_layers,
-            n_docs_ctx_layers=cfg.n_docs_ctx_layers,
-            n_interaction_layers=cfg.n_interaction_layers,
-            bound_bottom_layers=cfg.bound_bottom_layers,
-            attn_implementation=attn_impl,
-            utility_pred=cfg.utility_pred,
-            normalize_doc_embeds=cfg.normalize_doc_embeds,
-            max_length=max_len,
-            max_query_length=cfg.max_query_length,
-            max_doc_length=cfg.max_doc_length,
-        )
+
+    return mice_v2_scorer(**kwargs)
 
 
 def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
@@ -152,6 +161,18 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     n_docs_layers = model_tags.get("n_docs_ctx_layers", cfg.n_docs_ctx_layers)
     doc_suffix = f"-d{n_docs_layers}" if n_docs_layers is not None else ""
 
+    use_upper_rope = model_tags.get("use_upper_rope", cfg.use_upper_rope)
+    rope_suffix = "" if use_upper_rope else "-norope"
+
+    top_layers_doc_ln = model_tags.get("top_layers_doc_ln", cfg.top_layers_doc_ln)
+    doc_ln_suffix = "-docln" if top_layers_doc_ln else ""
+
+    bottom_final_norm = model_tags.get("bottom_final_norm", cfg.bottom_final_norm)
+    nobottomln_suffix = "" if bottom_final_norm else "-nobottomln"
+
+    top_final_norm = model_tags.get("top_final_norm", cfg.top_final_norm)
+    topln_suffix = "-topln" if top_final_norm else ""
+
     attn_impl = model_tags.get("attn_implementation", cfg.attn_implementation)
     attn_suffix = f"-{attn_impl}" if attn_impl else ""
 
@@ -160,7 +181,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(
