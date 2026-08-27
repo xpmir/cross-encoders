@@ -7,6 +7,8 @@ module: MICE.experiments.micev2_training
 parent: ./_ettin68m_abl.yaml
 nb_repetitions: 2
 
+top_layers_doc_ln: true
+bottom_final_norm: false
 top_final_norm:
     values_list:
         - true

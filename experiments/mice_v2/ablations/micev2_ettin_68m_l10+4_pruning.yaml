@@ -1,0 +1,31 @@
+id: train_micev2_ettin68m_l10+4_abl_pruning
+title: "Mice-Ettin-68m Bottom LayerNorm Ablation"
+description:
+    Ablation comparing applying vs skipping LayerNorm at the output of bottom contextualization layers.
+
+module: MICE.experiments.micev2_training
+parent: ./_ettin68m_abl.yaml
+nb_repetitions: 2
+
+
+# This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
+learner:
+    optimization:
+        max_epochs: 2000 #  x 256 x 100 = ??M Samples < 145M in full dataset
+
+
+top_layers_doc_ln: true
+bottom_final_norm: false
+
+# Test Utility Soft Gating & Phase 2 Hard Token Pruning
+utility_pred: true
+phase2_training: true
+hard_prune_threshold: 0.1
+phase2_max_epochs: 1000
+
+eval_phase_1: false
+
+lambda_reg:
+    values_list:
+        - 1e-1
+        - 2e-1
