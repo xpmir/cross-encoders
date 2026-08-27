@@ -316,3 +316,39 @@ def test_top_layers_doc_ln_backbone_seeding():
     src_attn_norm = full_backbone.model.layers[2].attn_norm
     assert doc_ln.weight is not None
     assert torch.equal(doc_ln.weight, src_attn_norm.weight)
+
+
+def test_bottom_top_final_norm_toggles():
+    """Test bottom_final_norm and top_final_norm toggles and backbone seeding."""
+    from transformers import AutoModelForSequenceClassification
+
+    scorer_cfg, init_tasks = mice_v2_scorer(
+        hf_id="jhu-clsp/ettin-encoder-17m",
+        n_contextualization_layers=2,
+        utility_pred=True,
+        bottom_final_norm=False,
+        top_final_norm=True,
+    )
+    for task in init_tasks:
+        inst_task = task.instance()
+        inst_task.execute()
+        scorer = inst_task.scorer
+
+    full_backbone = AutoModelForSequenceClassification.from_pretrained("jhu-clsp/ettin-encoder-17m")
+
+    assert scorer.hf_model.config.bottom_final_norm is False
+    assert scorer.hf_model.config.top_final_norm is True
+    assert isinstance(scorer.hf_model.top_final_norm, torch.nn.LayerNorm)
+
+    # Verify top_final_norm was seeded from backbone final_norm
+    assert torch.equal(scorer.hf_model.top_final_norm.weight, full_backbone.model.final_norm.weight)
+
+    # Test forward pass in unpadded and padded modes
+    query_ids = torch.randint(0, 1000, (2, 8))
+    query_mask = torch.ones((2, 8), dtype=torch.bool)
+    doc_ids = torch.randint(0, 1000, (2, 16))
+    doc_mask = torch.ones((2, 16), dtype=torch.bool)
+
+    with torch.no_grad():
+        out = scorer.hf_model(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask)
+    assert out.logits.shape == (2, 1)

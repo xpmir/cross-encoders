@@ -199,16 +199,24 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                     top_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
 
         # 4. Rotary embeddings
-        if hasattr(full_backbone.model, "rotary_emb"):
-            logger.info("Seeding rotary_emb from backbone")
-            scorer.hf_model.model.rotary_emb.load_state_dict(
-                full_backbone.model.rotary_emb.state_dict()
-            )
+        logger.info("Seeding rotary_emb from backbone")
+        scorer.hf_model.model.rotary_emb.load_state_dict(
+            full_backbone.model.rotary_emb.state_dict()
+        )
 
         # 5. Final LayerNorm
-        if hasattr(full_backbone.model, "final_norm"):
-            logger.info("Seeding final_norm from backbone")
+        if getattr(scorer.hf_model.config, "bottom_final_norm", True):
+            logger.info("Seeding bottom final_norm from backbone")
             scorer.hf_model.model.final_norm.load_state_dict(
+                full_backbone.model.final_norm.state_dict()
+            )
+
+        if (
+            hasattr(scorer.hf_model, "top_final_norm")
+            and scorer.hf_model.top_final_norm is not None
+        ):
+            logger.info("Seeding top_final_norm from backbone")
+            scorer.hf_model.top_final_norm.load_state_dict(
                 full_backbone.model.final_norm.state_dict()
             )
 
@@ -387,10 +395,16 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     """Whether to L2-normalize document hidden states before utility prediction and upper interaction layers"""
 
     use_upper_rope: Param[bool] = field(default=True, ignore_default=True)
-    """Whether to use Rotary Position Embedding (RoPE) in upper interaction layers"""
+    """Whether to use Rotary Position Embedding (RoPE) for query tokens in upper interaction layers (disabled for documents)"""
 
     top_layers_doc_ln: Param[bool] = field(default=False, ignore_default=True)
     """Whether to use a document LayerNorm in top interaction layers and multiply token utilities post-LayerNorm"""
+
+    bottom_final_norm: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to apply LayerNorm at the output of bottom contextualization layers"""
+
+    top_final_norm: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to apply LayerNorm at the output of top interaction layers before classifier"""
 
     _version: Constant[str] = "2.0.2"
 
@@ -429,6 +443,10 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 mice_config.use_upper_rope = False
             if self.top_layers_doc_ln:
                 mice_config.top_layers_doc_ln = True
+            if not self.bottom_final_norm:
+                mice_config.bottom_final_norm = False
+            if self.top_final_norm:
+                mice_config.top_final_norm = True
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -446,6 +464,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 normalize_doc_embeds=self.normalize_doc_embeds,
                 use_upper_rope=self.use_upper_rope,
                 top_layers_doc_ln=self.top_layers_doc_ln,
+                bottom_final_norm=self.bottom_final_norm,
+                top_final_norm=self.top_final_norm,
                 **config_kwargs,
             )
 
@@ -880,6 +900,8 @@ def mice_v2_scorer(
     normalize_doc_embeds: bool = False,
     use_upper_rope: bool = True,
     top_layers_doc_ln: bool = False,
+    bottom_final_norm: bool = True,
+    top_final_norm: bool = False,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -908,6 +930,8 @@ def mice_v2_scorer(
         normalize_doc_embeds=normalize_doc_embeds,
         use_upper_rope=use_upper_rope,
         top_layers_doc_ln=top_layers_doc_ln,
+        bottom_final_norm=bottom_final_norm,
+        top_final_norm=top_final_norm,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

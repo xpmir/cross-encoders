@@ -7,16 +7,6 @@ module: MICE.experiments.micev2_training
 parent: ./_ettin68m_abl.yaml
 nb_repetitions: 2
 
-learner:
-    optimization:
-        max_epochs: 3000 # 6k x 256 x 100 = ~150M Samples ~ 145M in full dataset
-
-evaluation: #default = Minified tests
-    eval_checkpoint: "last"
-    all_datasets: false
-    in_domain: false
-    beir13: true
-
 top_layers_doc_ln:
     values_list:
         - true
