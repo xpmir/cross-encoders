@@ -519,8 +519,14 @@ class MiceCrossEncoder(AbstractModuleScorer):
         loader = self.loader_config(Path(path))
         TorchHFHub(loader).save_pretrained(path)
 
-    def write_hub_extras(self, save_directory: Path):
+    def write_hub_extras(
+        self,
+        save_directory: Path,
+        tb_path: Optional[Union[str, Path]] = None,
+    ):
         """Called by TorchHFHub to save additional files."""
+        import shutil
+
         if hasattr(self, "config") and self.config is not None:
             self.config.save_pretrained(save_directory)
         if hasattr(self, "head_config") and self.head_config is not None:
@@ -531,6 +537,32 @@ class MiceCrossEncoder(AbstractModuleScorer):
             and self.tokenizer.tokenizer is not None
         ):
             self.tokenizer.tokenizer.save_pretrained(save_directory)
+
+        # Copy TensorBoard log directory if available
+        tb_dir = (
+            Path(tb_path)
+            if tb_path
+            else getattr(self, "_tb_path", None)
+            or (
+                Path(self._export_metadata["tb_path"])
+                if hasattr(self, "_export_metadata")
+                and isinstance(self._export_metadata, dict)
+                and self._export_metadata.get("tb_path")
+                else None
+            )
+        )
+
+        if tb_dir and Path(tb_dir).exists():
+            target_tb_dir = Path(save_directory) / "runs"
+            try:
+                if target_tb_dir.exists():
+                    shutil.rmtree(target_tb_dir)
+                shutil.copytree(tb_dir, target_tb_dir, symlinks=False)
+                logger.info(f"Copied TensorBoard logs from {tb_dir} to {target_tb_dir}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to copy TensorBoard logs to {target_tb_dir}: {e}"
+                )
 
         # Write model card (README.md)
         try:

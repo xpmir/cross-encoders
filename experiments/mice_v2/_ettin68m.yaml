@@ -28,7 +28,14 @@ ettin_subset_exclude: [] # Train on full reranker-v1 data
 
 nb_repetitions: 2
 
+
+#common to all Mice v2 experiments, but can be overridden in ablations
+pref_attn_implementation: flash_attention_2
+top_layers_doc_ln: false # -> best is true
+bottom_final_norm: true # -> best is false
+top_final_norm: false # -> best is ????
+
+# for ettin-68m
 base: jhu-clsp/ettin-encoder-68m
 n_contextualization_layers: 10
 n_interaction_layers: 4
-pref_attn_implementation: flash_attention_2
