@@ -14,6 +14,3 @@
 [submodule "datamaestro"]
 	path = datamaestro
 	url = https://github.com/VictorMorand/datamaestro.git
-[submodule "fast-plaid"]
-	path = fast-plaid
-	url = git@github.com:VictorMorand/fast-plaid.git
