@@ -4,7 +4,7 @@ description:
     Ablation comparing applying vs skipping LayerNorm at the output of top interaction layers before classification head.
 
 module: MICE.experiments.micev2_training
-parent: ./_ettin68m_abl.yaml
+parent: ../_ettin68m_abl.yaml
 nb_repetitions: 2
 
 top_layers_doc_ln: true

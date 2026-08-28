@@ -422,31 +422,50 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         logger.info("Initializing ModernBertMiceCrossEncoder")
         self.tokenizer.initialize()
 
-        # Instantiate model config (MICE config if already exported, or backbone config skeleton)
         loaded_config = AutoConfig.from_pretrained(self.hf_id)
-        if (
+        is_mice_model = (
             isinstance(loaded_config, ModernBertMiceConfig)
             or getattr(loaded_config, "model_type", None) == "modernbert_mice"
-        ):
+        )
+        if is_mice_model:
             logger.info(f"Loaded existing MICE config from {self.hf_id}")
             mice_config = loaded_config
+
+            def apply_override(
+                attr_name: str, self_val, target_cfg_attr: Optional[str] = None
+            ):
+                cfg_attr = target_cfg_attr or attr_name
+                ckpt_val = getattr(mice_config, cfg_attr)
+                if self_val != ckpt_val:
+                    logger.warning(
+                        f"[MICE Config Override] Overriding checkpoint parameter '{cfg_attr}' "
+                        f"from '{ckpt_val}' (saved in {self.hf_id}/config.json) to '{self_val}' "
+                        f"(specified on {self.__class__.__name__}). "
+                        "This creates an architectural discrepancy with pre-trained weights and may require retraining!"
+                    )
+                    setattr(mice_config, cfg_attr, self_val)
+
             if self.attn_implementation is not None:
-                mice_config._attn_implementation = self.attn_implementation
+                apply_override(
+                    "attn_implementation",
+                    self.attn_implementation,
+                    "_attn_implementation",
+                )
             if self.utility_pred:
-                mice_config.utility_pred = True
+                apply_override("utility_pred", True)
             if self.hard_pruning:
-                mice_config.hard_pruning = True
-                mice_config.hard_prune_threshold = self.hard_prune_threshold
+                apply_override("hard_pruning", True)
+                apply_override("hard_prune_threshold", self.hard_prune_threshold)
             if self.normalize_doc_embeds:
-                mice_config.normalize_doc_embeds = True
+                apply_override("normalize_doc_embeds", True)
             if not self.use_upper_rope:
-                mice_config.use_upper_rope = False
+                apply_override("use_upper_rope", False)
             if self.top_layers_doc_ln:
-                mice_config.top_layers_doc_ln = True
+                apply_override("top_layers_doc_ln", True)
             if not self.bottom_final_norm:
-                mice_config.bottom_final_norm = False
+                apply_override("bottom_final_norm", False)
             if self.top_final_norm:
-                mice_config.top_final_norm = True
+                apply_override("top_final_norm", True)
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -469,7 +488,14 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 **config_kwargs,
             )
 
-        hf_model = ModernBertMiceForSequenceClassification(mice_config)
+        if is_mice_model:
+            logger.info(f"Loading pretrained MICE weights from {self.hf_id}")
+            hf_model = ModernBertMiceForSequenceClassification.from_pretrained(
+                self.hf_id, config=mice_config
+            )
+        else:
+            hf_model = ModernBertMiceForSequenceClassification(mice_config)
+
         self.add_module("hf_model", hf_model)
 
         if self.hard_pruning:
@@ -825,6 +851,14 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         self.hf_model.config._name_or_path = model_name_id
         if hasattr(self.hf_model.config, "base_model_name_or_path"):
             self.hf_model.config.base_model_name_or_path = model_name_id
+
+        # Set default ST activation function in config to Identity (raw logits)
+        self.hf_model.config.sbert_ce_default_activation_function = (
+            "torch.nn.modules.linear.Identity"
+        )
+        self.hf_model.config.sentence_transformers = {
+            "activation_fn": "torch.nn.modules.linear.Identity"
+        }
 
         # 1. Save HF model (config.json + model.safetensors file)
         self.hf_model.save_pretrained(path, safe_serialization=True)

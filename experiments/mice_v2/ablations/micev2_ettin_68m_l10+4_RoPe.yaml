@@ -4,7 +4,7 @@ description:
     Base Training for Ettin-68m-based MICE model.
 
 module: MICE.experiments.micev2_training
-parent: ./_ettin68m_abl.yaml
+parent: ../_ettin68m_abl.yaml
 nb_repetitions: 2
 
 use_upper_rope:
