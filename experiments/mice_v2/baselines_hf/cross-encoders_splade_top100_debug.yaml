@@ -8,10 +8,11 @@ pre_experiment: pre_experiment
 
 
 scorers_st_id:
-  - cross-encoder/ettin-reranker-150m-v1
-  - VictorMorand/MiceV2-l10-ettin-68m
+  # - cross-encoder/ettin-reranker-150m-v1
+  - VictorMorand/MiceV2-l10p4-ettin-68m
 scorers_hf_id:
-  - VictorMorand/MiceV2-l10-ettin-68m
+  - VictorMorand/MiceV2-l10p4-ettin-68m
+  # - VictorMorand/MiceV2-l10-ettin-68m
 
 retrievers_hf_id:
   - naver/splade-v3-distilbert
@@ -22,7 +23,7 @@ indexation:
   batch_size: 128
 
 retrieval:
-  requirements: duration=19h & cpu(cores=4, mem=50G) & cuda(mem=20G)
+  requirements: duration=2h & cpu(cores=4, mem=10G) & cuda(mem=50G)
   batch_size: 64
   k: 100
 

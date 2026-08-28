@@ -1,0 +1,40 @@
+id: train_micev2_ettin68m_l10+4_plaid
+title: "Mice-Ettin-68m Training"
+description:
+    Training a Mice Model with
+
+module: MICE.experiments.micev2_training
+parent: _ettin68m_abl.yaml
+
+
+nb_repetitions: 1
+# broad config
+top_layers_doc_ln: true # default false, best is true
+bottom_final_norm: false # default true, best is false
+top_final_norm: false # default false, best false
+
+# Utility Soft Gating & Phase 2 Hard Token Pruning
+normalize_doc_embeds: true # default false, need true for PLAID
+utility_pred: true
+lambda_reg: 0.1
+hard_prune_threshold: 0.1
+# training
+phase2_training: true
+learner:
+    optimization:
+        max_epochs: 2000 #  x 256 x 100 = ??M Samples < 145M in full dataset
+phase2_max_epochs: 1000
+
+
+## Evalutation config
+eval_phase_1: false
+
+evaluation: # Build Plaid index and Evaluate only on 3 small datasets
+    eval_checkpoint: "last"
+    all_datasets: false
+    in_domain: false
+    beir13: false
+    datasets:
+        - nfcorpus
+        - arguana
+        - scifact

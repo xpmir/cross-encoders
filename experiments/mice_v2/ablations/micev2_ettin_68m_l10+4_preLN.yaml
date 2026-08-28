@@ -4,7 +4,7 @@ description:
     Ablation comparing pure Pre-LN continuous residual stream (bottom_final_norm=false, top_final_norm=true) against baseline.
 
 module: MICE.experiments.micev2_training
-parent: ./_ettin68m_abl.yaml
+parent: ../_ettin68m_abl.yaml
 nb_repetitions: 2
 
 grid:

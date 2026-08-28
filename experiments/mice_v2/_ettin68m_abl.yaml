@@ -1,8 +1,8 @@
 description:
     Smaller variant of the base ettin 68 xp, allowing to validate architectural choices before full scale training.
-parent: ../_ettin68m.yaml
+parent: _ettin68m.yaml
 
-# This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
+# Smaller Training, More Validation to monitor various stuff
 learner:
     optimization:
         max_epochs: 3000 #  x 256 x 100 = ??M Samples < 145M in full dataset
@@ -11,7 +11,12 @@ learner:
     checkpoint_interval: 100
     validation_interval: 25
 
+#common to all Mice v2 experiments, but can be overridden in ablations
+top_layers_doc_ln: false # default false, best is true
+bottom_final_norm: true # default true, best is false
+top_final_norm: false # default false, best false
 
+# Eval only on BEIR
 evaluation: #default = Minified tests
     eval_checkpoint: "last"
     all_datasets: false
