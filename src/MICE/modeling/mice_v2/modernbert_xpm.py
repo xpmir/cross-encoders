@@ -3,7 +3,7 @@ Experimaestro-IR integration for ModernBERT MICE V2 architecture.
 """
 
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Union
 import logging
 import shutil
 import json
@@ -598,8 +598,10 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         sections = []
         template_path = Path(__file__).parent / "Micev2Card.md"
 
-        export_dir = getattr(self, "_last_export_dir", None) or getattr(
-            getattr(self, "__config__", None), "_last_export_dir", None
+        config = getattr(self, "__config__", None)
+
+        export_dir = getattr(self, "_last_export_dir", None) or (
+            getattr(config, "_last_export_dir", None) if config else None
         )
         total_params_str = "N/A"
         if export_dir:
@@ -617,13 +619,13 @@ class ModernBertMiceScorer(AbstractModuleScorer):
 
         metadata = (
             getattr(self, "_export_metadata", None)
-            or getattr(getattr(self, "__config__", None), "_export_metadata", {})
+            or (getattr(config, "_export_metadata", {}) if config else {})
             or {}
         )
         base_name = getattr(self, "hf_id", "ModernBERT")
         model_name = (
             getattr(self, "model_name", None)
-            or getattr(getattr(self, "__config__", None), "model_name", None)
+            or (getattr(config, "model_name", None) if config else None)
             or (Path(export_dir).name if export_dir else "MICE v2 Model")
         )
 
@@ -654,6 +656,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 model_name=str(model_name),
                 pipeline_tag="text-classification",
             )
+            training_strat = metadata.get("training_strat") or metadata.get(
+                "loss", "N/A"
+            )
             card = ModelCard.from_template(
                 card_data,
                 template_path=str(template_path),
@@ -662,6 +667,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 total_parameters=total_params_str,
                 n_contextualization_layers=n_ctx,
                 n_interaction_layers=n_inter,
+                training_strat=training_strat,
                 loss=metadata.get("loss", "N/A"),
             )
             sections.append(ReadmeSection(key="model_card", content=card.content))
@@ -669,7 +675,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         # 2. Separate Evaluations Section (positioned after model_card)
         results_md = metadata.get("results")
         if results_md:
-            retriever = metadata.get("retriever", "N/A")
+            retriever = metadata.get("retriever") or "bm25"
             k = metadata.get("k", "N/A")
             eval_content = f"## Evaluations\n\nWe provide evaluations of this cross-encoder re-ranking top `{k}` documents retrieved by `{retriever}`:\n\n{results_md}"
             sections.append(
@@ -682,11 +688,46 @@ class ModernBertMiceScorer(AbstractModuleScorer):
 
         return sections
 
-    def write_hub_extras(self, save_directory: Path):
+    def write_hub_extras(
+        self,
+        save_directory: Path,
+        tb_path: Optional[Union[str, Path]] = None,
+    ):
         """Called by TorchHFHub during model export."""
+
         save_path = Path(save_directory)
         self._last_export_dir = save_path
         self.save_model(save_path)
+
+        # Copy TensorBoard log directory if available
+        tb_dir = (
+            Path(tb_path)
+            if tb_path
+            else getattr(self, "_tb_path", None)
+            or (
+                Path(self._export_metadata["tb_path"])
+                if hasattr(self, "_export_metadata")
+                and isinstance(self._export_metadata, dict)
+                and self._export_metadata.get("tb_path")
+                else None
+            )
+        )
+
+        if tb_dir and Path(tb_dir).exists():
+            target_tb_dir = save_path / "runs"
+            try:
+                if target_tb_dir.exists():
+                    shutil.rmtree(target_tb_dir)
+                shutil.copytree(tb_dir, target_tb_dir, symlinks=False)
+                logger.info(f"Copied TensorBoard logs from {tb_dir} to {target_tb_dir}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to copy TensorBoard logs to {target_tb_dir}: {e}"
+                )
+        else:
+            logger.warning(
+                f"No TensorBoard log directory found for model export (searched tb_path={tb_path}, _tb_path={getattr(self, '_tb_path', None)}, export_dir={self._last_export_dir})"
+            )
 
     def _write_st_metadata(self, save_directory: Path):
         """Write native SentenceTransformers metadata files for CrossEncoder compatibility."""
@@ -736,6 +777,10 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         save_directory: str,
         repo_id: Optional[str] = None,
         metadata: Optional[dict] = None,
+        tb_path: Optional[Union[str, Path]] = None,
+        retriever: Optional[str] = None,
+        k: Optional[Union[int, str]] = None,
+        training_strat: Optional[str] = None,
     ):
         """Export model in Sentence Transformers compatible format, including model card."""
         from xpm_torch.module import assemble_readme_sections
@@ -744,10 +789,24 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         self._last_export_dir = save_path
         if repo_id:
             self.model_name = repo_id
-        if metadata:
-            self._export_metadata = metadata
 
-        self.write_hub_extras(save_path)
+        current_metadata = dict(getattr(self, "_export_metadata", {}) or {})
+        if metadata:
+            current_metadata.update(metadata)
+        if retriever:
+            current_metadata["retriever"] = retriever
+        if k:
+            current_metadata["k"] = k
+        if training_strat:
+            current_metadata["training_strat"] = training_strat
+            current_metadata.setdefault("loss", training_strat)
+        if tb_path:
+            current_metadata["tb_path"] = str(tb_path)
+            self._tb_path = Path(tb_path)
+
+        self._export_metadata = current_metadata
+
+        self.write_hub_extras(save_path, tb_path=tb_path)
         self._write_st_metadata(save_path)
         sections = self.hub_readme_sections()
         if sections:

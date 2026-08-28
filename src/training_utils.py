@@ -51,6 +51,7 @@ from format import (
     aggregations,
     aggregation_hf,
     dataframe_to_latex,
+    loss_names,
 )
 
 logger = logging.getLogger(__name__)
@@ -417,22 +418,31 @@ def export_model(
     csv_results.to_csv(best_model_path / "results.csv", index=False)
     logger.info(f"Model results saved to {best_model_path / 'results.csv'}")
 
-    learner_tags = {
-        k: v for k, v in best_tags.items() if k not in ["validation", "metric"]
+    eval_only_tags = {
+        "validation",
+        "metric",
+        "first_stage",
+        "checkpoint",
+        "plaid_retriever",
     }
+    learner_tags = {k: v for k, v in best_tags.items() if k not in eval_only_tags}
+    logger.info(f"Looking up Learner task with tags: {learner_tags}")
     best_model_learner = get_task_by_tags(learners, learner_tags)
     if best_model_learner:
-        symlink_path = best_model_path / "job_logs"
-        if symlink_path.exists():
-            symlink_path.unlink()
-        symlink_path.symlink_to(best_model_learner.jobpath)
-
+        logger.info(f"Found matching Learner task: {best_model_learner.jobpath.name}")
         tb_path = best_model_learner.logpath
-        if tb_path.exists():
-            tb_symlink_path = best_model_path / "tensorboard_logs"
-            if tb_symlink_path.exists():
-                tb_symlink_path.unlink()
-            tb_symlink_path.symlink_to(tb_path)
+        if not tb_path.exists():
+            logger.warning(f"Learner logpath does not exist: {tb_path}")
+    else:
+        logger.warning(
+            f"Could not find Learner task matching tags {learner_tags} among {len(learners)} registered learners"
+        )
+
+    tb_log_path = (
+        best_model_learner.logpath
+        if (best_model_learner and best_model_learner.logpath.exists())
+        else None
+    )
 
     # Export to HF format using ExportAction
     best_model_loader = get_task_by_tags(all_weights, best_tags)
@@ -441,19 +451,56 @@ def export_model(
             model_obj = best_model_loader.model
             model_obj._last_export_dir = best_model_path
             model_obj.model_name = model_name
-            model_obj._export_metadata = {
-                "loss": best_tags.get("learner.loss") or best_tags.get("loss", "N/A"),
-                "k": getattr(getattr(best_cfg, "retrieval", None), "k", "N/A")
-                if best_cfg
-                else "N/A",
-                "retriever": getattr(best_cfg, "retriever", "N/A")
-                if best_cfg
-                else "N/A",
+
+            retriever_name = (
+                best_tags.get("first_stage")
+                or (best_cfg.retriever if best_cfg else None)
+                or "bm25"
+            )
+            if not retriever_name or str(retriever_name).lower() == "nan":
+                retriever_name = "bm25"
+
+            top_k = (
+                best_tags.get("k")
+                or best_tags.get("retrieval.k")
+                or (best_cfg.retrieval.k if best_cfg else "N/A")
+            )
+
+            raw_loss = (
+                best_tags.get("loss")
+                or best_tags.get("learner.loss")
+                or (best_cfg.learner.loss if best_cfg else "N/A")
+            )
+            loss_name = loss_names.get(str(raw_loss), str(raw_loss))
+
+            export_metadata = {
+                "loss": loss_name,
+                "training_strat": loss_name,
+                "k": top_k,
+                "retriever": retriever_name,
+                "tb_path": str(tb_log_path) if tb_log_path else None,
                 "results": md_results.to_markdown(index=False),
             }
+
+            if tb_log_path:
+                model_obj._tb_path = tb_log_path
+            model_obj._export_metadata = export_metadata
+
         logger.info(f"Exporting model using ExportAction to {best_model_path}")
         action_cfg = best_model_loader.export_action(default_name=model_name)
         action_inst = action_cfg.instance()
+
+        # Attach metadata to action_inst loader & model so it is accessible during write_hub_extras
+        if hasattr(action_inst, "loader") and action_inst.loader is not None:
+            if (
+                hasattr(action_inst.loader, "model")
+                and action_inst.loader.model is not None
+            ):
+                action_inst.loader.model._export_metadata = export_metadata
+                action_inst.loader.model.model_name = model_name
+                if tb_log_path:
+                    action_inst.loader.model._tb_path = tb_log_path
+
         action_inst.export_to_folder(best_model_path)
     else:
         logger.warning(f"Could not find model task for tags {best_tags} in all_weights")

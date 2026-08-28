@@ -221,7 +221,11 @@ def main():
 
         weights_path = model_folder / "model_weights.pt"
         card_path = model_folder / "README.md"
-        logs_dir = model_folder / "tensorboard_logs"
+        logs_dir = (
+            (model_folder / "runs")
+            if (model_folder / "runs").exists()
+            else (model_folder / "tensorboard_logs")
+        )
         config_path = model_folder / "config.yaml"
 
         if not weights_path.exists() or not card_path.exists():
