@@ -15,6 +15,10 @@ normalize_doc_embeds:
 
 plaid:
     use_plaid: true
+    buffer_size:
+        values_list: [1000, 5000, 10000]
+    n_bits: 
+        values_list: [2, 4, 8] 
 
 evaluation: # Build Plaid index and Evaluate only on 3 small datasets
     eval_checkpoint: "last"
@@ -23,8 +27,6 @@ evaluation: # Build Plaid index and Evaluate only on 3 small datasets
     beir13: false
     datasets:
         - nfcorpus
-        - arguana
-        - scifact
 
 retrieval:
     requirements: duration=3h & cpu(cores=16) & cuda(mem=20G)
