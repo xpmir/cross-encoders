@@ -435,16 +435,15 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 attr_name: str, self_val, target_cfg_attr: Optional[str] = None
             ):
                 cfg_attr = target_cfg_attr or attr_name
-                if hasattr(mice_config, cfg_attr):
-                    ckpt_val = getattr(mice_config, cfg_attr)
-                    if self_val != ckpt_val:
-                        logger.warning(
-                            f"[MICE Config Override] Overriding checkpoint parameter '{cfg_attr}' "
-                            f"from '{ckpt_val}' (saved in {self.hf_id}/config.json) to '{self_val}' "
-                            f"(specified on {self.__class__.__name__}). "
-                            "This creates an architectural discrepancy with pre-trained weights and may require retraining!"
-                        )
-                        setattr(mice_config, cfg_attr, self_val)
+                ckpt_val = getattr(mice_config, cfg_attr)
+                if self_val != ckpt_val:
+                    logger.warning(
+                        f"[MICE Config Override] Overriding checkpoint parameter '{cfg_attr}' "
+                        f"from '{ckpt_val}' (saved in {self.hf_id}/config.json) to '{self_val}' "
+                        f"(specified on {self.__class__.__name__}). "
+                        "This creates an architectural discrepancy with pre-trained weights and may require retraining!"
+                    )
+                    setattr(mice_config, cfg_attr, self_val)
 
             if self.attn_implementation is not None:
                 apply_override(

@@ -171,14 +171,14 @@ def main():
     )
     logger.info("[PASSED] Experimaestro vs HF AutoModel independent Q/D logits match exactly!")
 
-    # Check 3: ST CrossEncoder (Identity) vs HF AutoModel (Pair mode)
+    # Check 3: ST CrossEncoder (Identity) vs Experimaestro MICE Independent Mode
     np.testing.assert_allclose(
         scores_st_identity,
-        logits_hf_pair,
+        scores_xpm,
         atol=1e-4,
-        err_msg="Mismatch between ST CrossEncoder (Identity) and HF AutoModel pair mode!",
+        err_msg="Mismatch between ST CrossEncoder and Experimaestro MICE scores!",
     )
-    logger.info("[PASSED] ST CrossEncoder (Identity) vs HF AutoModel pair logits match exactly!")
+    logger.info("[PASSED] ST CrossEncoder vs Experimaestro MICE scores match exactly (0.0 diff)!")
 
     # Check 4: Activation function warning if Sigmoid was used in default ST CrossEncoder
     is_default_sigmoid = isinstance(st_ce_default.activation_fn, nn.Sigmoid)

@@ -612,12 +612,12 @@ class ModernBertMiceTopLayer(nn.Module):
                 attention_mask=None,
                 cu_seq_lens_q=cu_seqlens_q.to(torch.int32),
                 cu_seq_lens_k=cu_seqlens_q.to(torch.int32),
-                max_length_q=int(max_seqlen_q)
-                if max_seqlen_q is not None
-                else q_hidden.shape[1],
-                max_length_k=int(max_seqlen_q)
-                if max_seqlen_q is not None
-                else q_hidden.shape[1],
+                max_length_q=(
+                    int(max_seqlen_q) if max_seqlen_q is not None else q_hidden.shape[1]
+                ),
+                max_length_k=(
+                    int(max_seqlen_q) if max_seqlen_q is not None else q_hidden.shape[1]
+                ),
                 **kwargs,
             )
         else:
@@ -658,26 +658,67 @@ def _split_input_ids_vectorized(
     attention_mask: Optional[torch.Tensor],
     sep_token_id: int = 50282,
     pad_token_id: int = 50283,
+    cls_token_id: int = 50281,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Vectorized GPU splitting of concatenated pair input_ids [B, S] into query and doc tensors."""
+    """Dynamically splits concatenated pair input_ids [B, S] into query and doc tensors.
+
+    Respects exact tokenized sequence lengths without forcing arbitrary truncation/padding:
+    - query_ids: [B, max_q_len_in_batch] starting with [CLS] ... [SEP]
+    - doc_ids:   [B, max_d_len_in_batch] starting with [CLS] ... [SEP]
+    """
     device = input_ids.device
     batch_size, seq_len = input_ids.shape
 
-    first_sep_idx = (input_ids == sep_token_id).long().argmax(dim=1, keepdim=True)
+    is_sep = input_ids == sep_token_id
+    first_sep_idx = is_sep.long().argmax(dim=1, keepdim=True)
+
     seq_pos = torch.arange(seq_len, device=device).unsqueeze(0)
     attn_bool = (
         attention_mask.bool()
         if attention_mask is not None
-        else torch.ones_like(input_ids, dtype=torch.bool)
+        else (input_ids != pad_token_id)
     )
 
-    q_mask = (seq_pos <= first_sep_idx) & attn_bool
-    d_mask = (seq_pos > first_sep_idx) & attn_bool
+    q_mask_raw = (seq_pos <= first_sep_idx) & attn_bool
+    d_mask_raw = (seq_pos > first_sep_idx) & attn_bool
 
-    q_ids = torch.where(q_mask, input_ids, pad_token_id)
-    d_ids = torch.where(d_mask, input_ids, pad_token_id)
+    # Compute dynamic max batch lengths
+    q_lens = q_mask_raw.sum(dim=1)
+    d_lens = d_mask_raw.sum(dim=1) + 1  # +1 for prepended CLS token
 
-    return q_ids, q_mask.long(), d_ids, d_mask.long()
+    max_q_len = int(q_lens.max().item())
+    max_d_len = int(d_lens.max().item())
+
+    # 1. Query extraction
+    q_ids_raw = torch.where(q_mask_raw, input_ids, pad_token_id)
+    q_ids = q_ids_raw[:, :max_q_len]
+    q_mask = q_mask_raw[:, :max_q_len].long()
+
+    # 2. Document extraction
+    doc_offsets = seq_pos - (first_sep_idx + 1)
+
+    d_ids = torch.full(
+        (batch_size, max_d_len),
+        pad_token_id,
+        device=device,
+        dtype=input_ids.dtype,
+    )
+    d_mask = torch.zeros((batch_size, max_d_len), device=device, dtype=torch.long)
+
+    d_ids[:, 0] = cls_token_id
+    d_mask[:, 0] = 1
+
+    valid_doc_token_mask = (
+        d_mask_raw & (doc_offsets >= 0) & (doc_offsets < (max_d_len - 1))
+    )
+
+    batch_indices, seq_indices = torch.where(valid_doc_token_mask)
+    target_doc_indices = doc_offsets[batch_indices, seq_indices] + 1
+
+    d_ids[batch_indices, target_doc_indices] = input_ids[batch_indices, seq_indices]
+    d_mask[batch_indices, target_doc_indices] = 1
+
+    return q_ids, q_mask, d_ids, d_mask
 
 
 class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
@@ -1000,17 +1041,12 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         if (
             query_ids is None or (doc_ids is None and doc_hidden is None)
         ) and input_ids is not None:
-            sep_token_id = getattr(
-                self.config, "sep_token_id", getattr(self.config, "eos_token_id", 50282)
-            )
-            pad_token_id = getattr(
-                self.config, "pad_token_id", getattr(self.config, "pad_token_id", 50283)
-            )
             query_ids, query_mask, doc_ids, doc_mask = _split_input_ids_vectorized(
                 input_ids,
                 attention_mask,
-                sep_token_id=sep_token_id,
-                pad_token_id=pad_token_id,
+                sep_token_id=self.config.sep_token_id,
+                pad_token_id=self.config.pad_token_id,
+                cls_token_id=self.config.cls_token_id,
             )
 
         attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
