@@ -4,7 +4,7 @@ description:
     Ablation comparing applying vs skipping LayerNorm at the output of bottom contextualization layers.
 
 module: MICE.experiments.micev2_training
-parent: ./_ettin68m_abl.yaml
+parent: ../_ettin68m_abl.yaml
 nb_repetitions: 2
 
 top_layers_doc_ln: true

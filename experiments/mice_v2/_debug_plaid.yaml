@@ -4,7 +4,7 @@ description:
     Take one trained Mice-Ettin-68m model, and evaluate it with Plaid indexing and retrieval on 3 small datasets.
 
 module: MICE.experiments.micev2_training
-parent: ./ablations/_ettin68m_abl.yaml
+parent: _ettin68m_abl.yaml
 nb_repetitions: 1 # keep only one seed over the 2 seeds of the parent experiment
 
 

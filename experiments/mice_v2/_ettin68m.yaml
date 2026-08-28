@@ -1,40 +1,18 @@
 description:
     This is the base configuration for all experiments in the MICE v2 series.
-parent: ./_common.yaml
+parent: _common_mice.yaml
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:
     optimization:
-        steps_per_epoch: 100
-        batch_size: 256 #is 256 in ettin-reranker-v1
-        max_epochs: 5000 #  x 256 x 100 = ~76M Samples < 145M in full dataset
         num_warmup_steps: 20000 # Follows the original setup
-        weight_decay: 0.00
-        lr: 3e-5 #tom aarsen value
-        eps: 1.0e-8
-    loss: MSE_mixedbread_large
-    fabric:
-        precision: bf16-mixed
-    # sample_max: 2_000_000
-    max_grad_norm: 1.0
-    checkpoint_interval: 100
-    validation_interval: 50
-    validation_top_k: 100
-    validation: nanobeir11
+        # Values from Ettin Rerankers: https://huggingface.co/blog/ettin-reranker
+        batch_size: 256 #is 256 in ettin-reranker-v1
+        lr: 3e-5
     requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=50G) * 2
-
-# Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
-ettin_subset_exclude: [] # Train on full reranker-v1 data
 
 nb_repetitions: 2
 
-#common to all Mice v2 experiments, but can be overridden in ablations
-top_layers_doc_ln: false # default false, best is true
-bottom_final_norm: true # default true, best is false
-top_final_norm: false # default false, best false
-
-# for ettin-68m
-pref_attn_implementation: flash_attention_2
 base: jhu-clsp/ettin-encoder-68m
 n_contextualization_layers: 10
 n_interaction_layers: 4
