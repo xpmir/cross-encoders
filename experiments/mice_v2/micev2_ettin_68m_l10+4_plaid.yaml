@@ -1,7 +1,8 @@
 id: train_micev2_ettin68m_l10+4_plaid
 title: "Mice-Ettin-68m Training"
 description:
-    Training a Mice Model with
+    Training a Mice Model with two stage utility_pred. Apply the plaid 
+    indexing with different possible 
 
 module: MICE.experiments.micev2_training
 parent: _ettin68m_abl.yaml
@@ -25,6 +26,11 @@ learner:
         max_epochs: 2000 #  x 256 x 100 = ??M Samples < 145M in full dataset
 phase2_max_epochs: 1000
 
+plaid:
+    use_plaid: true
+    buffer_size: 10000
+    n_bits: 
+        values_list: [2, 4, 8] 
 
 ## Evalutation config
 eval_phase_1: false
@@ -33,8 +39,4 @@ evaluation: # Build Plaid index and Evaluate only on 3 small datasets
     eval_checkpoint: "last"
     all_datasets: false
     in_domain: false
-    beir13: false
-    datasets:
-        - nfcorpus
-        - arguana
-        - scifact
+    beir13: true
