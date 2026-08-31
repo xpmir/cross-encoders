@@ -9,15 +9,19 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from experimaestro import Param, field, Config, Task, Meta, PathGenerator
+from experimaestro import Param, field, Config
 from xpm_torch.trainers import LossTrainer, TrainerContext
 from xpm_torch.losses import Loss
 from xpm_torch.datasets import ShardedIterableDataset, InfiniteDataset
 from xpm_torch.base import Sampler
+from datamaestro.data.huggingface import (
+    FlattenAndShuffleDataset as DatamaestroFlattenAndShuffleDataset,
+)
 from datamaestro_ir.data.distillation import (
     PointwiseDistillationSample,
     PointwiseDistillationSamples,
 )
+
 from xpmir.letor.records import PointwiseItems, PointwiseItem
 
 
@@ -44,44 +48,10 @@ def pointwise_distillation_collate(
     )
 
 
-class FlattenAndShuffleDataset(Task):
-    """Concatenate, shuffle, and flatten HuggingFace datasets on a CPU node."""
+class FlattenAndShuffleDataset(DatamaestroFlattenAndShuffleDataset):
+    """Subclass of FlattenAndShuffleDataset to preserve pointwise_distillation identifier hash."""
 
-    samples: Param[list[PointwiseDistillationSamples]]
-    seed: Param[int]
-
-    output_dir: Meta[Path] = field(default_factory=PathGenerator("shuffled_dataset"))
-
-    def execute(self):
-        import os
-        from datasets import concatenate_datasets
-
-        hf_datasets = [s.data for s in self.samples]
-
-        combined_hf = concatenate_datasets(hf_datasets)
-        shuffled = combined_hf.shuffle(seed=self.seed)
-
-        # Maximize speed by using all allocated CPUs
-        num_proc = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
-
-        # Multiprocessing flatten with larger batches to reduce I/O overhead
-        flattened = shuffled.flatten_indices(num_proc=num_proc, writer_batch_size=10000)
-
-        # Save to the task's output directory concurrently
-        flattened.save_to_disk(self.output_dir, num_proc=num_proc)
-
-    def __submit__(self, dep, add_action, **kwargs):
-        first = self.samples[0]
-
-        # Generically extract all parameters from the original config
-        params = {k: getattr(first, k) for k in first.__xpmtype__.arguments.keys()}
-
-        # Override the path and streaming behavior
-        params["local_path"] = self.output_dir
-        params["streaming"] = False
-
-        # Returns a new config of the EXACT SAME CLASS
-        return dep(first.__class__.C(**params))
+    pass
 
 
 class PreShuffledPointwiseDataset(ShardedIterableDataset):
@@ -111,7 +81,6 @@ class PointwiseDistillationSampler(Sampler):
 
     def as_dataset(self) -> ShardedIterableDataset:
         from datasets import load_from_disk
-        from pathlib import Path
 
         # Experimaestro might pass local_path as a string or Path
         local_path = getattr(self.dataset, "local_path", None)

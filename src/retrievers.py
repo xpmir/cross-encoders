@@ -42,12 +42,12 @@ def splade_retriever(
                 indexation_cfg=cfg.indexation,
                 launcher_index=launcher_index,
                 init_tasks=init_tasks,
-            ),
-            topk=topk or cfg.retrieval.k,
-            batchsize=1,
-            encoder=encoder,
-            in_memory=in_memory,
-        )
+            )
+        ),
+        topk=topk or cfg.retrieval.k,
+        batchsize=1,
+        encoder=encoder,
+        in_memory=in_memory,
     ).tag("first_stage", name)
 
 
