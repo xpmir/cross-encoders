@@ -5,7 +5,7 @@ Custom PreTrainedModel and Modules supporting SDPA, Flash Attention 2, and ST ex
 
 import copy
 import logging
-from typing import Any, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
@@ -800,8 +800,19 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         else:
             self.utility_predictor = None
         self.last_utilities = None
+        self.last_doc_hidden = None
 
         self.post_init()
+
+    def get_wv_matrices(self) -> List[torch.Tensor]:
+        """Extract W_V weight matrices from top cross-attention layers."""
+        wv_list = []
+        for top_layer in self.top_layers:
+            Wqkv = top_layer.cross_attn.Wqkv
+            hidden_size = top_layer.cross_attn.config.hidden_size
+            W_V = Wqkv.weight[2 * hidden_size : 3 * hidden_size, :]
+            wv_list.append(W_V)
+        return wv_list
 
     def _init_weights(self, module):
         super()._init_weights(module)
@@ -965,9 +976,13 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             d_hidden = torch.nn.functional.normalize(d_hidden, p=2, dim=-1)
 
         if self.utility_predictor is not None:
+            hard_prune = self.config.hard_pruning
+            threshold = self.config.hard_prune_threshold
             self.last_utilities = self.utility_predictor(d_hidden)
-            hard_prune = getattr(self.config, "hard_pruning", False)
-            threshold = getattr(self.config, "hard_prune_threshold", 0.5)
+
+            if self.training:
+                # store these for regularization
+                self.last_doc_hidden = d_hidden
 
             if hard_prune:
                 if use_unpadded and cu_seqlens_d is not None:
@@ -1002,6 +1017,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     pass
         else:
             self.last_utilities = None
+            self.last_doc_hidden = None
 
         return d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids
 

@@ -17,6 +17,7 @@ from MICE.modeling.mice_v2.modernbert_xpm import (
     mice_v2_scorer,
     ModernBertMiceScorer,
     UtilityRegularizer,
+    GatedValueRegularizer,
 )
 from xpmir.letor.records import PointwiseItems
 from xpm_torch.trainers import TrainerContext
@@ -352,3 +353,155 @@ def test_bottom_top_final_norm_toggles():
     with torch.no_grad():
         out = scorer.hf_model(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask)
     assert out.logits.shape == (2, 1)
+
+
+def test_utility_regularizer_wv_monitoring():
+    """Test that UtilityRegularizer logs W_V matrix Frobenius norms to metrics."""
+    config = ModernBertMiceConfig(
+        hidden_size=64,
+        num_attention_heads=2,
+        num_hidden_layers=4,
+        n_contextualization_layers=2,
+        utility_pred=True,
+    )
+    model = ModernBertMiceForSequenceClassification(config)
+
+    reg_hook = UtilityRegularizer.C(lambda_reg=0.1)
+
+    utilities = torch.rand((2, 8, 1))
+    doc_mask = torch.ones((2, 8), dtype=torch.long)
+
+    context = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    context.metrics = Metrics()
+
+    with context.losses():
+        reg_hook(context, utilities, doc_mask=doc_mask, hf_model=model)
+
+    metrics_dict = {name: metric.compute() for name, metric in context.metrics.metrics.items()}
+    assert "wv_norm/mean" in metrics_dict, "wv_norm/mean should be recorded in metrics"
+    assert "wv_norm/layer_0" in metrics_dict, "wv_norm/layer_0 should be recorded in metrics"
+
+    expected_wv_list = model.get_wv_matrices()
+    expected_layer0 = float(torch.norm(expected_wv_list[0], p="fro").item())
+    assert metrics_dict["wv_norm/layer_0"] == pytest.approx(expected_layer0, rel=1e-4)
+
+
+def test_gated_value_regularizer():
+    """Test GatedValueRegularizer computing u * W_V * h norm loss and logging metrics."""
+    config = ModernBertMiceConfig(
+        hidden_size=64,
+        num_attention_heads=2,
+        num_hidden_layers=4,
+        n_contextualization_layers=2,
+        utility_pred=True,
+    )
+    model = ModernBertMiceForSequenceClassification(config)
+
+    query_ids = torch.randint(0, 100, (2, 4))
+    query_mask = torch.ones((2, 4), dtype=torch.bool)
+    doc_ids = torch.randint(0, 100, (2, 8))
+    doc_mask = torch.ones((2, 8), dtype=torch.bool)
+
+    out = model(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask)
+    assert model.last_utilities is not None
+    assert model.last_doc_hidden is not None
+
+    reg_hook = GatedValueRegularizer.C(lambda_reg=0.1)
+
+    context = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=model,
+        optimizer=None,
+        fabric=None,
+    )
+    context.metrics = Metrics()
+
+    with context.losses() as losses:
+        reg_hook(
+            context,
+            model,
+            model.last_utilities,
+            model.last_doc_hidden,
+            doc_mask=doc_mask,
+        )
+
+    assert len(losses) == 1
+    assert losses[0].name == "gated_value_reg"
+    assert losses[0].value.item() > 0.0
+
+    metrics_dict = {name: metric.compute() for name, metric in context.metrics.metrics.items()}
+    assert "value_norm/mean" in metrics_dict
+    assert "utility/mean" in metrics_dict
+    assert "utility/sparsity" in metrics_dict
+    assert "wv_norm/mean" in metrics_dict
+    assert "wv_norm/layer_0" in metrics_dict
+
+
+def test_gated_value_scale_invariance():
+    """Test that scaling down u while scaling up W_V leaves GatedValueRegularizer loss invariant."""
+    config = ModernBertMiceConfig(
+        hidden_size=64,
+        num_attention_heads=2,
+        num_hidden_layers=4,
+        n_contextualization_layers=2,
+        utility_pred=True,
+    )
+    model = ModernBertMiceForSequenceClassification(config)
+
+    utilities = torch.full((2, 8, 1), 0.8)
+    doc_hidden = torch.randn(2, 8, 64)
+    doc_mask = torch.ones((2, 8), dtype=torch.long)
+
+    val_reg = GatedValueRegularizer.C(lambda_reg=0.1)
+    u_reg = UtilityRegularizer.C(lambda_reg=0.1)
+
+    # 1. Baseline context
+    ctx1 = TrainerContext(logpath=Path("/tmp/logs"), path=Path("/tmp/ckpts"), max_epoch=1, steps_per_epoch=10, trainer=None, model=model, optimizer=None, fabric=None)
+    with ctx1.losses() as losses1:
+        val_reg(ctx1, model, utilities, doc_hidden, doc_mask)
+        u_reg(ctx1, utilities, doc_mask, hf_model=model)
+
+    val_loss1 = losses1[0].value.item()
+    u_loss1 = losses1[1].value.item()
+
+    # 2. Scale u down by 10x and scale W_V up by 10x
+    scaled_utilities = utilities * 0.1
+    top_layer0_Wqkv = model.top_layers[0].cross_attn.Wqkv
+    with torch.no_grad():
+        top_layer0_Wqkv.weight[128:192, :] *= 10.0  # Scale W_V up by 10x
+
+    ctx2 = TrainerContext(logpath=Path("/tmp/logs"), path=Path("/tmp/ckpts"), max_epoch=1, steps_per_epoch=10, trainer=None, model=model, optimizer=None, fabric=None)
+    with ctx2.losses() as losses2:
+        val_reg(ctx2, model, scaled_utilities, doc_hidden, doc_mask)
+        u_reg(ctx2, scaled_utilities, doc_mask, hf_model=model)
+
+    val_loss2 = losses2[0].value.item()
+    u_loss2 = losses2[1].value.item()
+
+    # UtilityRegularizer loss should drop by ~10x
+    assert u_loss2 == pytest.approx(u_loss1 * 0.1, rel=1e-3)
+    # GatedValueRegularizer loss should remain invariant
+    assert val_loss2 == pytest.approx(val_loss1, rel=1e-3)
+
+
+def test_micev2_fine_tuning_reg_target_config():
+    """Test MiceV2_FineTuning reg_target default and options."""
+    from MICE.experiments.micev2_training import MiceV2_FineTuning
+    cfg = MiceV2_FineTuning()
+    assert cfg.reg_target == "u"
+
+    cfg_val = MiceV2_FineTuning(reg_target="u_wv_h")
+    assert cfg_val.reg_target == "u_wv_h"

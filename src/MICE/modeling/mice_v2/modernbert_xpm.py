@@ -11,6 +11,7 @@ import os
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoConfig, AutoModelForSequenceClassification
 
 from experimaestro import LightweightTask, Param, Meta, Constant, field
@@ -44,6 +45,20 @@ from MICE.modeling.mice_v2.modernbert_hf import (
 logger = logging.getLogger(__name__)
 
 
+def compute_wv_norms(
+    hf_model: nn.Module,
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    """Compute mean Frobenius norm and layer 0 Frobenius norm of W_V matrices."""
+    if hasattr(hf_model, "get_wv_matrices"):
+        wv_list = hf_model.get_wv_matrices()
+        if wv_list:
+            norms = [torch.norm(w, p="fro") for w in wv_list]
+            wv_mean = torch.stack(norms).mean()
+            wv_layer0 = norms[0]
+            return wv_mean, wv_layer0
+    return None, None
+
+
 class UtilityRegularizer(TrainingHook):
     """Training hook for computing token utility L1 regularization loss and sparsity metrics"""
 
@@ -63,6 +78,7 @@ class UtilityRegularizer(TrainingHook):
         info: TrainerContext,
         utilities: torch.Tensor,
         doc_mask: Optional[torch.Tensor] = None,
+        hf_model: Optional[nn.Module] = None,
     ):
         if self.lambda_reg <= 0.0 or utilities is None:
             return
@@ -106,6 +122,22 @@ class UtilityRegularizer(TrainingHook):
                 ScalarMetric("utility/sparsity", float(sparsity.item()), nrecords)
             )
 
+            # Monitor W_V matrix norm if hf_model (or info.model) is accessible
+            target_model = hf_model or getattr(info, "model", None)
+            if target_model is not None:
+                if hasattr(target_model, "hf_model"):
+                    target_model = target_model.hf_model
+                wv_mean, wv_layer0 = compute_wv_norms(target_model)
+                if wv_mean is not None:
+                    info.metrics.add(
+                        ScalarMetric("wv_norm/mean", float(wv_mean.item()), nrecords)
+                    )
+                    info.metrics.add(
+                        ScalarMetric(
+                            "wv_norm/layer_0", float(wv_layer0.item()), nrecords
+                        )
+                    )
+
         # Log TensorBoard histogram at validation interval boundaries
         writer = getattr(info, "writer", None)
         if (
@@ -114,6 +146,143 @@ class UtilityRegularizer(TrainingHook):
             and (info.state.step % self.histogram_interval == 0)
             and valid_utilities.numel() > 0
         ):
+            writer.add_histogram(
+                "train/utility/distribution",
+                valid_utilities.detach(),
+                global_step=info.state.step,
+            )
+
+
+class GatedValueRegularizer(TrainingHook):
+    """Training hook for regularizing the norm of gated document value representations (u * W_V * h)"""
+
+    lambda_reg: Param[float] = field(default=0.1)
+    """Regularization weight for gated value norm loss"""
+
+    sparsity_threshold: Meta[float] = field(default=0.5)
+    """Threshold below which a token utility score is considered suppressed / sparse"""
+
+    histogram_interval: Meta[int] = field(default=0)
+    """Interval in steps for writing utility distribution histograms to TensorBoard (0 to disable)"""
+
+    version: Constant[str] = "1.0.0"
+
+    def __call__(
+        self,
+        info: TrainerContext,
+        model: nn.Module,
+        utilities: torch.Tensor,
+        doc_hidden: torch.Tensor,
+        doc_mask: Optional[torch.Tensor] = None,
+    ):
+        if self.lambda_reg <= 0.0 or utilities is None or doc_hidden is None:
+            return
+
+        target_model = model
+        if hasattr(target_model, "hf_model"):
+            target_model = target_model.hf_model
+
+        wv_list = (
+            target_model.get_wv_matrices()
+            if hasattr(target_model, "get_wv_matrices")
+            else []
+        )
+        if not wv_list:
+            logger.warning(
+                "GatedValueRegularizer: No W_V matrices found in target model."
+            )
+            return
+
+        # Use W_V of the first top interaction layer
+        W_V = wv_list[0]
+        top_layer0_attn = target_model.top_layers[0].cross_attn
+        hidden_size = top_layer0_attn.config.hidden_size
+        bias_V = (
+            top_layer0_attn.Wqkv.bias[2 * hidden_size : 3 * hidden_size]
+            if top_layer0_attn.Wqkv.bias is not None
+            else None
+        )
+
+        # Compute value projection V(h) = h @ W_V^T + bias_V
+        value_states = F.linear(doc_hidden, W_V, bias_V)  # [B, L, D] or [1, Total_D, D]
+        # Compute gated value representations: u * V(h)
+        gated_value_states = utilities * value_states  # broadcast u over D
+
+        # Compute per-token L2 norm normalized by sqrt(D)
+        per_token_v_norm = torch.norm(gated_value_states, p=2, dim=-1) / (
+            hidden_size**0.5
+        )
+
+        if (
+            doc_mask is not None
+            and utilities.ndim == 3
+            and utilities.shape[0] == doc_mask.shape[0]
+            and utilities.shape[1] == doc_mask.shape[1]
+        ):
+            # Padded 3D SDPA path
+            mask = doc_mask.bool()
+            valid_v_norms = per_token_v_norm.masked_select(mask)
+            valid_utilities = utilities.masked_select(mask.unsqueeze(-1))
+            if valid_v_norms.numel() > 0:
+                mean_v_norm = valid_v_norms.mean()
+                mean_utility = valid_utilities.mean()
+                sparsity = (valid_utilities < self.sparsity_threshold).float().mean()
+            else:
+                mean_v_norm = per_token_v_norm.mean()
+                mean_utility = utilities.mean()
+                sparsity = (utilities < self.sparsity_threshold).float().mean()
+        else:
+            # Unpadded 1D FA2 path
+            mean_v_norm = per_token_v_norm.mean()
+            mean_utility = utilities.mean()
+            sparsity = (utilities < self.sparsity_threshold).float().mean()
+            valid_v_norms = per_token_v_norm.view(-1)
+            valid_utilities = utilities.view(-1)
+
+        reg_loss = mean_v_norm
+        info.add_loss(Loss("gated_value_reg", reg_loss, self.lambda_reg))
+
+        if getattr(info, "metrics", None) is not None:
+            nrecords = doc_mask.shape[0] if doc_mask is not None else 1
+            info.metrics.add(
+                ScalarMetric(
+                    "gated_value_reg",
+                    float((self.lambda_reg * mean_v_norm).item()),
+                    nrecords,
+                )
+            )
+            info.metrics.add(
+                ScalarMetric("value_norm/mean", float(mean_v_norm.item()), nrecords)
+            )
+            info.metrics.add(
+                ScalarMetric("utility/mean", float(mean_utility.item()), nrecords)
+            )
+            info.metrics.add(
+                ScalarMetric("utility/sparsity", float(sparsity.item()), nrecords)
+            )
+
+            wv_mean, wv_layer0 = compute_wv_norms(target_model)
+            if wv_mean is not None:
+                info.metrics.add(
+                    ScalarMetric("wv_norm/mean", float(wv_mean.item()), nrecords)
+                )
+                info.metrics.add(
+                    ScalarMetric("wv_norm/layer_0", float(wv_layer0.item()), nrecords)
+                )
+
+        # Log TensorBoard histograms
+        writer = getattr(info, "writer", None)
+        if (
+            self.histogram_interval > 0
+            and writer is not None
+            and (info.state.step % self.histogram_interval == 0)
+            and valid_v_norms.numel() > 0
+        ):
+            writer.add_histogram(
+                "train/value_norm/distribution",
+                valid_v_norms.detach(),
+                global_step=info.state.step,
+            )
             writer.add_histogram(
                 "train/utility/distribution",
                 valid_utilities.detach(),
@@ -611,7 +780,21 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             and getattr(self.hf_model, "last_utilities", None) is not None
         ):
             for hook in info.hooks(UtilityRegularizer):
-                hook(info, self.hf_model.last_utilities, target_doc_mask)
+                hook(
+                    info,
+                    self.hf_model.last_utilities,
+                    doc_mask=target_doc_mask,
+                    hf_model=self.hf_model,
+                )
+
+            for hook in info.hooks(GatedValueRegularizer):
+                hook(
+                    info,
+                    self.hf_model,
+                    self.hf_model.last_utilities,
+                    self.hf_model.last_doc_hidden,
+                    doc_mask=target_doc_mask,
+                )
 
         return out.logits.squeeze(-1)
 
