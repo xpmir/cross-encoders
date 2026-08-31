@@ -242,7 +242,7 @@ def encode_document_exact(
     doc_ids = enc["input_ids"].to(device)
     doc_mask = enc["attention_mask"].to(device)
     with torch.no_grad():
-        d_hidden = model.encode_documents(doc_ids=doc_ids, doc_mask=doc_mask)
+        d_hidden, _ = model.encode_documents(doc_ids=doc_ids, doc_mask=doc_mask)
     return d_hidden[0]  # [num_tokens, dim], no padding to strip (batch size 1)
 
 
@@ -471,7 +471,7 @@ def stage_c_score_sensitivity(
             )
             online_score = online_out.logits.squeeze().item()
 
-            exact_d_hidden = model.encode_documents(
+            exact_d_hidden, _ = model.encode_documents(
                 doc_ids=doc_ids, doc_mask=doc_mask
             )
             bypass_out = model(

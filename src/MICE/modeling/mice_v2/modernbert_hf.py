@@ -1010,13 +1010,19 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         doc_ids: torch.LongTensor,
         doc_mask: Optional[torch.Tensor] = None,
         **kwargs,
-    ) -> torch.Tensor:
-        """Encode documents through bottom contextualization layers."""
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Encode documents through bottom contextualization layers.
+
+        Returns (d_hidden, doc_mask): doc_mask is returned alongside d_hidden because
+        hard pruning shortens d_hidden's sequence dimension, so callers need the
+        post-pruning mask rather than the original tokenizer mask to know which
+        positions are real tokens.
+        """
         d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
-        d_hidden, _, _, _, _ = self._document_embed_post_process(
+        d_hidden, doc_mask, _, _, _ = self._document_embed_post_process(
             d_hidden, doc_mask, use_unpadded=False
         )
-        return d_hidden
+        return d_hidden, doc_mask
 
     def forward(
         self,

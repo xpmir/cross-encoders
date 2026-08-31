@@ -28,7 +28,7 @@ phase2_max_epochs: 1000
 
 plaid:
     use_plaid: true
-    buffer_size: 10000
+    buffer_size: 5000
     n_bits: 
         values_list: [2, 4, 8] 
 
@@ -40,3 +40,6 @@ evaluation: # Build Plaid index and Evaluate only on 3 small datasets
     all_datasets: false
     in_domain: false
     beir13: true
+
+indexation:
+    requirements: duration=15h & cpu(cores=16) & cuda(mem=80G) # H100

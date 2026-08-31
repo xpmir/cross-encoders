@@ -308,7 +308,7 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
                 (qid, docs) for qid, docs in scored_results.items() if docs
             ]
             gathered_data = [None] * fabric.world_size
-            torch.dist.all_gather_object(gathered_data, local_results)
+            torch.distributed.all_gather_object(gathered_data, local_results)
 
             if fabric.is_global_zero:
                 # Merge them back into one master dictionary

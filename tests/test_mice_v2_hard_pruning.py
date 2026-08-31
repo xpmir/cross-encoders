@@ -123,10 +123,11 @@ def test_modernbert_hf_hard_pruning_and_freezing():
             doc_ids=doc_ids,
             doc_mask=doc_mask,
         )
-        doc_encoded = model.encode_documents(doc_ids, doc_mask)
+        doc_encoded, doc_encoded_mask = model.encode_documents(doc_ids, doc_mask)
 
     assert out.logits.shape == (2, 1)
     assert doc_encoded.ndim == 3
+    assert doc_encoded_mask.shape[:2] == doc_encoded.shape[:2]
 
 
 def test_modernbert_xpm_hard_pruning():

@@ -15,7 +15,7 @@ from transformers import AutoConfig, AutoModelForSequenceClassification
 
 from experimaestro import LightweightTask, Param, Meta, Constant, field
 from datamaestro_ir.data.base import IDTextRecord
-from xpmir.text.tokenizers import TokenizerOptions
+from xpmir.text.tokenizers import TokenizerOptions, TokenizedTexts
 from xpmir.rankers.scorer import AbstractModuleScorer
 from xpmir.letor.records import BaseItems
 from xpmir.text.encoders import (
@@ -530,8 +530,11 @@ class ModernBertMiceScorer(AbstractModuleScorer):
 
     def encode_documents(
         self, doc_ids: torch.Tensor, doc_mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        """Encode documents through bottom contextualization layers."""
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Encode documents through bottom contextualization layers.
+
+        Returns (d_hidden, doc_mask), see `ModernBertMiceForSequenceClassification.encode_documents`.
+        """
         return self.hf_model.encode_documents(doc_ids=doc_ids, doc_mask=doc_mask)
 
     def get_document_encoder(self) -> TextEncoderBase:
@@ -976,7 +979,13 @@ class MiceV2DocumentEncoder(TextEncoderBase):
         )
         if tokenized.ids.device != self.model.device:
             tokenized = tokenized.to(self.model.device)
-        encoded = self.model.encode_documents(tokenized.ids, tokenized.mask)
+        encoded, doc_mask = self.model.encode_documents(tokenized.ids, tokenized.mask)
+        # Hard pruning shortens encoded's sequence dimension, so the mask returned
+        # downstream must reflect the post-pruning mask, not the original tokenizer mask.
+        # NOTE: can't use `tokenized._replace(mask=...)` here -- TokenizedTexts overrides
+        # __len__ to return len(self.ids) (the batch size) instead of the field count,
+        # which breaks NamedTuple._make()'s internal `len(result) != num_fields` check.
+        tokenized = TokenizedTexts(**{**tokenized._asdict(), "mask": doc_mask})
         return TokensEncoderOutput(tokenized, encoded)
 
 
