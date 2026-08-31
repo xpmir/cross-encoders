@@ -5,15 +5,12 @@ description: Evaluation with separate max_len for query and doc,
 
 module: Evaluation.experiment
 pre_experiment: pre_experiment
-
+parent: ../_common.yaml
 gpu: true
 
-max_query_length: 1024
-max_doc_length: 1024
-max_length: 1024
-
 scorers_st_id:
-  # - cross-encoder/ettin-reranker-150m-v1
+  - cross-encoder/ettin-reranker-400m-v1
+  - cross-encoder/ettin-reranker-150m-v1
   - cross-encoder/ettin-reranker-68m-v1
   # - cross-encoder/ettin-reranker-17m-v1
 #   - Qwen/Qwen3-Reranker-0.6B
@@ -25,18 +22,8 @@ scorers_st_id:
 retrievers_hf_id:
   - naver/splade-v3-distilbert
 
-indexation:
-  requirements: duration=8h & cpu(cores=4, mem=10G) & cuda(mem=30G)
-  sparse2bmp_requirements: duration=8h & cpu(cores=8)
-  batch_size: 128
-
-retrieval:
-  requirements: duration=19h & cpu(cores=24, mem=15G) & cuda(mem=30G)
-  batch_size: 64
-  k: 100
-
 evaluation:
   #just for debugging
   in_domain: true
-  beir13: false
+  beir13: true
   beir13_decontaminated: true

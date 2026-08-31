@@ -3,7 +3,6 @@
 import logging
 from xpmir.index.sparse import SparseRetrieverIndexBuilder
 from xpmir.rankers import Documents
-from experimaestro import stop_tags
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,7 @@ def get_splade_index(
         index = index_cfg.tag("index_documents", documents.id).submit(
             launcher=launcher_index, init_tasks=init_tasks
         )
-        _indexes[indexer_id] = stop_tags(index)
+        _indexes[indexer_id] = index
     else:
         index = _indexes[indexer_id]
 

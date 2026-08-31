@@ -6,7 +6,7 @@ description:
 module: MICE.experiments.micev2_training
 parent: ../_ettin68m_abl.yaml
 nb_repetitions: 2
-
+export_trained_models: false
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:
@@ -29,3 +29,8 @@ lambda_reg:
     values_list:
         - 1e-1
         - 2e-1
+
+reg_target:
+    values_list:
+        - u
+        - u_wv_h
