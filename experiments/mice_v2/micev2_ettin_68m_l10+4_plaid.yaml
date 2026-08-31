@@ -5,7 +5,7 @@ description:
     indexing with different possible 
 
 module: MICE.experiments.micev2_training
-parent: _ettin68m_abl.yaml
+parent: ./_ettin68m_abl.yaml
 
 
 nb_repetitions: 1

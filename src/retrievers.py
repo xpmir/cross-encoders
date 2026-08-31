@@ -1,6 +1,7 @@
 """This file contains utilities for building Retrievers that can be used in various experiments"""
 
 from typing import Dict
+from experimaestro import stop_tags
 from datamaestro_ir.data import Documents
 from xpmir.rankers import Retriever
 import xpmir.interfaces.anserini as anserini
@@ -34,12 +35,14 @@ def splade_retriever(
     """Factory for Splade Retriever, given the current configuration"""
 
     return SparseRetriever.C(
-        index=get_splade_index(
-            documents,
-            splade_encoder=encoder,
-            indexation_cfg=cfg.indexation,
-            launcher_index=launcher_index,
-            init_tasks=init_tasks,
+        index=stop_tags(  # drop 'index_documents' tag that clutters eval.
+            get_splade_index(
+                documents,
+                splade_encoder=encoder,
+                indexation_cfg=cfg.indexation,
+                launcher_index=launcher_index,
+                init_tasks=init_tasks,
+            )
         ),
         topk=topk or cfg.retrieval.k,
         batchsize=1,
@@ -52,7 +55,7 @@ def bm25_retriever(
     cfg: CE_FineTuning,
     name: str,
     documents: Documents,
-    launcher_index,
+    launcher_index=None,
     topk: int = None,
     **kwargs,
 ) -> Retriever.C:
@@ -66,7 +69,7 @@ def bm25_retriever(
     ).submit(launcher=launcher_index)
 
     return BOWRetriever.C(
-        index=bow_index,
+        index=stop_tags(bow_index),
         model=BM25.C(),
         topk=topk or cfg.retrieval.k,
     ).tag("first_stage", name)
@@ -81,10 +84,11 @@ def anserini_bm25_retriever(
     **kwargs,
 ) -> Retriever.C:
     """Factory for BM25 Retriever, given the current configuration"""
+    index = anserini.index_builder(launcher=launcher_index)(documents)
     return anserini.AnseriniRetriever.C(
         k=topk or cfg.retrieval.k,
         model=BM25.C(),
-        index=anserini.index_builder(launcher=launcher_index)(documents),
+        index=stop_tags(index),
         store=documents,
     ).tag("first_stage", name)
 
@@ -134,7 +138,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
 
             if documents.id not in self.indexes.keys():
                 logging.info(f"Building PLAID index for dataset {documents.id}")
-                self.indexes[dataset_key] = (
+                self.indexes[dataset_key] = stop_tags(
                     PlaidIndexBuilder.C(
                         documents=documents,
                         encoder=self.doc_encoder,
@@ -148,7 +152,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
                         compress_only=cfg.compress_only,
                         force_cpu_indexing=cfg.force_cpu_indexing,
                     )
-                    .tag("dataset", dataset_key)
+                    .tag("index_documents", documents.id)
                     .submit(
                         launcher=launcher_index,
                         init_tasks=init_tasks,

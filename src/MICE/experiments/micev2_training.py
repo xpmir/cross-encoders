@@ -43,6 +43,7 @@ from training_utils import (
 from MICE.modeling.mice_v2.modernbert_xpm import (
     mice_v2_scorer,
     UtilityRegularizer,
+    GatedValueRegularizer,
     InitMICEV2FromCheckpoint,
 )
 from logging_utils import setup_logging
@@ -73,6 +74,9 @@ class MiceV2_FineTuning(CE_FineTuning):
 
     lambda_reg: GridSearch[float] = 0.0
     """Regularization weight for the Utility predictor"""
+
+    reg_target: GridSearch[str] = "u"
+    """Target for regularization: 'u' for mean utility loss, 'u_wv_h' for gated value norm loss (u * W_V * h)"""
 
     phase2_training: GridSearch[bool] = False
     """Whether to run Phase 2 hard token pruning fine-tuning after Phase 1 soft gating"""
@@ -312,13 +316,26 @@ def TrainEvaluateMiceV2(
                 cfg.learner.validation_interval
                 * cfg.learner.optimization.steps_per_epoch
             )
-            ce_trainer.hooks.append(
-                UtilityRegularizer.C(
-                    lambda_reg=cfg.lambda_reg,
-                    histogram_interval=histogram_interval,
-                    sparsity_threshold=cfg.hard_prune_threshold,
+            if cfg.reg_target == "u":
+                ce_trainer.hooks.append(
+                    UtilityRegularizer.C(
+                        lambda_reg=cfg.lambda_reg,
+                        histogram_interval=histogram_interval,
+                        sparsity_threshold=cfg.hard_prune_threshold,
+                    )
                 )
-            )
+            elif cfg.reg_target == "u_wv_h":
+                ce_trainer.hooks.append(
+                    GatedValueRegularizer.C(
+                        lambda_reg=cfg.lambda_reg,
+                        histogram_interval=histogram_interval,
+                        sparsity_threshold=cfg.hard_prune_threshold,
+                    )
+                )
+            else:
+                raise ValueError(
+                    f"Unknown reg_target: '{cfg.reg_target}'. Expected 'u' or 'u_wv_h'."
+                )
 
         # Build the model using the provided factory
         model, model_init_tasks = build_mice_v2(cfg)

@@ -1,223 +1,63 @@
-"""Pointwise distillation sampler and trainer for Experimaestro-IR compatibility."""
+"""Legacy pointwise distillation sampler and trainer adapters.
+Kept only in dev branch for backward hash compatibility
+"""
 
-from typing import List, TypedDict, Iterator
-from typing_extensions import ReadOnly
-from pathlib import Path
-import sys
-import numpy as np
-import torch
-import torch.nn as nn
-from torch import Tensor
-
-from experimaestro import Param, field, Config, Task, Meta, PathGenerator
-from xpm_torch.trainers import LossTrainer, TrainerContext
-from xpm_torch.losses import Loss
-from xpm_torch.datasets import ShardedIterableDataset, InfiniteDataset
-from xpm_torch.base import Sampler
-from datamaestro_ir.data.distillation import (
-    PointwiseDistillationSample,
-    PointwiseDistillationSamples,
+from datamaestro.data.huggingface import (
+    FlattenAndShuffleDataset as DatamaestroFlattenAndShuffleDataset,
 )
-from xpmir.letor.records import PointwiseItems, PointwiseItem
+from xpmir.letor.distillation.pointwise import (
+    PointwiseDistillationInputs,
+    pointwise_distillation_collate,
+    PreShuffledPointwiseDataset as XPMPreShuffledPointwiseDataset,
+    PointwiseDistillationSampler as XPMPointwiseDistillationSampler,
+    DistillationPointwiseLoss as XPMDistillationPointwiseLoss,
+    PointwiseMSELoss as XPMPointwiseMSELoss,
+    PointwiseDistillationTrainer as XPMPointwiseDistillationTrainer,
+)
+
+__all__ = [
+    "PointwiseDistillationInputs",
+    "pointwise_distillation_collate",
+    "FlattenAndShuffleDataset",
+    "PreShuffledPointwiseDataset",
+    "PointwiseDistillationSampler",
+    "DistillationPointwiseLoss",
+    "PointwiseMSELoss",
+    "PointwiseDistillationTrainer",
+]
 
 
-class PointwiseDistillationInputs(TypedDict):
-    records: ReadOnly[PointwiseItems]
-    teacher_scores: ReadOnly[torch.Tensor]
-    tokenized_records: ReadOnly[dict]
+class FlattenAndShuffleDataset(DatamaestroFlattenAndShuffleDataset):
+    """Subclass of FlattenAndShuffleDataset to preserve pointwise_distillation identifier hash."""
+
+    pass
 
 
-def pointwise_distillation_collate(
-    samples: List[PointwiseDistillationSample],
-) -> PointwiseDistillationInputs:
-    records = PointwiseItems()
-    teacher_scores = []
-    for sample in samples:
-        records.add(
-            PointwiseItem(sample.query, sample.document.document, sample.document.score)
-        )
-        teacher_scores.append(sample.document.score)
-    return PointwiseDistillationInputs(
-        records=records,
-        teacher_scores=torch.tensor(teacher_scores, dtype=torch.float32),
-        tokenized_records=None,
-    )
+class PreShuffledPointwiseDataset(XPMPreShuffledPointwiseDataset):
+    """Legacy adapter for PreShuffledPointwiseDataset."""
+
+    pass
 
 
-class FlattenAndShuffleDataset(Task):
-    """Concatenate, shuffle, and flatten HuggingFace datasets on a CPU node."""
+class PointwiseDistillationSampler(XPMPointwiseDistillationSampler):
+    """Legacy adapter for PointwiseDistillationSampler to preserve task hash."""
 
-    samples: Param[list[PointwiseDistillationSamples]]
-    seed: Param[int]
-
-    output_dir: Meta[Path] = field(default_factory=PathGenerator("shuffled_dataset"))
-
-    def execute(self):
-        import os
-        from datasets import concatenate_datasets
-
-        hf_datasets = [s.data for s in self.samples]
-
-        combined_hf = concatenate_datasets(hf_datasets)
-        shuffled = combined_hf.shuffle(seed=self.seed)
-
-        # Maximize speed by using all allocated CPUs
-        num_proc = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
-
-        # Multiprocessing flatten with larger batches to reduce I/O overhead
-        flattened = shuffled.flatten_indices(num_proc=num_proc, writer_batch_size=10000)
-
-        # Save to the task's output directory concurrently
-        flattened.save_to_disk(self.output_dir, num_proc=num_proc)
-
-    def __submit__(self, dep, add_action, **kwargs):
-        first = self.samples[0]
-
-        # Generically extract all parameters from the original config
-        params = {k: getattr(first, k) for k in first.__xpmtype__.arguments.keys()}
-
-        # Override the path and streaming behavior
-        params["local_path"] = self.output_dir
-        params["streaming"] = False
-
-        # Returns a new config of the EXACT SAME CLASS
-        return dep(first.__class__.C(**params))
+    pass
 
 
-class PreShuffledPointwiseDataset(ShardedIterableDataset):
-    def __init__(self, hf_data, sample_builder):
-        super().__init__()
-        self.hf_data = hf_data
-        self.sample_builder = sample_builder
+class DistillationPointwiseLoss(XPMDistillationPointwiseLoss):
+    """Legacy adapter for DistillationPointwiseLoss to preserve task hash."""
 
-    def iter_shard(
-        self, shard_id: int, num_shards: int
-    ) -> Iterator[PointwiseDistillationSample]:
-        # Use contiguous=True to guarantee sequential disk reads for the worker
-        shard = self.hf_data.shard(
-            num_shards=num_shards, index=shard_id, contiguous=True
-        )
-        for row in shard:
-            yield self.sample_builder._build_sample(row)
+    pass
 
 
-class PointwiseDistillationSampler(Sampler):
-    """Sampler wrapper for pointwise distillation datasets"""
+class PointwiseMSELoss(XPMPointwiseMSELoss):
+    """Legacy adapter for PointwiseMSELoss to preserve task hash."""
 
-    dataset: Param[PointwiseDistillationSamples]
-
-    def initialize(self, random: np.random.RandomState):
-        super().initialize(random)
-
-    def as_dataset(self) -> ShardedIterableDataset:
-        from datasets import load_from_disk
-        from pathlib import Path
-
-        # Experimaestro might pass local_path as a string or Path
-        local_path = getattr(self.dataset, "local_path", None)
-        if local_path and (Path(local_path) / "dataset_info.json").exists():
-            # The dataset was saved by our task using save_to_disk()
-            hf_dataset = load_from_disk(str(local_path))
-        else:
-            # Fall back to default load_dataset logic
-            hf_dataset = self.dataset.data
-
-        return InfiniteDataset(PreShuffledPointwiseDataset(hf_dataset, self.dataset))
+    pass
 
 
-class DistillationPointwiseLoss(Config, nn.Module):
-    """The abstract loss for pointwise distillation"""
+class PointwiseDistillationTrainer(XPMPointwiseDistillationTrainer):
+    """Legacy adapter for PointwiseDistillationTrainer to preserve task hash."""
 
-    weight: Param[float] = field(default=1.0, ignore_default=True)
-    NAME = "?"
-
-    def initialize(self, ranker):
-        pass
-
-    def process(
-        self, student_scores: Tensor, teacher_scores: Tensor, info: TrainerContext
-    ):
-        loss = self.compute(student_scores, teacher_scores, info)
-        info.add_loss(Loss(f"pointwise-{self.NAME}", loss, self.weight))
-
-    def compute(
-        self, student_scores: Tensor, teacher_scores: Tensor, context: TrainerContext
-    ) -> torch.Tensor:
-        """
-        Compute the loss
-
-        Arguments:
-
-            student_scores: A batch tensor of student predictions
-            teacher_scores: A batch tensor of teacher scores
-        """
-        raise NotImplementedError()
-
-
-class PointwiseMSELoss(DistillationPointwiseLoss):
-    """Plain pointwise MSE loss between student and teacher scores"""
-
-    NAME = "MSE"
-
-    def initialize(self, ranker):
-        super().initialize(ranker)
-        self.loss = nn.MSELoss()
-
-    def compute(
-        self, student_scores: Tensor, teacher_scores: Tensor, context: TrainerContext
-    ) -> Tensor:
-        return self.loss(student_scores.view(-1), teacher_scores.view(-1))
-
-
-class PointwiseDistillationTrainer(LossTrainer):
-    """Trainer for pointwise distillation"""
-
-    lossfn: Param[DistillationPointwiseLoss]
-    """The distillation pointwise batch function"""
-
-    def initialize(self, random: np.random.RandomState, context: TrainerContext):
-        super().initialize(random, context)
-        self.lossfn.initialize(self.model)
-        for loss in context.hooks(DistillationPointwiseLoss):
-            loss.initialize(self.model)
-
-        self.sampler.initialize(random)
-
-        dataset = self.sampler.as_dataset()
-
-        if hasattr(self.model, "get_tokenizer_fn"):
-            tokenization_fn = self.model.get_tokenizer_fn()
-
-            def collate_fn_with_tokenization(
-                samples: List[PointwiseDistillationSample],
-            ) -> PointwiseDistillationInputs:
-                inputs = pointwise_distillation_collate(samples)
-                inputs["tokenized_records"] = tokenization_fn(inputs["records"])
-                return inputs
-
-            collate_fn = collate_fn_with_tokenization
-        else:
-            collate_fn = pointwise_distillation_collate
-
-        self._create_dataloader(dataset, collate_fn=collate_fn)
-
-    def train_batch(self, inputs: PointwiseDistillationInputs):
-        records = inputs["records"]
-        teacher_scores = inputs["teacher_scores"]
-        tokenized_records = inputs.get("tokenized_records")
-
-        if tokenized_records is not None:
-            student_scores = self.model(
-                None, tokenized=tokenized_records, info=self.context
-            )
-        else:
-            student_scores = self.model(records, info=self.context)
-
-        if torch.isnan(student_scores).any() or torch.isinf(student_scores).any():
-            self.logger.error(
-                "nan or inf relevance score detected. Aborting (pointwise distillation)."
-            )
-            sys.exit(1)
-
-        teacher_scores = teacher_scores.to(student_scores.device)
-        self.lossfn.process(student_scores, teacher_scores, self.context)
+    pass
