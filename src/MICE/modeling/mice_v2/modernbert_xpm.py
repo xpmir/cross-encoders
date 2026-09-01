@@ -45,18 +45,80 @@ from MICE.modeling.mice_v2.modernbert_hf import (
 logger = logging.getLogger(__name__)
 
 
-def compute_wv_norms(
+def compute_model_norm_metrics(
     hf_model: nn.Module,
-) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-    """Compute mean Frobenius norm and layer 0 Frobenius norm of W_V matrices."""
+) -> dict:
+    """Compute Frobenius norms of W_V, W_O, and classifier head weights."""
+    metrics = {}
     if hasattr(hf_model, "get_wv_matrices"):
         wv_list = hf_model.get_wv_matrices()
         if wv_list:
             norms = [torch.norm(w, p="fro") for w in wv_list]
-            wv_mean = torch.stack(norms).mean()
-            wv_layer0 = norms[0]
-            return wv_mean, wv_layer0
-    return None, None
+            metrics["wv_norm/mean"] = torch.stack(norms).mean()
+            metrics["wv_norm/layer_0"] = norms[0]
+
+    if hasattr(hf_model, "get_wo_matrices"):
+        wo_list = hf_model.get_wo_matrices()
+        if wo_list:
+            norms = [torch.norm(w, p="fro") for w in wo_list]
+            metrics["wo_norm/mean"] = torch.stack(norms).mean()
+            metrics["wo_norm/layer_0"] = norms[0]
+
+    if hasattr(hf_model, "get_classifier_norm"):
+        cls_norm = hf_model.get_classifier_norm()
+        if cls_norm is not None:
+            metrics["classifier_norm"] = cls_norm
+
+    return metrics
+
+
+def compute_token_split_metrics(
+    valid_utilities: torch.Tensor,
+    sparsity_threshold: float = 0.5,
+    valid_doc_hidden: Optional[torch.Tensor] = None,
+) -> dict:
+    """Compute token-level metrics split by sparsity_threshold (kept vs suppressed)."""
+    metrics = {}
+    utils = valid_utilities.view(-1)
+    kept_mask = utils >= sparsity_threshold
+    suppressed_mask = utils < sparsity_threshold
+
+    if kept_mask.any():
+        metrics["utility/mean_kept"] = utils[kept_mask].mean()
+    if suppressed_mask.any():
+        metrics["utility/mean_suppressed"] = utils[suppressed_mask].mean()
+
+    if valid_doc_hidden is not None:
+        doc_h = valid_doc_hidden.view(-1, valid_doc_hidden.shape[-1])
+        if doc_h.shape[0] == utils.shape[0]:
+            per_token_doc_norm = torch.norm(doc_h, p=2, dim=-1)
+            per_token_gated_norm = torch.norm(utils.unsqueeze(-1) * doc_h, p=2, dim=-1)
+
+            metrics["doc_hidden_norm/mean"] = per_token_doc_norm.mean()
+            metrics["gated_doc_norm/mean"] = per_token_gated_norm.mean()
+
+            if kept_mask.any():
+                metrics["doc_hidden_norm/mean_kept"] = per_token_doc_norm[
+                    kept_mask
+                ].mean()
+                metrics["gated_doc_norm/mean_kept"] = per_token_gated_norm[
+                    kept_mask
+                ].mean()
+
+            if suppressed_mask.any():
+                metrics["doc_hidden_norm/mean_suppressed"] = per_token_doc_norm[
+                    suppressed_mask
+                ].mean()
+                metrics["gated_doc_norm/mean_suppressed"] = per_token_gated_norm[
+                    suppressed_mask
+                ].mean()
+
+            if kept_mask.any() and suppressed_mask.any():
+                gated_kept = metrics["gated_doc_norm/mean_kept"]
+                gated_suppressed = metrics["gated_doc_norm/mean_suppressed"]
+                metrics["gated_contrast_ratio"] = gated_kept / (gated_suppressed + 1e-6)
+
+    return metrics
 
 
 class UtilityRegularizer(TrainingHook):
@@ -122,21 +184,28 @@ class UtilityRegularizer(TrainingHook):
                 ScalarMetric("utility/sparsity", float(sparsity.item()), nrecords)
             )
 
-            # Monitor W_V matrix norm if hf_model (or info.model) is accessible
+            # Monitor Model Matrix Norms (W_V, W_O, Classifier Head)
             target_model = hf_model or getattr(info, "model", None)
             if target_model is not None:
                 if hasattr(target_model, "hf_model"):
                     target_model = target_model.hf_model
-                wv_mean, wv_layer0 = compute_wv_norms(target_model)
-                if wv_mean is not None:
-                    info.metrics.add(
-                        ScalarMetric("wv_norm/mean", float(wv_mean.item()), nrecords)
-                    )
-                    info.metrics.add(
-                        ScalarMetric(
-                            "wv_norm/layer_0", float(wv_layer0.item()), nrecords
-                        )
-                    )
+                norm_metrics = compute_model_norm_metrics(target_model)
+                for k, v in norm_metrics.items():
+                    info.metrics.add(ScalarMetric(k, float(v.item()), nrecords))
+
+            # Monitor Token-Level Diagnostics (Kept vs Suppressed)
+            doc_h = (
+                getattr(target_model, "last_doc_hidden", None)
+                if target_model is not None
+                else None
+            )
+            split_metrics = compute_token_split_metrics(
+                valid_utilities,
+                sparsity_threshold=self.sparsity_threshold,
+                valid_doc_hidden=doc_h,
+            )
+            for k, v in split_metrics.items():
+                info.metrics.add(ScalarMetric(k, float(v.item()), nrecords))
 
         # Log TensorBoard histogram at validation interval boundaries
         writer = getattr(info, "writer", None)
@@ -223,6 +292,11 @@ class GatedValueRegularizer(TrainingHook):
             mask = doc_mask.bool()
             valid_v_norms = per_token_v_norm.masked_select(mask)
             valid_utilities = utilities.masked_select(mask.unsqueeze(-1))
+            valid_doc_h = (
+                doc_hidden.masked_select(mask.unsqueeze(-1)).view(-1, hidden_size)
+                if doc_hidden is not None
+                else None
+            )
             if valid_v_norms.numel() > 0:
                 mean_v_norm = valid_v_norms.mean()
                 mean_utility = valid_utilities.mean()
@@ -238,6 +312,9 @@ class GatedValueRegularizer(TrainingHook):
             sparsity = (utilities < self.sparsity_threshold).float().mean()
             valid_v_norms = per_token_v_norm.view(-1)
             valid_utilities = utilities.view(-1)
+            valid_doc_h = (
+                doc_hidden.view(-1, hidden_size) if doc_hidden is not None else None
+            )
 
         reg_loss = mean_v_norm
         info.add_loss(Loss("gated_value_reg", reg_loss, self.lambda_reg))
@@ -261,14 +338,19 @@ class GatedValueRegularizer(TrainingHook):
                 ScalarMetric("utility/sparsity", float(sparsity.item()), nrecords)
             )
 
-            wv_mean, wv_layer0 = compute_wv_norms(target_model)
-            if wv_mean is not None:
-                info.metrics.add(
-                    ScalarMetric("wv_norm/mean", float(wv_mean.item()), nrecords)
-                )
-                info.metrics.add(
-                    ScalarMetric("wv_norm/layer_0", float(wv_layer0.item()), nrecords)
-                )
+            # Monitor Model Matrix Norms (W_V, W_O, Classifier Head)
+            norm_metrics = compute_model_norm_metrics(target_model)
+            for k, v in norm_metrics.items():
+                info.metrics.add(ScalarMetric(k, float(v.item()), nrecords))
+
+            # Monitor Token-Level Diagnostics (Kept vs Suppressed)
+            split_metrics = compute_token_split_metrics(
+                valid_utilities,
+                sparsity_threshold=self.sparsity_threshold,
+                valid_doc_hidden=valid_doc_h,
+            )
+            for k, v in split_metrics.items():
+                info.metrics.add(ScalarMetric(k, float(v.item()), nrecords))
 
         # Log TensorBoard histograms
         writer = getattr(info, "writer", None)
