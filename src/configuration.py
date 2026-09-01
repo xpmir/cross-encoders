@@ -206,7 +206,7 @@ class PlaidConfiguration:
     """Whether to use PLAID for retrieval"""
 
     ### Indexation params ###
-    buffer_size: int = 1000
+    buffer_size: GridSearch[int] = 1000
     """Number of documents to use for creating/updating the PLAID index"""
 
     batch_size: int = 25_000
@@ -215,7 +215,7 @@ class PlaidConfiguration:
     dim: int = 128
     """Per-token embedding dimension for PLAID index"""
 
-    n_bits: int = 2
+    n_bits: GridSearch[int] = 2
     """Number of bits for residual quantization in PLAID"""
 
     kmeans_niters: int = 4
