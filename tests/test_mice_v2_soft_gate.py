@@ -581,3 +581,176 @@ def test_compensation_diagnostics_metrics():
     assert "classifier_norm" in metrics_dict, "classifier_norm should be logged"
     assert "doc_hidden_norm/mean" in metrics_dict, "doc_hidden_norm/mean should be logged"
     assert "gated_doc_norm/mean" in metrics_dict, "gated_doc_norm/mean should be logged"
+
+
+def test_utility_regularizer_budget_above_and_below():
+    """Test UtilityRegularizer with target retention budget (over budget vs under budget)."""
+    # 1. Over budget case: mean_utility = 0.5 > budget = 0.3
+    reg_hook_budget = UtilityRegularizer.C(lambda_reg=0.1, budget=0.3)
+    ctx_over = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    ctx_over.metrics = Metrics()
+    u_over = torch.full((2, 10, 1), 0.5, requires_grad=True)
+
+    with ctx_over.losses() as losses:
+        reg_hook_budget(ctx_over, u_over)
+
+    # Loss = lambda_reg * relu(0.5 - 0.3) = 0.1 * 0.2 = 0.02
+    assert len(losses) == 1
+    assert losses[0].value.item() == pytest.approx(0.2, rel=1e-5)
+    loss_over = losses[0].value * 0.1
+    loss_over.backward()
+    assert u_over.grad is not None and u_over.grad.abs().sum() > 0
+
+    metrics_over = {name: metric.compute() for name, metric in ctx_over.metrics.metrics.items()}
+    assert metrics_over["utility/budget"] == pytest.approx(0.3)
+    assert metrics_over["utility/over_budget"] == pytest.approx(0.2)
+    assert metrics_over["utility_reg"] == pytest.approx(0.02)
+
+    # 2. Under budget case: mean_utility = 0.2 <= budget = 0.3
+    ctx_under = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    ctx_under.metrics = Metrics()
+    u_under = torch.full((2, 10, 1), 0.2, requires_grad=True)
+
+    with ctx_under.losses() as losses_under:
+        reg_hook_budget(ctx_under, u_under)
+
+    assert len(losses_under) == 1
+    assert losses_under[0].value.item() == pytest.approx(0.0)
+    loss_under = losses_under[0].value * 0.1
+    loss_under.backward()
+    # Gradient must be strictly zero when under budget
+    assert u_under.grad is None or u_under.grad.abs().sum() == 0
+
+    metrics_under = {name: metric.compute() for name, metric in ctx_under.metrics.metrics.items()}
+    assert metrics_under["utility/budget"] == pytest.approx(0.3)
+    assert metrics_under["utility/over_budget"] == pytest.approx(0.0)
+    assert metrics_under["utility_reg"] == pytest.approx(0.0)
+
+    # 3. Default budget=None case: legacy L1 loss
+    reg_hook_default = UtilityRegularizer.C(lambda_reg=0.1)
+    ctx_default = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    ctx_default.metrics = Metrics()
+    with ctx_default.losses() as losses_default:
+        reg_hook_default(ctx_default, u_over)
+
+    assert len(losses_default) == 1
+    assert losses_default[0].value.item() == pytest.approx(0.5)
+    metrics_default = {name: metric.compute() for name, metric in ctx_default.metrics.metrics.items()}
+    assert "utility/budget" not in metrics_default
+
+
+def test_micev2_fine_tuning_reg_budget_config():
+    """Test MiceV2_FineTuning reg_budget configuration."""
+    from MICE.experiments.micev2_training import MiceV2_FineTuning
+    cfg = MiceV2_FineTuning()
+    assert cfg.reg_budget is None
+
+    cfg_budget = MiceV2_FineTuning(reg_budget=0.3)
+    assert cfg_budget.reg_budget == 0.3
+
+    assert cfg.l2_reg is False
+    cfg_l2 = MiceV2_FineTuning(l2_reg=True)
+    assert cfg_l2.l2_reg is True
+
+
+def test_utility_regularizer_l2_reg():
+    """Test UtilityRegularizer with l2_reg=True (squared penalty, with and without budget)."""
+    # 1. Without budget: mean_utility = 0.5 -> loss = 0.5**2 = 0.25
+    reg_hook_l2 = UtilityRegularizer.C(lambda_reg=0.1, l2_reg=True)
+    ctx1 = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    ctx1.metrics = Metrics()
+    u = torch.full((2, 10, 1), 0.5, requires_grad=True)
+
+    with ctx1.losses() as losses1:
+        reg_hook_l2(ctx1, u)
+
+    assert len(losses1) == 1
+    # reg_loss = 0.5**2 = 0.25
+    assert losses1[0].value.item() == pytest.approx(0.25, rel=1e-5)
+    metrics1 = {name: metric.compute() for name, metric in ctx1.metrics.metrics.items()}
+    assert metrics1["utility_reg"] == pytest.approx(0.1 * 0.25)
+
+    # 2. With budget: mean_utility = 0.5, budget = 0.3 -> diff = 0.2 -> loss = 0.2**2 = 0.04
+    reg_hook_l2_budget = UtilityRegularizer.C(lambda_reg=0.1, budget=0.3, l2_reg=True)
+    ctx2 = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    ctx2.metrics = Metrics()
+    u2 = torch.full((2, 10, 1), 0.5, requires_grad=True)
+
+    with ctx2.losses() as losses2:
+        reg_hook_l2_budget(ctx2, u2)
+
+    assert len(losses2) == 1
+    # reg_loss = (0.5 - 0.3)**2 = 0.04
+    assert losses2[0].value.item() == pytest.approx(0.04, rel=1e-5)
+    metrics2 = {name: metric.compute() for name, metric in ctx2.metrics.metrics.items()}
+    assert metrics2["utility/budget"] == pytest.approx(0.3)
+    assert metrics2["utility/over_budget"] == pytest.approx(0.2)
+    assert metrics2["utility_reg"] == pytest.approx(0.1 * 0.04)
+
+    # 3. Under budget: mean_utility = 0.2 <= budget = 0.3 -> loss = 0.0
+    ctx3 = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    ctx3.metrics = Metrics()
+    u3 = torch.full((2, 10, 1), 0.2, requires_grad=True)
+
+    with ctx3.losses() as losses3:
+        reg_hook_l2_budget(ctx3, u3)
+
+    assert len(losses3) == 1
+    assert losses3[0].value.item() == pytest.approx(0.0)
+    metrics3 = {name: metric.compute() for name, metric in ctx3.metrics.metrics.items()}
+    assert metrics3["utility/over_budget"] == pytest.approx(0.0)
+    assert metrics3["utility_reg"] == pytest.approx(0.0)
