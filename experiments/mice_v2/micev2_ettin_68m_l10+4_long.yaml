@@ -11,7 +11,7 @@ nb_repetitions: 2
 #longer Training
 learner:
     optimization:
-        max_epochs: 5000 # 3k x 256 x 100 = 77M < 143M in dataset
+        max_epochs: 5000 # 5k x 256 x 100 = 128M < 143M in dataset
 
 
 evaluation: #default = Minified tests

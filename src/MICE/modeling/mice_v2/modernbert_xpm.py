@@ -128,6 +128,12 @@ class UtilityRegularizer(TrainingHook):
     lambda_reg: Param[float] = field(default=0.1)
     """Regularization weight for utility predictor L1 loss"""
 
+    budget: Param[Optional[float]] = field(default=None, ignore_default=True)
+    """Optional target retention budget (e.g. 0.3 for 30% retention). If set, loss is relu(mean_utility - budget), halting regularization when mean_utility <= budget."""
+
+    l2_reg: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to square the regularization loss (L2 penalty instead of L1). Provides smoother gradients especially when combined with budget."""
+
     sparsity_threshold: Meta[float] = field(default=0.5)
     """Threshold below which a token utility score is considered suppressed / sparse (default 0.5) affects sparsity metric computation only"""
 
@@ -166,7 +172,13 @@ class UtilityRegularizer(TrainingHook):
             sparsity = (utilities < self.sparsity_threshold).float().mean()
             valid_utilities = utilities.view(-1)
 
-        reg_loss = mean_utility
+        if self.budget is not None:
+            diff = F.relu(mean_utility - self.budget)
+        else:
+            diff = mean_utility
+
+        reg_loss = diff**2 if self.l2_reg else diff
+
         info.add_loss(Loss("utility_reg", reg_loss, self.lambda_reg))
 
         if getattr(info, "metrics", None) is not None:
@@ -174,7 +186,7 @@ class UtilityRegularizer(TrainingHook):
             info.metrics.add(
                 ScalarMetric(
                     "utility_reg",
-                    float((self.lambda_reg * mean_utility).item()),
+                    float((self.lambda_reg * reg_loss).item()),
                     nrecords,
                 )
             )
@@ -184,6 +196,13 @@ class UtilityRegularizer(TrainingHook):
             info.metrics.add(
                 ScalarMetric("utility/sparsity", float(sparsity.item()), nrecords)
             )
+            if self.budget is not None:
+                info.metrics.add(
+                    ScalarMetric("utility/budget", float(self.budget), nrecords)
+                )
+                info.metrics.add(
+                    ScalarMetric("utility/over_budget", float(diff.item()), nrecords)
+                )
 
             # Monitor Model Matrix Norms (W_V, W_O, Classifier Head)
             target_model = hf_model or getattr(info, "model", None)
@@ -228,6 +247,12 @@ class GatedValueRegularizer(TrainingHook):
 
     lambda_reg: Param[float] = field(default=0.1)
     """Regularization weight for gated value norm loss"""
+
+    budget: Param[Optional[float]] = field(default=None)
+    """Optional target budget for gated value norm. If set, loss is relu(mean_v_norm - budget)."""
+
+    l2_reg: Param[bool] = field(default=False)
+    """Whether to square the regularization loss. Provides smoother gradients especially when combined with budget."""
 
     sparsity_threshold: Meta[float] = field(default=0.5)
     """Threshold below which a token utility score is considered suppressed / sparse"""
@@ -317,7 +342,13 @@ class GatedValueRegularizer(TrainingHook):
                 doc_hidden.view(-1, hidden_size) if doc_hidden is not None else None
             )
 
-        reg_loss = mean_v_norm
+        if self.budget is not None:
+            diff = F.relu(mean_v_norm - self.budget)
+        else:
+            diff = mean_v_norm
+
+        reg_loss = diff**2 if self.l2_reg else diff
+
         info.add_loss(Loss("gated_value_reg", reg_loss, self.lambda_reg))
 
         if getattr(info, "metrics", None) is not None:
@@ -325,7 +356,7 @@ class GatedValueRegularizer(TrainingHook):
             info.metrics.add(
                 ScalarMetric(
                     "gated_value_reg",
-                    float((self.lambda_reg * mean_v_norm).item()),
+                    float((self.lambda_reg * reg_loss).item()),
                     nrecords,
                 )
             )
@@ -338,6 +369,13 @@ class GatedValueRegularizer(TrainingHook):
             info.metrics.add(
                 ScalarMetric("utility/sparsity", float(sparsity.item()), nrecords)
             )
+            if self.budget is not None:
+                info.metrics.add(
+                    ScalarMetric("value_norm/budget", float(self.budget), nrecords)
+                )
+                info.metrics.add(
+                    ScalarMetric("value_norm/over_budget", float(diff.item()), nrecords)
+                )
 
             # Monitor Model Matrix Norms (W_V, W_O, Classifier Head)
             norm_metrics = compute_model_norm_metrics(target_model)

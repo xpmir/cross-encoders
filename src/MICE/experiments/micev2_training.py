@@ -78,6 +78,12 @@ class MiceV2_FineTuning(CE_FineTuning):
     reg_target: GridSearch[str] = "u"
     """Target for regularization: 'u' for mean utility loss, 'u_wv_h' for gated value norm loss (u * W_V * h)"""
 
+    reg_budget: GridSearch[Optional[float]] = None
+    """Optional target retention budget for utility regularizer (e.g. 0.3 for 30% retention). If None, standard linear L1 regularization is used."""
+
+    l2_reg: GridSearch[bool] = False
+    """Whether to square the regularization penalty (L2 instead of L1) for smoother optimization"""
+
     phase2_training: GridSearch[bool] = False
     """Whether to run Phase 2 hard token pruning fine-tuning after Phase 1 soft gating"""
 
@@ -331,6 +337,8 @@ def TrainEvaluateMiceV2(
                 ce_trainer.hooks.append(
                     UtilityRegularizer.C(
                         lambda_reg=cfg.lambda_reg,
+                        budget=cfg.reg_budget,
+                        l2_reg=cfg.l2_reg,
                         histogram_interval=histogram_interval,
                         sparsity_threshold=cfg.hard_prune_threshold,
                     )
@@ -339,6 +347,8 @@ def TrainEvaluateMiceV2(
                 ce_trainer.hooks.append(
                     GatedValueRegularizer.C(
                         lambda_reg=cfg.lambda_reg,
+                        budget=cfg.reg_budget,
+                        l2_reg=cfg.l2_reg,
                         histogram_interval=histogram_interval,
                         sparsity_threshold=cfg.hard_prune_threshold,
                     )

@@ -305,13 +305,17 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     normalize_docs_per_batch: bool = True
     """whether to normalize documents per batch for listwise losses"""
 
-    grid_search: Dict[str, GridSearch[Any]] = field(factory=dict)
+    grid_search: Dict[str, Any] = field(factory=dict)
     """
-    Grid search parameters. Maps a dot-separated parameter path to a GenericParams object.
+    Grid search parameters. Maps a dot-separated parameter path to values,
+    or contains 'config_dicts' for coupled parameter combinations.
     Example in YAML:
     grid_search:
       learner.optimization.lr:
         values_list: [1e-5, 2e-5]
       pooling_method:
         value: "cls"
+      config_dicts:
+        - reg_budget: null
+          l2_reg: false
     """
