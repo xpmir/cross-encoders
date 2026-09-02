@@ -23,7 +23,7 @@ learner:
 compress_dim:
     values_list: [1.0, 1.333333333, 2.0, 4.0]
 compress_init_option:
-    values_list: [random]
+    values_list: ["seed", "random"]
 
 evaluation:
     eval_checkpoint: "last"

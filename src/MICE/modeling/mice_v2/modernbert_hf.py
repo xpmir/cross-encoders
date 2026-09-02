@@ -291,7 +291,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         bottom_final_norm: bool = True,
         top_final_norm: bool = False,
         compress_dim: float = 1.0,
-        compress_init_option: str = "random_projection",
+        compress_init_option: str = "seed",
         num_labels: int = 1,
         **kwargs,
     ):

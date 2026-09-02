@@ -108,8 +108,11 @@ class MiceV2_FineTuning(CE_FineTuning):
     compress_dim: GridSearch[float] = 1.0
     """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
 
-    compress_init_option: GridSearch[str] = "random_projection"
-    """How to initialize compressed top-layer weights when compress_dim > 1.0: 'random', 'random_projection', or 'svd_projection'"""
+    compress_init_option: GridSearch[str] = "seed"
+    """How top interaction layers are initialized: 'seed' (load from the pretrained
+    checkpoint when compress_dim == 1.0, else falls back to 'random'), 'random' (always
+    skip seeding, keep each layer's own default init), 'random_projection', or
+    'svd_projection' (both only meaningful when compress_dim > 1.0)"""
 
 
 def build_mice_v2(

@@ -219,9 +219,27 @@ def initialize_compressed_top_layers(
     n_contextualization_layers: int,
     compress_init_option: str,
 ) -> None:
-    """Initializes `hf_model.adapter`, `hf_model.top_final_norm` (if present)
-    and every `hf_model.top_layers[i]` from the pretrained `full_backbone`,
-    for a compressed (`compress_dim > 1.0`) model.
+    """Initializes `hf_model.adapter` (if present), `hf_model.top_final_norm`
+    (if present) and every `hf_model.top_layers[i]` from the pretrained
+    `full_backbone`, by deriving each top-layer weight as a projection of the
+    corresponding pretrained weight through a shared `P`/`P_int`.
+
+    `hf_model.top_config.hidden_size`/`intermediate_size` may equal the native
+    (uncompressed) size -- that happens when this is called at `compress_dim
+    == 1.0` with an explicit `"random_projection"`/`"svd_projection"` request
+    (rather than "seed", which just loads directly instead of calling this
+    function at all). In that case `P`/`P_int` are full-size (semi-)orthogonal
+    rotations rather than dimension-reducing projections, and since there is
+    no `hf_model.adapter` to persist `P` into (it's only allocated once
+    `compress_dim > 1.0`), `P` is computed standalone and simply not stored
+    anywhere -- it only exists for the duration of this init pass, exactly
+    like the source `full_backbone` weights it's derived from.
+
+    Caller contract: `compress_init_option` must already be fully resolved by
+    the caller (`mice_v2_scorer()` / `InitMICEV2ModernBERTFromHFID.execute()`)
+    to one of "random", "random_projection", or "svd_projection" -- "seed" is a
+    resolution state that only makes sense with knowledge of `compress_dim`,
+    which this function does not have, so it never accepts that string.
 
     `compress_init_option`:
       - "random": no-op, every weight keeps its own independent default init.
@@ -234,7 +252,11 @@ def initialize_compressed_top_layers(
         return
 
     if compress_init_option not in ("random_projection", "svd_projection"):
-        raise ValueError(f"Unknown compress_init_option: {compress_init_option!r}")
+        raise ValueError(
+            f"Unknown compress_init_option: {compress_init_option!r} (expected "
+            "'random', 'random_projection', or 'svd_projection' -- 'seed' must "
+            "already be resolved by the caller before calling this function)"
+        )
 
     top_layers = hf_model.top_layers
     src_layers = _collect_source_layers(
@@ -247,14 +269,20 @@ def initialize_compressed_top_layers(
     intermediate_target_dim = hf_model.top_config.intermediate_size
 
     if compress_init_option == "random_projection":
-        P = hf_model.adapter.weight.detach().clone()
+        if hf_model.adapter is not None:
+            P = hf_model.adapter.weight.detach().clone()
+        else:
+            P = compute_random_projection(
+                hidden_target_dim, full_backbone.model.config.hidden_size
+            )
         P_int = compute_random_projection(
             intermediate_target_dim, full_backbone.model.config.intermediate_size
         )
     else:
         P, P_int = _fit_projections(src_layers, hidden_target_dim, intermediate_target_dim)
-        with torch.no_grad():
-            hf_model.adapter.weight.copy_(P)
+        if hf_model.adapter is not None:
+            with torch.no_grad():
+                hf_model.adapter.weight.copy_(P)
 
     for top_layer, src_layer in zip(top_layers, src_layers):
         norm_to_copy = (

@@ -404,7 +404,19 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
 
         # 3. Top interaction layers
         compress_dim = getattr(scorer.hf_model.config, "compress_dim", 1.0)
-        if compress_dim == 1.0:
+        # `mice_v2_scorer()` already resolves "seed"'s compress_dim-dependent fallback
+        # (seed from the pretrained checkpoint at compress_dim == 1.0, else "random")
+        # before building this scorer, so scorer.compress_init_option is always one of
+        # "seed" (compress_dim == 1.0 only), "random", "random_projection", or
+        # "svd_projection" by the time it gets here -- no further resolution needed.
+        compress_init_option = scorer.compress_init_option
+
+        if compress_init_option == "random":
+            logger.info(
+                "compress_init_option='random': leaving top interaction layers at "
+                "their own default (unseeded) initialization."
+            )
+        elif compress_init_option == "seed":
             if hasattr(full_backbone.model, "layers"):
                 logger.info(
                     f"Seeding {len(scorer.hf_model.top_layers)} top layers from backbone"
@@ -455,15 +467,15 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                         top_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
         else:
             logger.info(
-                f"Compressed top interaction layers (compress_dim={compress_dim}): "
+                f"Projection-derived init (compress_dim={compress_dim}): "
                 f"initializing {len(scorer.hf_model.top_layers)} top layers via "
-                f"compress_init_option={scorer.compress_init_option!r}"
+                f"compress_init_option={compress_init_option!r}"
             )
             initialize_compressed_top_layers(
                 scorer.hf_model,
                 full_backbone,
                 scorer.n_contextualization_layers,
-                scorer.compress_init_option,
+                compress_init_option,
             )
 
         # 4. Rotary embeddings
@@ -480,7 +492,7 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
             )
 
         if (
-            compress_dim == 1.0
+            compress_init_option == "seed"
             and hasattr(scorer.hf_model, "top_final_norm")
             and scorer.hf_model.top_final_norm is not None
         ):
@@ -679,11 +691,14 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
 
     compress_init_option: Param[str] = field(
-        default="random_projection", ignore_default=True
+        default="seed", ignore_default=True
     )
-    """How to initialize compressed top-layer weights when compress_dim > 1.0: 'random', 'random_projection', or 'svd_projection'"""
+    """How top interaction layers are initialized: 'seed' (load from the pretrained
+    checkpoint when compress_dim == 1.0, else falls back to 'random'), 'random' (always
+    skip seeding, keep each layer's own default init), 'random_projection', or
+    'svd_projection' (both only meaningful when compress_dim > 1.0)"""
 
-    _version: Constant[str] = "2.0.3"
+    _version: Constant[str] = "2.0.2"
 
     hf_model: nn.Module
 
@@ -1302,14 +1317,28 @@ def mice_v2_scorer(
     bottom_final_norm: bool = True,
     top_final_norm: bool = False,
     compress_dim: float = 1.0,
-    compress_init_option: str = "random_projection",
+    compress_init_option: str = "seed",
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
 ) -> Tuple[ModernBertMiceScorer, List[LightweightTask]]:
     """
     Factory function for ModernBERT MICE V2 scorer.
+
+    `compress_init_option="seed"` has fallback logic (seed from the pretrained
+    checkpoint when compress_dim == 1.0, else fall back to "random") that's
+    resolved here rather than later inside `InitMICEV2ModernBERTFromHFID.execute()`,
+    so the *resolved* value is what actually lands in the returned
+    `ModernBertMiceScorer`'s Param and thus its experimaestro identifier. This
+    means e.g. `compress_dim=2.0, compress_init_option="seed"` and
+    `compress_dim=2.0, compress_init_option="random"` -- which are functionally
+    identical, since "seed" always falls back to "random" once compress_dim !=
+    1.0 -- build the *same* scorer config and hash to the same task, so a grid
+    search sweeping both doesn't waste compute training the same model twice.
     """
+    if compress_init_option == "seed" and compress_dim != 1.0:
+        compress_init_option = "random"
+
     tokenizer = MICEQueryDocTokenizer.C(
         model_id=hf_id,
         max_query_length=max_query_length,
