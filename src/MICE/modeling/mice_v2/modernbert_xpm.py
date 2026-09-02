@@ -127,10 +127,10 @@ class UtilityRegularizer(TrainingHook):
     lambda_reg: Param[float] = field(default=0.1)
     """Regularization weight for utility predictor L1 loss"""
 
-    budget: Param[Optional[float]] = field(default=None)
+    budget: Param[Optional[float]] = field(default=None, ignore_default=True)
     """Optional target retention budget (e.g. 0.3 for 30% retention). If set, loss is relu(mean_utility - budget), halting regularization when mean_utility <= budget."""
 
-    l2_reg: Param[bool] = field(default=False)
+    l2_reg: Param[bool] = field(default=False, ignore_default=True)
     """Whether to square the regularization loss (L2 penalty instead of L1). Provides smoother gradients especially when combined with budget."""
 
     sparsity_threshold: Meta[float] = field(default=0.5)
