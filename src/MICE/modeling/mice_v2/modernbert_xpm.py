@@ -40,6 +40,7 @@ from MICE.modeling.mice_v2.modernbert_hf import (
     ModernBertMiceConfig,
     ModernBertMiceForSequenceClassification,
 )
+from MICE.modeling.mice_v2.compress_init import initialize_compressed_top_layers
 
 
 logger = logging.getLogger(__name__)
@@ -320,52 +321,68 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                     )
 
         # 3. Top interaction layers
-        if hasattr(full_backbone.model, "layers"):
-            logger.info(
-                f"Seeding {len(scorer.hf_model.top_layers)} top layers from backbone"
-            )
-            for idx, top_layer in enumerate(scorer.hf_model.top_layers):
-                src_layer_idx = scorer.n_contextualization_layers + idx
-                if src_layer_idx < len(full_backbone.model.layers):
-                    src_layer = full_backbone.model.layers[src_layer_idx]
-                    norm_to_copy = (
-                        src_layer.attn_norm
-                        if hasattr(src_layer, "attn_norm")
-                        and isinstance(src_layer.attn_norm, nn.LayerNorm)
-                        else (
-                            src_layer.mlp_norm
-                            if hasattr(src_layer, "mlp_norm")
-                            and isinstance(src_layer.mlp_norm, nn.LayerNorm)
-                            else None
+        compress_dim = getattr(scorer.hf_model.config, "compress_dim", 1.0)
+        if compress_dim == 1.0:
+            if hasattr(full_backbone.model, "layers"):
+                logger.info(
+                    f"Seeding {len(scorer.hf_model.top_layers)} top layers from backbone"
+                )
+                for idx, top_layer in enumerate(scorer.hf_model.top_layers):
+                    src_layer_idx = scorer.n_contextualization_layers + idx
+                    if src_layer_idx < len(full_backbone.model.layers):
+                        src_layer = full_backbone.model.layers[src_layer_idx]
+                        norm_to_copy = (
+                            src_layer.attn_norm
+                            if hasattr(src_layer, "attn_norm")
+                            and isinstance(src_layer.attn_norm, nn.LayerNorm)
+                            else (
+                                src_layer.mlp_norm
+                                if hasattr(src_layer, "mlp_norm")
+                                and isinstance(src_layer.mlp_norm, nn.LayerNorm)
+                                else None
+                            )
                         )
-                    )
-                    if norm_to_copy is not None:
-                        top_layer.cross_attn_norm.load_state_dict(
-                            norm_to_copy.state_dict()
-                        )
-                        top_layer.self_attn_norm.load_state_dict(
-                            norm_to_copy.state_dict()
-                        )
-                        if isinstance(top_layer.doc_cross_attn_norm, nn.LayerNorm):
-                            top_layer.doc_cross_attn_norm.load_state_dict(
+                        if norm_to_copy is not None:
+                            top_layer.cross_attn_norm.load_state_dict(
                                 norm_to_copy.state_dict()
                             )
+                            top_layer.self_attn_norm.load_state_dict(
+                                norm_to_copy.state_dict()
+                            )
+                            if isinstance(top_layer.doc_cross_attn_norm, nn.LayerNorm):
+                                top_layer.doc_cross_attn_norm.load_state_dict(
+                                    norm_to_copy.state_dict()
+                                )
 
-                    if hasattr(src_layer, "mlp_norm") and isinstance(
-                        src_layer.mlp_norm, nn.LayerNorm
-                    ):
-                        top_layer.mlp_norm.load_state_dict(
-                            src_layer.mlp_norm.state_dict()
+                        if hasattr(src_layer, "mlp_norm") and isinstance(
+                            src_layer.mlp_norm, nn.LayerNorm
+                        ):
+                            top_layer.mlp_norm.load_state_dict(
+                                src_layer.mlp_norm.state_dict()
+                            )
+
+                        top_layer.self_attn.load_state_dict(
+                            src_layer.attn.state_dict()
                         )
-
-                    top_layer.self_attn.load_state_dict(src_layer.attn.state_dict())
-                    top_layer.cross_attn.Wqkv.load_state_dict(
-                        src_layer.attn.Wqkv.state_dict()
-                    )
-                    top_layer.cross_attn.Wo.load_state_dict(
-                        src_layer.attn.Wo.state_dict()
-                    )
-                    top_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
+                        top_layer.cross_attn.Wqkv.load_state_dict(
+                            src_layer.attn.Wqkv.state_dict()
+                        )
+                        top_layer.cross_attn.Wo.load_state_dict(
+                            src_layer.attn.Wo.state_dict()
+                        )
+                        top_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
+        else:
+            logger.info(
+                f"Compressed top interaction layers (compress_dim={compress_dim}): "
+                f"initializing {len(scorer.hf_model.top_layers)} top layers via "
+                f"compress_init_option={scorer.compress_init_option!r}"
+            )
+            initialize_compressed_top_layers(
+                scorer.hf_model,
+                full_backbone,
+                scorer.n_contextualization_layers,
+                scorer.compress_init_option,
+            )
 
         # 4. Rotary embeddings
         logger.info("Seeding rotary_emb from backbone")
@@ -381,7 +398,8 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
             )
 
         if (
-            hasattr(scorer.hf_model, "top_final_norm")
+            compress_dim == 1.0
+            and hasattr(scorer.hf_model, "top_final_norm")
             and scorer.hf_model.top_final_norm is not None
         ):
             logger.info("Seeding top_final_norm from backbone")
@@ -575,7 +593,15 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     top_final_norm: Param[bool] = field(default=False, ignore_default=True)
     """Whether to apply LayerNorm at the output of top interaction layers before classifier"""
 
-    _version: Constant[str] = "2.0.2"
+    compress_dim: Param[float] = field(default=1.0, ignore_default=True)
+    """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
+
+    compress_init_option: Param[str] = field(
+        default="random_projection", ignore_default=True
+    )
+    """How to initialize compressed top-layer weights when compress_dim > 1.0: 'random', 'random_projection', or 'svd_projection'"""
+
+    _version: Constant[str] = "2.0.3"
 
     hf_model: nn.Module
 
@@ -635,6 +661,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 apply_override("bottom_final_norm", False)
             if self.top_final_norm:
                 apply_override("top_final_norm", True)
+            if self.compress_dim != 1.0:
+                apply_override("compress_dim", self.compress_dim)
+                apply_override("compress_init_option", self.compress_init_option)
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -654,6 +683,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 top_layers_doc_ln=self.top_layers_doc_ln,
                 bottom_final_norm=self.bottom_final_norm,
                 top_final_norm=self.top_final_norm,
+                compress_dim=self.compress_dim,
+                compress_init_option=self.compress_init_option,
                 **config_kwargs,
             )
 
@@ -1123,7 +1154,8 @@ class MiceV2DocumentEncoder(TextEncoderBase):
 
     @property
     def dimension(self):
-        return getattr(self.model.hf_model.config, "hidden_size", 768)
+        top_config = getattr(self.model.hf_model, "top_config", self.model.hf_model.config)
+        return getattr(top_config, "hidden_size", 768)
 
     @staticmethod
     def _token_mask(output: TokensRepresentationOutput) -> Optional[torch.Tensor]:
@@ -1187,6 +1219,8 @@ def mice_v2_scorer(
     top_layers_doc_ln: bool = False,
     bottom_final_norm: bool = True,
     top_final_norm: bool = False,
+    compress_dim: float = 1.0,
+    compress_init_option: str = "random_projection",
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -1217,6 +1251,8 @@ def mice_v2_scorer(
         top_layers_doc_ln=top_layers_doc_ln,
         bottom_final_norm=bottom_final_norm,
         top_final_norm=top_final_norm,
+        compress_dim=compress_dim,
+        compress_init_option=compress_init_option,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

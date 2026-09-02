@@ -105,6 +105,12 @@ class MiceV2_FineTuning(CE_FineTuning):
     top_final_norm: GridSearch[bool] = False
     """Whether to apply LayerNorm at the output of top interaction layers before classifier"""
 
+    compress_dim: GridSearch[float] = 1.0
+    """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
+
+    compress_init_option: GridSearch[str] = "random_projection"
+    """How to initialize compressed top-layer weights when compress_dim > 1.0: 'random', 'random_projection', or 'svd_projection'"""
+
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
@@ -132,6 +138,8 @@ def build_mice_v2(
         top_layers_doc_ln=cfg.top_layers_doc_ln,
         bottom_final_norm=cfg.bottom_final_norm,
         top_final_norm=cfg.top_final_norm,
+        compress_dim=cfg.compress_dim,
+        compress_init_option=cfg.compress_init_option,
         max_length=max_len,
         max_query_length=cfg.max_query_length,
         max_doc_length=cfg.max_doc_length,
