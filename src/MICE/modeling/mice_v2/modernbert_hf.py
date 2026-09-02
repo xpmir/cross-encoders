@@ -851,6 +851,16 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             wv_list.append(W_V)
         return wv_list
 
+    def get_wo_matrices(self) -> List[torch.Tensor]:
+        """Extract W_O weight matrices from top cross-attention layers."""
+        return [top_layer.cross_attn.Wo.weight for top_layer in self.top_layers]
+
+    def get_classifier_norm(self) -> Optional[torch.Tensor]:
+        """Compute Frobenius norm of classifier head weight."""
+        if hasattr(self, "classifier") and hasattr(self.classifier, "weight"):
+            return torch.norm(self.classifier.weight, p="fro")
+        return None
+
     def _init_weights(self, module):
         super()._init_weights(module)
         if isinstance(module, UtilityPredictor):
@@ -1024,10 +1034,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             hard_prune = self.config.hard_pruning
             threshold = self.config.hard_prune_threshold
             self.last_utilities = self.utility_predictor(d_hidden)
-
-            if self.training:
-                # store these for regularization
-                self.last_doc_hidden = d_hidden
+            self.last_doc_hidden = d_hidden
 
             if hard_prune:
                 if use_unpadded and cu_seqlens_d is not None:

@@ -13,6 +13,8 @@ learner:
     optimization:
         max_epochs: 2000 #  x 256 x 100 = ??M Samples < 145M in full dataset
 
+    requirements: duration=10h & cpu(cores=16) & cuda(mem=80G)*2 # H100
+
 
 top_layers_doc_ln: true
 bottom_final_norm: false
@@ -27,8 +29,12 @@ eval_phase_1: false
 
 lambda_reg:
     values_list:
-        - 1e-1
+        # - 1e-1
         - 2e-1
+        - 5e-1
+
+normalize_doc_embeds:
+    values_list: [true, false]
 
 reg_target:
     values_list:

@@ -505,3 +505,79 @@ def test_micev2_fine_tuning_reg_target_config():
 
     cfg_val = MiceV2_FineTuning(reg_target="u_wv_h")
     assert cfg_val.reg_target == "u_wv_h"
+
+
+def test_soft_gate_eval_mode_shape_matching():
+    """Test that model.eval() executes soft gating without shape mismatch across varying batch lengths."""
+    config = ModernBertMiceConfig(
+        hidden_size=64,
+        num_attention_heads=2,
+        num_hidden_layers=4,
+        n_contextualization_layers=2,
+        utility_pred=True,
+        top_layers_doc_ln=True,
+    )
+    model = ModernBertMiceForSequenceClassification(config)
+    model.eval()
+
+    # Batch 1: doc length 16
+    q1 = torch.randint(0, 100, (2, 4))
+    qm1 = torch.ones((2, 4), dtype=torch.bool)
+    d1 = torch.randint(0, 100, (2, 16))
+    dm1 = torch.ones((2, 16), dtype=torch.bool)
+
+    out1 = model(query_ids=q1, query_mask=qm1, doc_ids=d1, doc_mask=dm1)
+    assert out1.logits.shape == (2, 1)
+
+    # Batch 2: doc length 24 (different length) - must not crash with shape mismatch
+    q2 = torch.randint(0, 100, (2, 4))
+    qm2 = torch.ones((2, 4), dtype=torch.bool)
+    d2 = torch.randint(0, 100, (2, 24))
+    dm2 = torch.ones((2, 24), dtype=torch.bool)
+
+    out2 = model(query_ids=q2, query_mask=qm2, doc_ids=d2, doc_mask=dm2)
+    assert out2.logits.shape == (2, 1)
+
+
+def test_compensation_diagnostics_metrics():
+    """Test that wo_norm, doc_hidden_norm, gated_doc_norm, and gated_contrast_ratio are logged."""
+    config = ModernBertMiceConfig(
+        hidden_size=64,
+        num_attention_heads=2,
+        num_hidden_layers=4,
+        n_contextualization_layers=2,
+        utility_pred=True,
+    )
+    model = ModernBertMiceForSequenceClassification(config)
+
+    q = torch.randint(0, 100, (2, 4))
+    qm = torch.ones((2, 4), dtype=torch.bool)
+    d = torch.randint(0, 100, (2, 8))
+    dm = torch.ones((2, 8), dtype=torch.bool)
+
+    out = model(query_ids=q, query_mask=qm, doc_ids=d, doc_mask=dm)
+
+    reg_hook = UtilityRegularizer.C(lambda_reg=0.1)
+
+    context = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=model,
+        optimizer=None,
+        fabric=None,
+    )
+    context.metrics = Metrics()
+
+    with context.losses():
+        reg_hook(context, model.last_utilities, doc_mask=dm, hf_model=model)
+
+    metrics_dict = {name: metric.compute() for name, metric in context.metrics.metrics.items()}
+
+    assert "wo_norm/mean" in metrics_dict, "wo_norm/mean should be logged"
+    assert "wo_norm/layer_0" in metrics_dict, "wo_norm/layer_0 should be logged"
+    assert "classifier_norm" in metrics_dict, "classifier_norm should be logged"
+    assert "doc_hidden_norm/mean" in metrics_dict, "doc_hidden_norm/mean should be logged"
+    assert "gated_doc_norm/mean" in metrics_dict, "gated_doc_norm/mean should be logged"
