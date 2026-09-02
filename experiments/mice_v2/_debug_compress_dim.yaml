@@ -20,11 +20,6 @@ learner:
         max_epochs: 1500
     requirements: duration=10h & cpu(cores=16, mem=10G) & cuda(mem=50G) * 2
 
-compress_dim:
-    values_list: [1.0, 1.333333333, 2.0, 4.0]
-compress_init_option:
-    values_list: ["seed", "random"]
-
 evaluation:
     eval_checkpoint: "last"
     all_datasets: false
@@ -35,3 +30,12 @@ evaluation:
 
 retrieval:
     requirements: duration=3h & cpu(cores=16) & cuda(mem=20G)
+
+
+grid_search:
+    config_dicts: 
+        - {compress_dim: 1.0, compress_init_option: "seed"}
+        - {compress_dim: 1.0, compress_init_option: "random"}
+        - {compress_dim: 1.333333333, compress_init_option: "random"}
+        - {compress_dim: 2.0, compress_init_option: "random"}
+        - {compress_dim: 4.0, compress_init_option: "random"}
