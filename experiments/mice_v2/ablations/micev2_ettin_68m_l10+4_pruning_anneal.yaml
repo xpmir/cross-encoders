@@ -1,4 +1,4 @@
-id: train_micev2_ettin68m_l10+4_abl_pruning_v2
+id: train_micev2_ettin68m_l10+4_abl_pruning_anneal
 title: "Mice-Ettin-68m Bottom LayerNorm Ablation"
 description:
     Ablation comparing applying vs skipping LayerNorm at the output of bottom contextualization layers.
@@ -48,11 +48,10 @@ reg_target: u
 grid_search:
     config_dicts:
         - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: null} # baseline -> degenerates
-        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3} # Anneal temperature
-        - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1, temp_end: null}
-        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: null} #
 
-        - {reg_budget: 0.2, l2_reg: false, lambda_reg: 5e-1, temp_end: null}
-        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 5e-1, temp_end: null}
-        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0, temp_end: null}
-        - {reg_budget: 0.1, l2_reg: true, lambda_reg: 5e-1, temp_end: null}
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3} # Anneal temperature
+        - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1, temp_end: null} # l2 reg
+        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: null}
+        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3} # combine annealing and l2
+
+        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0, temp_end: null} #example of Bugdet reg
