@@ -39,6 +39,8 @@ evaluation: #default = Minified tests
 lambda_reg: 5e-1
 normalize_doc_embeds: true
 reg_target: u
+temp_start: 1.0
+temp_schedule: linear
 
 # reg_budget:
 #     values_list: [null, 0.2]
@@ -47,14 +49,24 @@ reg_target: u
 
 grid_search:
     config_dicts:
-        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: null} # baseline -> degenerates
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: null, temp_schedule: linear} # baseline -> degenerates
 
-        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3} # Anneal temperature
-        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-1} # Anneal temperature
+        # Anneal temperature: linear vs cosine vs exp (temp_end: 1e-1)
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-1, temp_schedule: linear}
+        # Anneal temperature: linear vs cosine vs exp (temp_end: 1e-3)
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3, temp_schedule: linear}
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3, temp_schedule: cosine}
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3, temp_schedule: exp}
 
-        - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1, temp_end: null} # l2 reg
-        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: null}
-        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3} # combine annealing and l2
-        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-1} # combine annealing and l2
+        # L2 reg baselines
+        - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1, temp_end: null, temp_schedule: linear} # l2 reg
+        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: null, temp_schedule: linear}
 
-        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0, temp_end: null} #example of Bugdet reg
+        # Combine annealing (schedules) and l2
+        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3, temp_schedule: linear}
+        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3, temp_schedule: cosine}
+        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3, temp_schedule: exp}
+        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-1, temp_schedule: linear}
+
+        #example of Budget reg
+        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0, temp_end: null, temp_schedule: linear}

@@ -23,3 +23,11 @@ base: jhu-clsp/ettin-encoder-68m
 
 #override _common.yaml
 max_len: null
+
+evaluation: #default = Minified tests
+    all_datasets: false
+    in_domain: true
+    beir13: true
+    eval_checkpoint:
+        - last
+        - 3000

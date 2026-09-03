@@ -19,6 +19,8 @@ from MICE.modeling.mice_v2.modernbert_xpm import (
     UtilityRegularizer,
     GatedValueRegularizer,
     compute_linear_schedule,
+    compute_cosine_schedule,
+    compute_temperature_schedule,
     update_utility_temperature,
 )
 from xpmir.letor.records import PointwiseItems
@@ -778,6 +780,40 @@ def test_compute_linear_schedule():
     assert compute_linear_schedule(1.0, 0.1, step=0, total_steps=0) == pytest.approx(0.1)
 
 
+def test_compute_cosine_and_temperature_schedule():
+    """Test compute_cosine_schedule, compute_temperature_schedule, and schedule dispatch."""
+    import math
+
+    # 1. Cosine boundaries and midpoint
+    assert compute_cosine_schedule(1.0, 0.1, step=0, total_steps=100) == pytest.approx(1.0)
+    assert compute_cosine_schedule(1.0, 0.1, step=50, total_steps=100) == pytest.approx(0.55)
+    assert compute_cosine_schedule(1.0, 0.1, step=100, total_steps=100) == pytest.approx(0.1)
+
+    # 2. S-curve property: slower initial decay than linear
+    # At step 25 (25% progress):
+    # linear is 1.0 - 0.25 * 0.9 = 0.775
+    # cosine is 0.1 + 0.45 * (1 + cos(pi/4)) = 0.1 + 0.45 * (1 + sqrt(2)/2) ~= 0.8682
+    cos_step25 = compute_cosine_schedule(1.0, 0.1, step=25, total_steps=100)
+    lin_step25 = compute_linear_schedule(1.0, 0.1, step=25, total_steps=100)
+    assert cos_step25 > lin_step25
+    expected_cos_step25 = 0.1 + 0.5 * 0.9 * (1.0 + math.cos(math.pi * 0.25))
+    assert cos_step25 == pytest.approx(expected_cos_step25)
+
+    # 3. Beyond total steps and negative steps
+    assert compute_cosine_schedule(1.0, 0.1, step=150, total_steps=100) == pytest.approx(0.1)
+    assert compute_cosine_schedule(1.0, 0.1, step=-10, total_steps=100) == pytest.approx(1.0)
+    assert compute_cosine_schedule(1.0, None, step=50, total_steps=100) == pytest.approx(1.0)
+    assert compute_cosine_schedule(1.0, 0.1, step=0, total_steps=0) == pytest.approx(0.1)
+
+    # 4. compute_temperature_schedule dispatch
+    assert compute_temperature_schedule(1.0, 0.1, step=25, total_steps=100, schedule="linear") == pytest.approx(lin_step25)
+    assert compute_temperature_schedule(1.0, 0.1, step=25, total_steps=100, schedule="cosine") == pytest.approx(cos_step25)
+
+    # 5. Unknown schedule raises ValueError (no silent errors)
+    with pytest.raises(ValueError, match="Unknown temperature schedule 'unknown'"):
+        compute_temperature_schedule(1.0, 0.1, step=25, total_steps=100, schedule="unknown")
+
+
 def test_utility_predictor_temperature_always_divides():
     """Test that UtilityPredictor registers temperature buffer, always divides by temperature, and classification model has no proxy helpers."""
     # 1. Default temperature is 1.0
@@ -875,6 +911,22 @@ def test_utility_regularizer_temperature_annealing():
     assert model.utility_predictor.temperature.item() == pytest.approx(0.1)
     m100 = {name: metric.compute() for name, metric in ctx.metrics.metrics.items()}
     assert m100["utility/temperature"] == pytest.approx(0.1)
+
+    # Test temp_schedule="cosine"
+    reg_hook_cos = UtilityRegularizer.C(
+        lambda_reg=0.1,
+        temp_start=1.0,
+        temp_end=0.1,
+        temp_schedule="cosine",
+    )
+    ctx.state.steps = 25
+    ctx.metrics = Metrics()
+    with ctx.losses():
+        reg_hook_cos(ctx, u, hf_model=model)
+    expected_cos_25 = compute_cosine_schedule(1.0, 0.1, step=25, total_steps=100)
+    assert model.utility_predictor.temperature.item() == pytest.approx(expected_cos_25)
+    m_cos25 = {name: metric.compute() for name, metric in ctx.metrics.metrics.items()}
+    assert m_cos25["utility/temperature"] == pytest.approx(expected_cos_25)
 
 
 def test_modernbert_mice_config_owns_only_utility_temp():

@@ -121,6 +121,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     temp_anneal_steps: GridSearch[Optional[int]] = None
     """Number of training steps to anneal temperature over. If None, anneals over total training steps."""
 
+    temp_schedule: GridSearch[str] = "linear"
+    """Temperature annealing schedule: 'linear' (default), 'cosine', or 'exp'."""
+
     compress_dim: GridSearch[float] = 1.0
     """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
 
@@ -353,6 +356,7 @@ def TrainEvaluateMiceV2(
                         temp_start=cfg.temp_start,
                         temp_end=cfg.temp_end,
                         temp_anneal_steps=cfg.temp_anneal_steps,
+                        temp_schedule=cfg.temp_schedule,
                         histogram_interval=histogram_interval,
                         sparsity_threshold=cfg.hard_prune_threshold,
                     )
@@ -366,6 +370,7 @@ def TrainEvaluateMiceV2(
                         temp_start=cfg.temp_start,
                         temp_end=cfg.temp_end,
                         temp_anneal_steps=cfg.temp_anneal_steps,
+                        temp_schedule=cfg.temp_schedule,
                         histogram_interval=histogram_interval,
                         sparsity_threshold=cfg.hard_prune_threshold,
                     )

@@ -8,6 +8,7 @@ import logging
 import shutil
 import json
 import os
+import math
 
 import torch
 import torch.nn as nn
@@ -141,12 +142,76 @@ def compute_linear_schedule(
     return max(val, min_val)
 
 
+def compute_cosine_schedule(
+    start_val: float,
+    end_val: Optional[float],
+    step: int,
+    total_steps: int,
+    min_val: float = 1e-4,
+) -> float:
+    """Cosine interpolate from start_val to end_val over total_steps.
+    If end_val is None, returns start_val.
+    """
+    if end_val is None:
+        return start_val
+    if total_steps <= 0:
+        return end_val
+    progress = min(1.0, max(0.0, step / total_steps))
+    val = end_val + 0.5 * (start_val - end_val) * (1.0 + math.cos(math.pi * progress))
+    return max(val, min_val)
+
+
+def compute_exponential_schedule(
+    start_val: float,
+    end_val: Optional[float],
+    step: int,
+    total_steps: int,
+    min_val: float = 1e-4,
+) -> float:
+    """Exponentially interpolate from start_val to end_val over total_steps.
+    If end_val is None, returns start_val.
+    """
+    if end_val is None:
+        return start_val
+    if total_steps <= 0:
+        return end_val
+    progress = min(1.0, max(0.0, step / total_steps))
+    s = max(start_val, min_val)
+    e = max(end_val, min_val)
+    val = s * ((e / s) ** progress)
+    return max(val, min_val)
+
+
+def compute_temperature_schedule(
+    start_val: float,
+    end_val: Optional[float],
+    step: int,
+    total_steps: int,
+    schedule: str = "linear",
+    min_val: float = 1e-4,
+) -> float:
+    """Computes scheduled temperature using the specified schedule ('linear', 'cosine', or 'exp')."""
+    if schedule == "linear":
+        return compute_linear_schedule(start_val, end_val, step, total_steps, min_val)
+    elif schedule == "cosine":
+        return compute_cosine_schedule(start_val, end_val, step, total_steps, min_val)
+    elif schedule in ("exp", "exponential"):
+        return compute_exponential_schedule(
+            start_val, end_val, step, total_steps, min_val
+        )
+    else:
+        raise ValueError(
+            f"Unknown temperature schedule '{schedule}'. Supported: 'linear', 'cosine', 'exp'."
+        )
+
+
 def update_utility_temperature(
     model: Optional[nn.Module],
     info: TrainerContext,
     temp_start: float,
     temp_end: Optional[float],
     temp_anneal_steps: Optional[int] = None,
+    schedule: str = "linear",
     nrecords: int = 1,
 ):
     """Updates model.utility_predictor.temperature if temp_end is set, and logs utility/temperature metric."""
@@ -163,8 +228,8 @@ def update_utility_temperature(
             if temp_anneal_steps is not None
             else (info.max_epoch * info.steps_per_epoch)
         )
-        cur_temp = compute_linear_schedule(
-            temp_start, temp_end, info.state.step, total_steps
+        cur_temp = compute_temperature_schedule(
+            temp_start, temp_end, info.state.step, total_steps, schedule=schedule
         )
         target_model.utility_predictor.temperature.fill_(cur_temp)
 
@@ -198,6 +263,9 @@ class UtilityRegularizer(TrainingHook):
 
     temp_anneal_steps: Param[Optional[int]] = field(default=None, ignore_default=True)
     """Number of steps over which to anneal temperature. If None, anneals over total training steps (max_epoch * steps_per_epoch)."""
+
+    temp_schedule: Param[str] = field(default="linear", ignore_default=True)
+    """Temperature annealing schedule: 'linear' (default), 'cosine', or 'exp'."""
 
     sparsity_threshold: Meta[float] = field(default=0.5)
     """Threshold below which a token utility score is considered suppressed / sparse (default 0.5) affects sparsity metric computation only"""
@@ -255,6 +323,7 @@ class UtilityRegularizer(TrainingHook):
             self.temp_start,
             self.temp_end,
             self.temp_anneal_steps,
+            schedule=self.temp_schedule,
             nrecords=nrecords,
         )
 
@@ -337,6 +406,9 @@ class GatedValueRegularizer(TrainingHook):
 
     temp_anneal_steps: Param[Optional[int]] = field(default=None, ignore_default=True)
     """Number of steps over which to anneal temperature. If None, anneals over total training steps (max_epoch * steps_per_epoch)."""
+
+    temp_schedule: Param[str] = field(default="linear", ignore_default=True)
+    """Temperature annealing schedule: 'linear' (default), 'cosine', or 'exp'."""
 
     sparsity_threshold: Meta[float] = field(default=0.5)
     """Threshold below which a token utility score is considered suppressed / sparse"""
@@ -442,6 +514,7 @@ class GatedValueRegularizer(TrainingHook):
             self.temp_start,
             self.temp_end,
             self.temp_anneal_steps,
+            schedule=self.temp_schedule,
             nrecords=nrecords,
         )
 
