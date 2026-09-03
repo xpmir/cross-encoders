@@ -266,6 +266,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 max_length=cfg.max_length,
                 max_query_length=cfg.max_query_length,
                 max_doc_length=cfg.max_doc_length,
+                pref_attn_implementation=getattr(cfg, "pref_attn_implementation", None),
             )
 
         for k, v in cfg_tags.items():

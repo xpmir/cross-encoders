@@ -6,10 +6,12 @@ seed: 12
 
 # By default, all MICE v2 experiments will use splade-v3 top100 as first stage for evaluation.
 retriever: "naver/splade-v3-distilbert" #BM25
+
 # Tokenization settings for all models, ensuring fair comparison
-max_length: 1024
+max_length: null #This is useless (independent max_query / doc len) but kept for identity with other configs
 max_query_length: 1024
 max_doc_length: 1024
+pref_attn_implementation: flash_attention_2
 
 # Shared Training hyperparameters for all the Mini Mice Models
 learner:

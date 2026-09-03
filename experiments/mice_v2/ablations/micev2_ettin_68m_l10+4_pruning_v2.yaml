@@ -26,15 +26,6 @@ phase2_training: true
 phase2_max_epochs: 1000
 eval_phase_1: false
 
-#best values from v1
-lambda_reg: 5e-1
-normalize_doc_embeds: true
-reg_target: u
-
-reg_budget:
-    values_list: [null, 0.2]
-l2_reg:
-    values_list: [false, true]
 
 # Eval only on BEIR
 evaluation: #default = Minified tests
@@ -42,3 +33,23 @@ evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
     beir13: false
+
+
+#best values from v1
+lambda_reg: 5e-1
+normalize_doc_embeds: true
+reg_target: u
+
+# reg_budget:
+#     values_list: [null, 0.2]
+# l2_reg:
+#     values_list: [false, true]
+
+grid_search:
+    config_dicts:
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1} # baseline -> degenerates
+        - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1}
+        - {reg_budget: 0.2, l2_reg: false, lambda_reg: 5e-1}
+        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 5e-1}
+        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0}
+        - {reg_budget: 0.1, l2_reg: true, lambda_reg: 5e-1}

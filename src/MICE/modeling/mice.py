@@ -12,6 +12,7 @@ from experimaestro import Param, LightweightTask, Constant, field
 from xpm_torch.huggingface import TorchHFHub
 from xpm_torch.utils import to_device
 from xpm_torch.module import SimpleModuleLoader
+from xpm_torch.trainers import TrainerContext
 from xpmir.letor.records import BaseItems
 from xpmir.rankers import AbstractModuleScorer
 from xpmir.text.encoders import (
@@ -925,6 +926,8 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
         tokenized: Optional[MICETokenizedTexts] = None,
         doc_hidden_states: Optional[torch.Tensor] = None,
         doc_mask: Optional[torch.Tensor] = None,
+        info: Optional[TrainerContext] = None,
+        **kwargs,
     ):
         """
         Forward pass of the Mice Cross Encoder.
@@ -1494,6 +1497,8 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
         tokenized: Optional[MICETokenizedTexts] = None,
         doc_hidden_states: Optional[torch.Tensor] = None,
         doc_mask: Optional[torch.Tensor] = None,
+        info: Optional[TrainerContext] = None,
+        **kwargs,
     ):
         if inputs is None and tokenized is None:
             raise ValueError("Either raw inputs or tokenized inputs must be provided.")
