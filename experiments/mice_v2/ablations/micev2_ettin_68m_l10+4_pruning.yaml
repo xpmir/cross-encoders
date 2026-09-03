@@ -49,6 +49,11 @@ l2_reg: false
 # l2_reg:
 #     values_list: [false, true]
 
+temp_start: 1.0
+temp_end: null
+# temp_end:
+#     values_list: [null, 0.1]
+
 
 # Eval only on BEIR
 evaluation: #default = Minified tests

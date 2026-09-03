@@ -18,6 +18,8 @@ from MICE.modeling.mice_v2.modernbert_xpm import (
     ModernBertMiceScorer,
     UtilityRegularizer,
     GatedValueRegularizer,
+    compute_linear_schedule,
+    update_utility_temperature,
 )
 from xpmir.letor.records import PointwiseItems
 from xpm_torch.trainers import TrainerContext
@@ -754,3 +756,131 @@ def test_utility_regularizer_l2_reg():
     metrics3 = {name: metric.compute() for name, metric in ctx3.metrics.metrics.items()}
     assert metrics3["utility/over_budget"] == pytest.approx(0.0)
     assert metrics3["utility_reg"] == pytest.approx(0.0)
+
+
+def test_compute_linear_schedule():
+    """Test compute_linear_schedule interpolation, clamping, and edge cases."""
+    # Linear ramp from 1.0 to 0.1 over 100 steps
+    assert compute_linear_schedule(1.0, 0.1, step=0, total_steps=100) == pytest.approx(1.0)
+    assert compute_linear_schedule(1.0, 0.1, step=50, total_steps=100) == pytest.approx(0.55)
+    assert compute_linear_schedule(1.0, 0.1, step=100, total_steps=100) == pytest.approx(0.1)
+
+    # Beyond total steps: clamped to end_val
+    assert compute_linear_schedule(1.0, 0.1, step=150, total_steps=100) == pytest.approx(0.1)
+
+    # Negative step: clamped to start_val
+    assert compute_linear_schedule(1.0, 0.1, step=-10, total_steps=100) == pytest.approx(1.0)
+
+    # When end_val is None: remains fixed at start_val
+    assert compute_linear_schedule(1.0, None, step=50, total_steps=100) == pytest.approx(1.0)
+
+    # Edge case: total_steps <= 0 returns end_val
+    assert compute_linear_schedule(1.0, 0.1, step=0, total_steps=0) == pytest.approx(0.1)
+
+
+def test_utility_predictor_temperature_always_divides():
+    """Test that UtilityPredictor registers temperature buffer, always divides by temperature, and classification model has no proxy helpers."""
+    # 1. Default temperature is 1.0
+    pred = UtilityPredictor(hidden_dim=64)
+    assert hasattr(pred, "temperature")
+    assert pred.temperature.item() == pytest.approx(1.0)
+
+    # 2. Custom utility_temp
+    pred_custom = UtilityPredictor(hidden_dim=64, utility_temp=0.5)
+    assert pred_custom.temperature.item() == pytest.approx(0.5)
+
+    # 3. Always divides by temperature:
+    # With a fixed input, lowering temperature from 1.0 to 0.1 scales logits 10x,
+    # pushing positive utilities even closer to 1.0.
+    h = torch.randn(2, 5, 64)
+    u_base = pred(h)
+    pred.temperature.fill_(0.1)
+    u_steep = pred(h)
+
+    # For positive logits (where bias=5.0 dominates), u_steep > u_base
+    assert (u_steep >= u_base).all()
+    # At temp=0.1, sigmoid(50.0) is virtually 1.0
+    assert u_steep.mean().item() == pytest.approx(1.0, rel=1e-3)
+
+    # 4. Assert ModernBertMiceForSequenceClassification has NO set_temperature or get_temperature
+    config = ModernBertMiceConfig(
+        hidden_size=64,
+        intermediate_size=128,
+        num_attention_heads=2,
+        num_hidden_layers=3,
+        n_contextualization_layers=2,
+        utility_pred=True,
+        utility_temp=0.7,
+    )
+    model = ModernBertMiceForSequenceClassification(config)
+    assert not hasattr(model, "set_temperature")
+    assert not hasattr(model, "get_temperature")
+    assert model.utility_predictor.temperature.item() == pytest.approx(0.7)
+
+
+def test_utility_regularizer_temperature_annealing():
+    """Test that UtilityRegularizer anneals temperature across training steps and logs utility/temperature."""
+    config = ModernBertMiceConfig(
+        hidden_size=64,
+        intermediate_size=128,
+        num_attention_heads=2,
+        num_hidden_layers=3,
+        n_contextualization_layers=2,
+        utility_pred=True,
+        utility_temp=1.0,
+    )
+    model = ModernBertMiceForSequenceClassification(config)
+
+    reg_hook = UtilityRegularizer.C(
+        lambda_reg=0.1,
+        temp_start=1.0,
+        temp_end=0.1,
+    )
+
+    ctx = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=2,
+        steps_per_epoch=50,  # 100 total steps
+        trainer=None,
+        model=model,
+        optimizer=None,
+        fabric=None,
+    )
+    u = torch.full((2, 5, 1), 0.8, requires_grad=True)
+
+    # Step 0: temperature should be 1.0
+    ctx.state.steps = 0
+    ctx.metrics = Metrics()
+    with ctx.losses():
+        reg_hook(ctx, u, hf_model=model)
+    assert model.utility_predictor.temperature.item() == pytest.approx(1.0)
+    m0 = {name: metric.compute() for name, metric in ctx.metrics.metrics.items()}
+    assert m0["utility/temperature"] == pytest.approx(1.0)
+
+    # Step 50 (midpoint): temperature should be 0.55
+    ctx.state.steps = 50
+    ctx.metrics = Metrics()
+    with ctx.losses():
+        reg_hook(ctx, u, hf_model=model)
+    assert model.utility_predictor.temperature.item() == pytest.approx(0.55)
+    m50 = {name: metric.compute() for name, metric in ctx.metrics.metrics.items()}
+    assert m50["utility/temperature"] == pytest.approx(0.55)
+
+    # Step 100 (final step): temperature should be 0.1
+    ctx.state.steps = 100
+    ctx.metrics = Metrics()
+    with ctx.losses():
+        reg_hook(ctx, u, hf_model=model)
+    assert model.utility_predictor.temperature.item() == pytest.approx(0.1)
+    m100 = {name: metric.compute() for name, metric in ctx.metrics.metrics.items()}
+    assert m100["utility/temperature"] == pytest.approx(0.1)
+
+
+def test_modernbert_mice_config_owns_only_utility_temp():
+    """Test that ModernBertMiceConfig owns utility_temp, and does not own schedule parameters."""
+    cfg = ModernBertMiceConfig(utility_temp=0.8)
+    assert cfg.utility_temp == 0.8
+    assert not hasattr(cfg, "temp_start")
+    assert not hasattr(cfg, "temp_end")
+    assert not hasattr(cfg, "temp_anneal_steps")

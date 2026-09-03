@@ -121,6 +121,62 @@ def compute_token_split_metrics(
     return metrics
 
 
+def compute_linear_schedule(
+    start_val: float,
+    end_val: Optional[float],
+    step: int,
+    total_steps: int,
+    min_val: float = 1e-4,
+) -> float:
+    """Linearly interpolate from start_val to end_val over total_steps.
+    If end_val is None, returns start_val.
+    """
+    if end_val is None:
+        return start_val
+    if total_steps <= 0:
+        return end_val
+    progress = min(1.0, max(0.0, step / total_steps))
+    val = start_val - (start_val - end_val) * progress
+    return max(val, min_val)
+
+
+def update_utility_temperature(
+    model: Optional[nn.Module],
+    info: TrainerContext,
+    temp_start: float,
+    temp_end: Optional[float],
+    temp_anneal_steps: Optional[int] = None,
+    nrecords: int = 1,
+):
+    """Updates model.utility_predictor.temperature if temp_end is set, and logs utility/temperature metric."""
+    target_model = model
+    if hasattr(target_model, "hf_model"):
+        target_model = target_model.hf_model
+
+    if target_model is None or getattr(target_model, "utility_predictor", None) is None:
+        return
+
+    if temp_end is not None:
+        total_steps = (
+            temp_anneal_steps
+            if temp_anneal_steps is not None
+            else (info.max_epoch * info.steps_per_epoch)
+        )
+        cur_temp = compute_linear_schedule(
+            temp_start, temp_end, info.state.step, total_steps
+        )
+        target_model.utility_predictor.temperature.fill_(cur_temp)
+
+    if getattr(info, "metrics", None) is not None:
+        info.metrics.add(
+            ScalarMetric(
+                "utility/temperature",
+                float(target_model.utility_predictor.temperature.item()),
+                nrecords,
+            )
+        )
+
+
 class UtilityRegularizer(TrainingHook):
     """Training hook for computing token utility L1 regularization loss and sparsity metrics"""
 
@@ -132,6 +188,15 @@ class UtilityRegularizer(TrainingHook):
 
     l2_reg: Param[bool] = field(default=False, ignore_default=True)
     """Whether to square the regularization loss (L2 penalty instead of L1). Provides smoother gradients especially when combined with budget."""
+
+    temp_start: Param[float] = field(default=1.0, ignore_default=True)
+    """Starting temperature for utility predictor sigmoid (default 1.0)"""
+
+    temp_end: Param[Optional[float]] = field(default=None, ignore_default=True)
+    """Ending temperature for linear annealing (e.g. 0.1). If None, temperature remains fixed at temp_start."""
+
+    temp_anneal_steps: Param[Optional[int]] = field(default=None, ignore_default=True)
+    """Number of steps over which to anneal temperature. If None, anneals over total training steps (max_epoch * steps_per_epoch)."""
 
     sparsity_threshold: Meta[float] = field(default=0.5)
     """Threshold below which a token utility score is considered suppressed / sparse (default 0.5) affects sparsity metric computation only"""
@@ -180,8 +245,19 @@ class UtilityRegularizer(TrainingHook):
 
         info.add_loss(Loss("utility_reg", reg_loss, self.lambda_reg))
 
+        nrecords = doc_mask.shape[0] if doc_mask is not None else 1
+        target_model = hf_model or getattr(info, "model", None)
+
+        update_utility_temperature(
+            target_model,
+            info,
+            self.temp_start,
+            self.temp_end,
+            self.temp_anneal_steps,
+            nrecords=nrecords,
+        )
+
         if getattr(info, "metrics", None) is not None:
-            nrecords = doc_mask.shape[0] if doc_mask is not None else 1
             info.metrics.add(
                 ScalarMetric(
                     "utility_reg",
@@ -204,7 +280,6 @@ class UtilityRegularizer(TrainingHook):
                 )
 
             # Monitor Model Matrix Norms (W_V, W_O, Classifier Head)
-            target_model = hf_model or getattr(info, "model", None)
             if target_model is not None:
                 if hasattr(target_model, "hf_model"):
                     target_model = target_model.hf_model
@@ -247,11 +322,20 @@ class GatedValueRegularizer(TrainingHook):
     lambda_reg: Param[float] = field(default=0.1)
     """Regularization weight for gated value norm loss"""
 
-    budget: Param[Optional[float]] = field(default=None)
+    budget: Param[Optional[float]] = field(default=None, ignore_default=True)
     """Optional target budget for gated value norm. If set, loss is relu(mean_v_norm - budget)."""
 
-    l2_reg: Param[bool] = field(default=False)
+    l2_reg: Param[bool] = field(default=False, ignore_default=True)
     """Whether to square the regularization loss. Provides smoother gradients especially when combined with budget."""
+
+    temp_start: Param[float] = field(default=1.0, ignore_default=True)
+    """Starting temperature for utility predictor sigmoid (default 1.0)"""
+
+    temp_end: Param[Optional[float]] = field(default=None, ignore_default=True)
+    """Ending temperature for linear annealing (e.g. 0.1). If None, temperature remains fixed at temp_start."""
+
+    temp_anneal_steps: Param[Optional[int]] = field(default=None, ignore_default=True)
+    """Number of steps over which to anneal temperature. If None, anneals over total training steps (max_epoch * steps_per_epoch)."""
 
     sparsity_threshold: Meta[float] = field(default=0.5)
     """Threshold below which a token utility score is considered suppressed / sparse"""
@@ -350,8 +434,17 @@ class GatedValueRegularizer(TrainingHook):
 
         info.add_loss(Loss("gated_value_reg", reg_loss, self.lambda_reg))
 
+        nrecords = doc_mask.shape[0] if doc_mask is not None else 1
+        update_utility_temperature(
+            target_model,
+            info,
+            self.temp_start,
+            self.temp_end,
+            self.temp_anneal_steps,
+            nrecords=nrecords,
+        )
+
         if getattr(info, "metrics", None) is not None:
-            nrecords = doc_mask.shape[0] if doc_mask is not None else 1
             info.metrics.add(
                 ScalarMetric(
                     "gated_value_reg",
@@ -695,6 +788,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     top_final_norm: Param[bool] = field(default=False, ignore_default=True)
     """Whether to apply LayerNorm at the output of top interaction layers before classifier"""
 
+    utility_temp: Param[float] = field(default=1.0, ignore_default=True)
+    """Initial temperature for utility predictor sigmoid"""
+
     _version: Constant[str] = "2.0.2"
 
     hf_model: nn.Module
@@ -755,6 +851,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 apply_override("bottom_final_norm", False)
             if self.top_final_norm:
                 apply_override("top_final_norm", True)
+            if self.utility_temp != 1.0:
+                apply_override("utility_temp", self.utility_temp)
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -774,6 +872,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 top_layers_doc_ln=self.top_layers_doc_ln,
                 bottom_final_norm=self.bottom_final_norm,
                 top_final_norm=self.top_final_norm,
+                utility_temp=self.utility_temp,
                 **config_kwargs,
             )
 
@@ -1307,6 +1406,7 @@ def mice_v2_scorer(
     top_layers_doc_ln: bool = False,
     bottom_final_norm: bool = True,
     top_final_norm: bool = False,
+    utility_temp: float = 1.0,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -1337,6 +1437,7 @@ def mice_v2_scorer(
         top_layers_doc_ln=top_layers_doc_ln,
         bottom_final_norm=bottom_final_norm,
         top_final_norm=top_final_norm,
+        utility_temp=utility_temp,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

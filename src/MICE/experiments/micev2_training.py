@@ -111,6 +111,15 @@ class MiceV2_FineTuning(CE_FineTuning):
     top_final_norm: GridSearch[bool] = False
     """Whether to apply LayerNorm at the output of top interaction layers before classifier"""
 
+    temp_start: GridSearch[float] = 1.0
+    """Starting temperature for utility predictor sigmoid"""
+
+    temp_end: GridSearch[Optional[float]] = None
+    """Ending temperature for utility predictor linear annealing (e.g. 0.1). If None, temperature remains fixed at temp_start."""
+
+    temp_anneal_steps: GridSearch[Optional[int]] = None
+    """Number of training steps to anneal temperature over. If None, anneals over total training steps."""
+
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
@@ -138,6 +147,7 @@ def build_mice_v2(
         top_layers_doc_ln=cfg.top_layers_doc_ln,
         bottom_final_norm=cfg.bottom_final_norm,
         top_final_norm=cfg.top_final_norm,
+        utility_temp=cfg.temp_start,
         max_length=max_len,
         max_query_length=cfg.max_query_length,
         max_doc_length=cfg.max_doc_length,
@@ -328,6 +338,9 @@ def TrainEvaluateMiceV2(
                         lambda_reg=cfg.lambda_reg,
                         budget=cfg.reg_budget,
                         l2_reg=cfg.l2_reg,
+                        temp_start=cfg.temp_start,
+                        temp_end=cfg.temp_end,
+                        temp_anneal_steps=cfg.temp_anneal_steps,
                         histogram_interval=histogram_interval,
                         sparsity_threshold=cfg.hard_prune_threshold,
                     )
@@ -338,6 +351,9 @@ def TrainEvaluateMiceV2(
                         lambda_reg=cfg.lambda_reg,
                         budget=cfg.reg_budget,
                         l2_reg=cfg.l2_reg,
+                        temp_start=cfg.temp_start,
+                        temp_end=cfg.temp_end,
+                        temp_anneal_steps=cfg.temp_anneal_steps,
                         histogram_interval=histogram_interval,
                         sparsity_threshold=cfg.hard_prune_threshold,
                     )

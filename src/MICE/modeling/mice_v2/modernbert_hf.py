@@ -109,13 +109,21 @@ class UtilityPredictor(nn.Module):
     and a Sigmoid output to produce per-token utility scores U in (0, 1).
     """
 
-    def __init__(self, hidden_dim: int, bottleneck_dim: Optional[int] = None):
+    def __init__(
+        self,
+        hidden_dim: int,
+        bottleneck_dim: Optional[int] = None,
+        utility_temp: float = 1.0,
+    ):
         super().__init__()
         if bottleneck_dim is None:
             bottleneck_dim = hidden_dim * 2
 
         self.wi = nn.Linear(hidden_dim, 2 * bottleneck_dim, bias=False)
         self.wo = nn.Linear(bottleneck_dim, 1, bias=True)
+        self.register_buffer(
+            "temperature", torch.tensor(utility_temp, dtype=torch.float32)
+        )
         self._init_weights()
 
     def _init_weights(self):
@@ -148,6 +156,11 @@ class UtilityPredictor(nn.Module):
             state_dict[bias_key] = torch.tensor(
                 [0.0], device=self.wo.weight.device, dtype=self.wo.weight.dtype
             )
+        temp_key = prefix + "temperature"
+        if temp_key not in state_dict:
+            state_dict[temp_key] = torch.tensor(
+                1.0, device=self.wo.weight.device, dtype=torch.float32
+            )
         super()._load_from_state_dict(
             state_dict,
             prefix,
@@ -169,7 +182,7 @@ class UtilityPredictor(nn.Module):
         x_val, x_gate = self.wi(h).chunk(2, dim=-1)
         geglu_out = x_val * torch.nn.functional.gelu(x_gate, approximate="none")
         logits = self.wo(geglu_out)
-        return torch.sigmoid(logits)
+        return torch.sigmoid(logits / float(self.temperature))
 
 
 def _hard_prune_unpadded_documents(
@@ -289,6 +302,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         top_layers_doc_ln: bool = False,
         bottom_final_norm: bool = True,
         top_final_norm: bool = False,
+        utility_temp: float = 1.0,
         num_labels: int = 1,
         **kwargs,
     ):
@@ -311,6 +325,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.top_layers_doc_ln = top_layers_doc_ln
         self.bottom_final_norm = bottom_final_norm
         self.top_final_norm = top_final_norm
+        self.utility_temp = utility_temp
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -796,7 +811,10 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             self.top_final_norm = None
 
         if getattr(config, "utility_pred", False):
-            self.utility_predictor = UtilityPredictor(config.hidden_size)
+            self.utility_predictor = UtilityPredictor(
+                config.hidden_size,
+                utility_temp=config.utility_temp,
+            )
         else:
             self.utility_predictor = None
         self.last_utilities = None

@@ -47,9 +47,12 @@ reg_target: u
 
 grid_search:
     config_dicts:
-        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1} # baseline -> degenerates
-        - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1}
-        - {reg_budget: 0.2, l2_reg: false, lambda_reg: 5e-1}
-        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 5e-1}
-        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0}
-        - {reg_budget: 0.1, l2_reg: true, lambda_reg: 5e-1}
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: null} # baseline -> degenerates
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3} # Anneal temperature
+        - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1, temp_end: null}
+        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: null} #
+
+        - {reg_budget: 0.2, l2_reg: false, lambda_reg: 5e-1, temp_end: null}
+        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 5e-1, temp_end: null}
+        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0, temp_end: null}
+        - {reg_budget: 0.1, l2_reg: true, lambda_reg: 5e-1, temp_end: null}
