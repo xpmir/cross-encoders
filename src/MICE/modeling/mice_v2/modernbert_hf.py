@@ -17,6 +17,7 @@ from transformers.models.modernbert.modeling_modernbert import (
     ModernBertMLP,
     ModernBertAttention,
     ModernBertPreTrainedModel,
+    ModernBertRotaryEmbedding,
     eager_attention_forward,
 )
 from transformers.masking_utils import (
@@ -303,6 +304,8 @@ class ModernBertMiceConfig(ModernBertConfig):
         bottom_final_norm: bool = True,
         top_final_norm: bool = False,
         utility_temp: float = 1.0,
+        compress_dim: float = 1.0,
+        compress_init_option: str = "seed",
         num_labels: int = 1,
         **kwargs,
     ):
@@ -326,6 +329,9 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.bottom_final_norm = bottom_final_norm
         self.top_final_norm = top_final_norm
         self.utility_temp = utility_temp
+        assert compress_dim >= 1.0, f"compress_dim must be >= 1.0, got {compress_dim}"
+        self.compress_dim = compress_dim
+        self.compress_init_option = compress_init_option
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -776,8 +782,32 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     : config.num_hidden_layers
                 ]
 
+        # 1b. Build a (possibly compressed) config for the top interaction layers.
+        # top_config is `config` itself (same object) when compress_dim==1.0, so every
+        # downstream `is top_config is config` check / `top_config.hidden_size` read
+        # is a no-op and behavior is byte-identical to before this feature existed.
+        top_config = config
+        if getattr(config, "compress_dim", 1.0) > 1.0:
+            top_config = copy.deepcopy(config)
+            top_config.hidden_size = int(config.hidden_size / config.compress_dim)
+            top_config.intermediate_size = int(
+                config.intermediate_size / config.compress_dim
+            )
+            top_config.num_attention_heads = int(
+                config.num_attention_heads / config.compress_dim
+            )
+            assert top_config.hidden_size % top_config.num_attention_heads == 0, (
+                f"compress_dim={config.compress_dim} produces top hidden_size="
+                f"{top_config.hidden_size} not divisible by num_attention_heads="
+                f"{top_config.num_attention_heads} (native hidden_size="
+                f"{config.hidden_size}, native num_attention_heads="
+                f"{config.num_attention_heads}). Choose a compress_dim that divides "
+                f"evenly."
+            )
+
         super().__init__(config)
         self.config = config
+        self.top_config = top_config
 
         # 2. Build bottom ModernBertModel backbone with exactly n_contextualization_layers directly
         bottom_config = copy.deepcopy(config)
@@ -793,19 +823,26 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         layer_offset = n_context
         self.top_layers = nn.ModuleList(
             [
-                ModernBertMiceTopLayer(config, layer_idx=layer_offset + i)
+                ModernBertMiceTopLayer(top_config, layer_idx=layer_offset + i)
                 for i in range(num_top)
             ]
         )
 
+        if top_config is not config:
+            self.top_rotary_emb = ModernBertRotaryEmbedding(top_config)
+            self.adapter = nn.Linear(config.hidden_size, top_config.hidden_size)
+        else:
+            self.top_rotary_emb = None
+            self.adapter = None
+
         self.classifier = nn.Linear(
-            config.hidden_size,
+            top_config.hidden_size,
             config.num_labels if hasattr(config, "num_labels") else 1,
         )
 
         if getattr(config, "top_final_norm", False):
             self.top_final_norm = nn.LayerNorm(
-                config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
+                top_config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
             )
         else:
             self.top_final_norm = None
@@ -869,6 +906,14 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         Returns:
             Tuple of (hidden_state, pos_emb_top)
         """
+        # Top interaction layers may run at a compressed head_dim (compress_dim>1),
+        # so pos_emb_top must come from a rotary module sized for top_config, not the
+        # bottom backbone's own rotary_emb which stays at the native head_dim.
+        rotary_for_top = (
+            self.top_rotary_emb
+            if self.top_rotary_emb is not None
+            else self.model.rotary_emb
+        )
         if cu_seqlens is not None:
             # Unpadded FlashAttention 2 Path
             position_embeddings = {
@@ -897,8 +942,8 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             if getattr(self.config, "bottom_final_norm", True):
                 hidden = self.model.final_norm(hidden)
 
-            pos_emb_top = position_embeddings.get(
-                "full_attention", list(position_embeddings.values())[0]
+            pos_emb_top = rotary_for_top(
+                sequence_input, pos_ids, layer_type="full_attention"
             )
             return hidden, pos_emb_top
         else:
@@ -959,7 +1004,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             position_ids = torch.arange(
                 last_hidden.shape[1], device=last_hidden.device
             ).unsqueeze(0)
-            pos_emb_top = self.model.rotary_emb(
+            pos_emb_top = rotary_for_top(
                 last_hidden, position_ids, layer_type="full_attention"
             )
             return last_hidden, pos_emb_top
@@ -1043,6 +1088,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         else:
             self.last_utilities = None
             self.last_doc_hidden = None
+
+        if self.adapter is not None:
+            d_hidden = self.adapter(d_hidden)
 
         return d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids
 
@@ -1198,6 +1246,11 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
             else None
         )
+
+        # apply the projection for the query.
+        # document are done in the post processing.
+        if self.adapter is not None:
+            q_hidden = self.adapter(q_hidden)
 
         if use_unpadded:
             num_top = len(self.top_layers)

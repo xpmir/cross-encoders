@@ -40,6 +40,7 @@ from MICE.modeling.mice_v2.modernbert_hf import (
     ModernBertMiceConfig,
     ModernBertMiceForSequenceClassification,
 )
+from MICE.modeling.mice_v2.compress_init import initialize_compressed_top_layers
 
 
 logger = logging.getLogger(__name__)
@@ -533,52 +534,78 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                     )
 
         # 3. Top interaction layers
-        if hasattr(full_backbone.model, "layers"):
+        compress_dim = getattr(scorer.hf_model.config, "compress_dim", 1.0)
+        # `mice_v2_scorer()` already resolves "seed"'s compress_dim-dependent fallback
+        # (seed from the pretrained checkpoint at compress_dim == 1.0, else "random")
+        # before building this scorer, so scorer.compress_init_option is always one of
+        # "seed" (compress_dim == 1.0 only), "random", "random_projection", or
+        # "svd_projection" by the time it gets here -- no further resolution needed.
+        compress_init_option = scorer.compress_init_option
+
+        if compress_init_option == "random":
             logger.info(
-                f"Seeding {len(scorer.hf_model.top_layers)} top layers from backbone"
+                "compress_init_option='random': leaving top interaction layers at "
+                "their own default (unseeded) initialization."
             )
-            for idx, top_layer in enumerate(scorer.hf_model.top_layers):
-                src_layer_idx = scorer.n_contextualization_layers + idx
-                if src_layer_idx < len(full_backbone.model.layers):
-                    src_layer = full_backbone.model.layers[src_layer_idx]
-                    norm_to_copy = (
-                        src_layer.attn_norm
-                        if hasattr(src_layer, "attn_norm")
-                        and isinstance(src_layer.attn_norm, nn.LayerNorm)
-                        else (
-                            src_layer.mlp_norm
-                            if hasattr(src_layer, "mlp_norm")
-                            and isinstance(src_layer.mlp_norm, nn.LayerNorm)
-                            else None
+        elif compress_init_option == "seed":
+            if hasattr(full_backbone.model, "layers"):
+                logger.info(
+                    f"Seeding {len(scorer.hf_model.top_layers)} top layers from backbone"
+                )
+                for idx, top_layer in enumerate(scorer.hf_model.top_layers):
+                    src_layer_idx = scorer.n_contextualization_layers + idx
+                    if src_layer_idx < len(full_backbone.model.layers):
+                        src_layer = full_backbone.model.layers[src_layer_idx]
+                        norm_to_copy = (
+                            src_layer.attn_norm
+                            if hasattr(src_layer, "attn_norm")
+                            and isinstance(src_layer.attn_norm, nn.LayerNorm)
+                            else (
+                                src_layer.mlp_norm
+                                if hasattr(src_layer, "mlp_norm")
+                                and isinstance(src_layer.mlp_norm, nn.LayerNorm)
+                                else None
+                            )
                         )
-                    )
-                    if norm_to_copy is not None:
-                        top_layer.cross_attn_norm.load_state_dict(
-                            norm_to_copy.state_dict()
-                        )
-                        top_layer.self_attn_norm.load_state_dict(
-                            norm_to_copy.state_dict()
-                        )
-                        if isinstance(top_layer.doc_cross_attn_norm, nn.LayerNorm):
-                            top_layer.doc_cross_attn_norm.load_state_dict(
+                        if norm_to_copy is not None:
+                            top_layer.cross_attn_norm.load_state_dict(
                                 norm_to_copy.state_dict()
                             )
+                            top_layer.self_attn_norm.load_state_dict(
+                                norm_to_copy.state_dict()
+                            )
+                            if isinstance(top_layer.doc_cross_attn_norm, nn.LayerNorm):
+                                top_layer.doc_cross_attn_norm.load_state_dict(
+                                    norm_to_copy.state_dict()
+                                )
 
-                    if hasattr(src_layer, "mlp_norm") and isinstance(
-                        src_layer.mlp_norm, nn.LayerNorm
-                    ):
-                        top_layer.mlp_norm.load_state_dict(
-                            src_layer.mlp_norm.state_dict()
+                        if hasattr(src_layer, "mlp_norm") and isinstance(
+                            src_layer.mlp_norm, nn.LayerNorm
+                        ):
+                            top_layer.mlp_norm.load_state_dict(
+                                src_layer.mlp_norm.state_dict()
+                            )
+
+                        top_layer.self_attn.load_state_dict(src_layer.attn.state_dict())
+                        top_layer.cross_attn.Wqkv.load_state_dict(
+                            src_layer.attn.Wqkv.state_dict()
                         )
-
-                    top_layer.self_attn.load_state_dict(src_layer.attn.state_dict())
-                    top_layer.cross_attn.Wqkv.load_state_dict(
-                        src_layer.attn.Wqkv.state_dict()
-                    )
-                    top_layer.cross_attn.Wo.load_state_dict(
-                        src_layer.attn.Wo.state_dict()
-                    )
-                    top_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
+                        top_layer.cross_attn.Wo.load_state_dict(
+                            src_layer.attn.Wo.state_dict()
+                        )
+                        top_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
+        else:
+            logger.info(
+                f"Projection-derived init (compress_dim={compress_dim}): "
+                f"initializing {len(scorer.hf_model.top_layers)} top layers via "
+                f"compress_init_option={compress_init_option!r}"
+            )
+            initialize_compressed_top_layers(
+                scorer.hf_model,
+                full_backbone,
+                scorer.n_contextualization_layers,
+                compress_init_option,
+            )
 
         # 4. Rotary embeddings
         logger.info("Seeding rotary_emb from backbone")
@@ -594,7 +621,8 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
             )
 
         if (
-            hasattr(scorer.hf_model, "top_final_norm")
+            compress_init_option == "seed"
+            and hasattr(scorer.hf_model, "top_final_norm")
             and scorer.hf_model.top_final_norm is not None
         ):
             logger.info("Seeding top_final_norm from backbone")
@@ -791,6 +819,15 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     utility_temp: Param[float] = field(default=1.0, ignore_default=True)
     """Initial temperature for utility predictor sigmoid"""
 
+    compress_dim: Param[float] = field(default=1.0, ignore_default=True)
+    """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
+
+    compress_init_option: Param[str] = field(default="seed", ignore_default=True)
+    """How top interaction layers are initialized: 'seed' (load from the pretrained
+    checkpoint when compress_dim == 1.0, else falls back to 'random'), 'random' (always
+    skip seeding, keep each layer's own default init), 'random_projection', or
+    'svd_projection' (both only meaningful when compress_dim > 1.0)"""
+
     _version: Constant[str] = "2.0.2"
 
     hf_model: nn.Module
@@ -853,6 +890,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 apply_override("top_final_norm", True)
             if self.utility_temp != 1.0:
                 apply_override("utility_temp", self.utility_temp)
+            if self.compress_dim != 1.0:
+                apply_override("compress_dim", self.compress_dim)
+                apply_override("compress_init_option", self.compress_init_option)
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -873,6 +913,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 bottom_final_norm=self.bottom_final_norm,
                 top_final_norm=self.top_final_norm,
                 utility_temp=self.utility_temp,
+                compress_dim=self.compress_dim,
+                compress_init_option=self.compress_init_option,
                 **config_kwargs,
             )
 
@@ -1342,7 +1384,10 @@ class MiceV2DocumentEncoder(TextEncoderBase):
 
     @property
     def dimension(self):
-        return getattr(self.model.hf_model.config, "hidden_size", 768)
+        top_config = getattr(
+            self.model.hf_model, "top_config", self.model.hf_model.config
+        )
+        return getattr(top_config, "hidden_size", 768)
 
     @staticmethod
     def _token_mask(output: TokensRepresentationOutput) -> Optional[torch.Tensor]:
@@ -1407,13 +1452,29 @@ def mice_v2_scorer(
     bottom_final_norm: bool = True,
     top_final_norm: bool = False,
     utility_temp: float = 1.0,
+    compress_dim: float = 1.0,
+    compress_init_option: str = "seed",
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
 ) -> Tuple[ModernBertMiceScorer, List[LightweightTask]]:
     """
     Factory function for ModernBERT MICE V2 scorer.
+
+    `compress_init_option="seed"` has fallback logic (seed from the pretrained
+    checkpoint when compress_dim == 1.0, else fall back to "random") that's
+    resolved here rather than later inside `InitMICEV2ModernBERTFromHFID.execute()`,
+    so the *resolved* value is what actually lands in the returned
+    `ModernBertMiceScorer`'s Param and thus its experimaestro identifier. This
+    means e.g. `compress_dim=2.0, compress_init_option="seed"` and
+    `compress_dim=2.0, compress_init_option="random"` -- which are functionally
+    identical, since "seed" always falls back to "random" once compress_dim !=
+    1.0 -- build the *same* scorer config and hash to the same task, so a grid
+    search sweeping both doesn't waste compute training the same model twice.
     """
+    if compress_init_option == "seed" and compress_dim != 1.0:
+        compress_init_option = "random"
+
     tokenizer = MICEQueryDocTokenizer.C(
         model_id=hf_id,
         max_query_length=max_query_length,
@@ -1438,6 +1499,8 @@ def mice_v2_scorer(
         bottom_final_norm=bottom_final_norm,
         top_final_norm=top_final_norm,
         utility_temp=utility_temp,
+        compress_dim=compress_dim,
+        compress_init_option=compress_init_option,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

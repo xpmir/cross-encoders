@@ -120,6 +120,15 @@ class MiceV2_FineTuning(CE_FineTuning):
     temp_anneal_steps: GridSearch[Optional[int]] = None
     """Number of training steps to anneal temperature over. If None, anneals over total training steps."""
 
+    compress_dim: GridSearch[float] = 1.0
+    """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
+
+    compress_init_option: GridSearch[str] = "seed"
+    """How top interaction layers are initialized: 'seed' (load from the pretrained
+    checkpoint when compress_dim == 1.0, else falls back to 'random'), 'random' (always
+    skip seeding, keep each layer's own default init), 'random_projection', or
+    'svd_projection' (both only meaningful when compress_dim > 1.0)"""
+
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
@@ -148,6 +157,8 @@ def build_mice_v2(
         bottom_final_norm=cfg.bottom_final_norm,
         top_final_norm=cfg.top_final_norm,
         utility_temp=cfg.temp_start,
+        compress_dim=cfg.compress_dim,
+        compress_init_option=cfg.compress_init_option,
         max_length=max_len,
         max_query_length=cfg.max_query_length,
         max_doc_length=cfg.max_doc_length,
