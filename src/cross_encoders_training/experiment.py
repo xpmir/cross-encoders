@@ -34,7 +34,11 @@ from configuration import CE_FineTuning, CheckpointSelection
 from tests import build_tests
 from format import loss_names, backbone_names_lower
 
-from training_utils import build_trainer, process_experiment_results
+from training_utils import (
+    build_trainer,
+    process_experiment_results,
+    find_checkpoint,
+)
 
 from typing import Optional
 from experimaestro import LightweightTask, Param
@@ -324,32 +328,52 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
             # Build list of models to evaluate: (model_id, load_model)
             models_to_evaluate = []
-            checkpoint_mode = cfg.evaluation.get_checkpoint_mode()
+            checkpoint_modes = cfg.evaluation.get_checkpoint_modes()
 
-            # 1. Best validation checkpoints
-            if checkpoint_mode in (CheckpointSelection.VAL, CheckpointSelection.BOTH):
-                for name, tracked_validation in tracked_validations.items():
-                    logging.info(f"Adding validation model for evaluation: {name}")
-                    for metric_name in tracked_validation.monitored():
-                        load_model = (
-                            outputs.listeners[tracked_validation.id][metric_name]
-                            .tag("checkpoint", name)
-                            .tag("seed", seed)
-                            .tag("first_stage", retriever_tag)
-                        )
-                        model_id = f"{grid_search_id}-{name}-{metric_name}-{seed}"
-                        models_to_evaluate.append((model_id, load_model))
+            for mode in checkpoint_modes:
+                # 1. Best validation checkpoints
+                if mode == CheckpointSelection.VAL:
+                    for name, tracked_validation in tracked_validations.items():
+                        logging.info(f"Adding validation model for evaluation: {name}")
+                        for metric_name in tracked_validation.monitored():
+                            load_model = (
+                                outputs.listeners[tracked_validation.id][metric_name]
+                                .tag("checkpoint", name)
+                                .tag("seed", seed)
+                                .tag("first_stage", retriever_tag)
+                            )
+                            model_id = f"{grid_search_id}-{name}-{metric_name}-{seed}"
+                            models_to_evaluate.append((model_id, load_model))
 
-            # 2. Last checkpoint
-            if checkpoint_mode in (CheckpointSelection.LAST, CheckpointSelection.BOTH):
-                logging.info("Adding last checkpoint for evaluation")
-                last_model = (
-                    outputs.learned_model.tag("checkpoint", "last")
-                    .tag("seed", seed)
-                    .tag("first_stage", retriever_tag)
-                )
-                model_id = f"{grid_search_id}-last-{seed}"
-                models_to_evaluate.append((model_id, last_model))
+                # 2. Last checkpoint
+                elif mode == CheckpointSelection.LAST:
+                    logging.info("Adding last checkpoint for evaluation")
+                    last_model = (
+                        outputs.learned_model.tag("checkpoint", "last")
+                        .tag("seed", seed)
+                        .tag("first_stage", retriever_tag)
+                    )
+                    model_id = f"{grid_search_id}-last-{seed}"
+                    models_to_evaluate.append((model_id, last_model))
+
+                # 3. Specific epoch checkpoint
+                elif isinstance(mode, int):
+                    target_epoch = mode
+                    logging.info(
+                        f"Adding checkpoint for epoch {target_epoch} for evaluation"
+                    )
+                    load_model = find_checkpoint(
+                        outputs=outputs,
+                        target_epoch=target_epoch,
+                        learner=learner,
+                    )
+                    load_model = (
+                        load_model.tag("checkpoint", f"epoch-{target_epoch}")
+                        .tag("seed", seed)
+                        .tag("first_stage", retriever_tag)
+                    )
+                    model_id = f"{grid_search_id}-epoch{target_epoch}-{seed}"
+                    models_to_evaluate.append((model_id, load_model))
 
             # Shared evaluation execution loop
             for model_id, load_model in models_to_evaluate:

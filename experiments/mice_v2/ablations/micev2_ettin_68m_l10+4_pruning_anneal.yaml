@@ -50,8 +50,11 @@ grid_search:
         - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: null} # baseline -> degenerates
 
         - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3} # Anneal temperature
+        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-1} # Anneal temperature
+
         - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1, temp_end: null} # l2 reg
         - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: null}
         - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3} # combine annealing and l2
+        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-1} # combine annealing and l2
 
         - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0, temp_end: null} #example of Bugdet reg

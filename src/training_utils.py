@@ -2,7 +2,7 @@
 
 import logging
 import shutil
-from typing import Callable
+from typing import Callable, Optional, Any
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -12,6 +12,7 @@ from experimaestro.launcherfinder import find_launcher
 from experimaestro.annotations import tags as get_tags
 
 from xpm_torch.trainers import LossTrainer
+from xpm_torch.learner import LearnerOutput
 
 from xpmir.letor.trainers.batchwise import BatchwiseTrainer
 from xpmir.letor.trainers.pairwise import PairwiseTrainer
@@ -734,3 +735,78 @@ def process_experiment_results(
 
     logging.info(f"Saved aggregated results to {helper.xp.resultspath / 'results.csv'}")
     logging.info("Experiment completed successfully.")
+
+
+def find_checkpoint(
+    outputs: LearnerOutput,
+    target_epoch: int,
+    learner: Optional[Any] = None,
+) -> Any:
+    """Finds a checkpoint task for a specific epoch.
+
+    Search order:
+    1. Direct match in outputs.checkpoints (by int or str key).
+    2. Check if target_epoch equals learner.max_epochs (using outputs.learned_model).
+    3. Check if the checkpoint exists on disk in learner.checkpointspath.
+    4. If not found, raises a descriptive ValueError listing available scheduled checkpoints and interval info.
+
+    Args:
+        outputs: The LearnerOutput from learner.submit().
+        target_epoch: Target epoch number to evaluate.
+        learner: Optional Learner instance for disk and max_epochs fallback.
+
+    Returns:
+        The ModuleLoader task for the requested epoch.
+    """
+    # 1. Check in outputs.checkpoints
+    if outputs.checkpoints:
+        if target_epoch in outputs.checkpoints:
+            logger.info(
+                f"Found scheduled checkpoint for epoch {target_epoch} in learner outputs."
+            )
+            return outputs.checkpoints[target_epoch]
+        for k, v in outputs.checkpoints.items():
+            if str(k) == str(target_epoch):
+                logger.info(
+                    f"Found scheduled checkpoint for epoch {target_epoch} in learner outputs."
+                )
+                return v
+
+    # 2. Check if target_epoch corresponds to max_epochs (last)
+    if learner is not None and getattr(learner, "max_epochs", None) == target_epoch:
+        logger.info(
+            f"Requested epoch {target_epoch} matches learner.max_epochs. Using last checkpoint (learned_model)."
+        )
+        return outputs.learned_model
+
+    # 3. Disk fallback
+    if learner is not None and hasattr(learner, "checkpointspath"):
+        from xpm_torch.trainers.context import TrainerContext, TrainState
+        from xpm_torch.learner import CheckpointSettings
+
+        chk_path = (
+            TrainerContext.get_checkpoint_path(
+                Path(learner.checkpointspath), target_epoch
+            )
+            / TrainState.MODEL_DIR
+        )
+        if chk_path.exists():
+            logger.info(
+                f"Found checkpoint for epoch {target_epoch} on disk at {chk_path}"
+            )
+            return learner.model.loader_config(
+                chk_path, settings=CheckpointSettings.C(epoch=target_epoch)
+            )
+
+    # 4. Not found -> raise informative error
+    available = sorted(outputs.checkpoints.keys()) if outputs.checkpoints else []
+    interval_info = (
+        f" Learner checkpoint_interval is {learner.checkpoint_interval}, max_epochs is {learner.max_epochs}."
+        if learner is not None and hasattr(learner, "checkpoint_interval")
+        else ""
+    )
+    raise ValueError(
+        f"Checkpoint for epoch {target_epoch} could not be found! "
+        f"Available scheduled checkpoints in learner outputs: {available}.{interval_info} "
+        f"Please verify that target_epoch was scheduled by checkpoint_interval or exists on disk."
+    )

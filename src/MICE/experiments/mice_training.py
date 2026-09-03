@@ -46,6 +46,7 @@ from format import (
 from training_utils import (
     build_trainer,
     process_experiment_results,
+    find_checkpoint,
 )
 
 from logging_utils import setup_logging
@@ -333,36 +334,60 @@ def TrainEvaluateLateInteractionScorer(
 
             # Build list of models to evaluate: (model_id, load_model, label)
             models_to_evaluate = []
-            checkpoint_mode = cfg.evaluation.get_checkpoint_mode()
+            checkpoint_modes = cfg.evaluation.get_checkpoint_modes()
 
-            # 1. Best validation checkpoints
-            if checkpoint_mode in (CheckpointSelection.VAL, CheckpointSelection.BOTH):
-                for name, tracked_validation in tracked_validations.items():
-                    logging.info(f"Adding validation model for evaluation: {name}")
-                    for metric_name in tracked_validation.monitored():
-                        load_model = (
-                            outputs.listeners[tracked_validation.id][metric_name]
-                            .tag("checkpoint", name)
-                            .tag("seed", seed)
-                            .tag("first_stage", retriever_tag)
-                        )
-                        for k, v in cfg_tags.items():
-                            load_model.tag(k, v)
-                        model_id = f"{grid_search_id}-{name}-{metric_name}-{seed}"
-                        models_to_evaluate.append((model_id, load_model, name))
+            for mode in checkpoint_modes:
+                # 1. Best validation checkpoints
+                if mode == CheckpointSelection.VAL:
+                    for name, tracked_validation in tracked_validations.items():
+                        logging.info(f"Adding validation model for evaluation: {name}")
+                        for metric_name in tracked_validation.monitored():
+                            load_model = (
+                                outputs.listeners[tracked_validation.id][metric_name]
+                                .tag("checkpoint", name)
+                                .tag("seed", seed)
+                                .tag("first_stage", retriever_tag)
+                            )
+                            for k, v in cfg_tags.items():
+                                load_model.tag(k, v)
+                            model_id = f"{grid_search_id}-{name}-{metric_name}-{seed}"
+                            models_to_evaluate.append((model_id, load_model, name))
 
-            # 2. Last checkpoint
-            if checkpoint_mode in (CheckpointSelection.LAST, CheckpointSelection.BOTH):
-                logging.info("Adding last checkpoint for evaluation")
-                last_model = (
-                    outputs.learned_model.tag("checkpoint", "last")
-                    .tag("seed", seed)
-                    .tag("first_stage", retriever_tag)
-                )
-                for k, v in cfg_tags.items():
-                    last_model.tag(k, v)
-                model_id = f"{grid_search_id}-last-{seed}"
-                models_to_evaluate.append((model_id, last_model, "last"))
+                # 2. Last checkpoint
+                elif mode == CheckpointSelection.LAST:
+                    logging.info("Adding last checkpoint for evaluation")
+                    last_model = (
+                        outputs.learned_model.tag("checkpoint", "last")
+                        .tag("seed", seed)
+                        .tag("first_stage", retriever_tag)
+                    )
+                    for k, v in cfg_tags.items():
+                        last_model.tag(k, v)
+                    model_id = f"{grid_search_id}-last-{seed}"
+                    models_to_evaluate.append((model_id, last_model, "last"))
+
+                # 3. Specific epoch checkpoint
+                elif isinstance(mode, int):
+                    target_epoch = mode
+                    logging.info(
+                        f"Adding checkpoint for epoch {target_epoch} for evaluation"
+                    )
+                    load_model = find_checkpoint(
+                        outputs=outputs,
+                        target_epoch=target_epoch,
+                        learner=learner,
+                    )
+                    for k, v in cfg_tags.items():
+                        load_model.tag(k, v)
+                    load_model = (
+                        load_model.tag("checkpoint", f"epoch-{target_epoch}")
+                        .tag("seed", seed)
+                        .tag("first_stage", retriever_tag)
+                    )
+                    model_id = f"{grid_search_id}-epoch{target_epoch}-{seed}"
+                    models_to_evaluate.append(
+                        (model_id, load_model, f"epoch-{target_epoch}")
+                    )
 
             # Shared evaluation execution loop (Standard & PLAID)
             for model_id, load_model, label in models_to_evaluate:

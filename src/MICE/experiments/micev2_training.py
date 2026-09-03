@@ -38,6 +38,7 @@ from format import (
 from training_utils import (
     build_trainer,
     process_experiment_results,
+    find_checkpoint,
 )
 
 from MICE.modeling.mice_v2.modernbert_xpm import (
@@ -501,7 +502,7 @@ def TrainEvaluateMiceV2(
             # Build list of models to evaluate: (model_id, load_model, label, eval_model)
 
             models_to_evaluate = []
-            checkpoint_mode = cfg.evaluation.get_checkpoint_mode()
+            checkpoint_modes = cfg.evaluation.get_checkpoint_modes()
 
             for (
                 phase_num,
@@ -510,54 +511,85 @@ def TrainEvaluateMiceV2(
                 current_tracked_validations,
             ) in phases_to_evaluate:
                 phase_prefix = f"-p{phase_num}" if cfg.phase2_training else ""
+                current_learner = learner_p2 if phase_num == 2 else learner
 
-                # 1. Best validation checkpoints
-                if checkpoint_mode in (
-                    CheckpointSelection.VAL,
-                    CheckpointSelection.BOTH,
-                ):
-                    for name, tracked_validation in current_tracked_validations.items():
+                for mode in checkpoint_modes:
+                    # 1. Best validation checkpoints
+                    if mode == CheckpointSelection.VAL:
+                        for (
+                            name,
+                            tracked_validation,
+                        ) in current_tracked_validations.items():
+                            logging.info(
+                                f"Adding validation model for evaluation (Phase {phase_num}): {name}"
+                            )
+                            for metric_name in tracked_validation.monitored():
+                                load_model = (
+                                    current_outputs.listeners[tracked_validation.id][
+                                        metric_name
+                                    ]
+                                    .tag("checkpoint", name)
+                                    .tag("seed", seed)
+                                    .tag("first_stage", retriever_tag)
+                                )
+                                if cfg.phase2_training:
+                                    load_model.tag("phase", phase_num)
+                                for k, v in cfg_tags.items():
+                                    load_model.tag(k, v)
+                                model_id = f"{grid_search_id}{phase_prefix}-{name}-{metric_name}-{seed}"
+                                models_to_evaluate.append(
+                                    (model_id, load_model, name, current_model)
+                                )
+
+                    # 2. Last checkpoint
+                    elif mode == CheckpointSelection.LAST:
                         logging.info(
-                            f"Adding validation model for evaluation (Phase {phase_num}): {name}"
+                            f"Adding last checkpoint for evaluation (Phase {phase_num})"
                         )
-                        for metric_name in tracked_validation.monitored():
-                            load_model = (
-                                current_outputs.listeners[tracked_validation.id][
-                                    metric_name
-                                ]
-                                .tag("checkpoint", name)
-                                .tag("seed", seed)
-                                .tag("first_stage", retriever_tag)
-                            )
-                            if cfg.phase2_training:
-                                load_model.tag("phase", phase_num)
-                            for k, v in cfg_tags.items():
-                                load_model.tag(k, v)
-                            model_id = f"{grid_search_id}{phase_prefix}-{name}-{metric_name}-{seed}"
-                            models_to_evaluate.append(
-                                (model_id, load_model, name, current_model)
-                            )
+                        last_model = (
+                            current_outputs.learned_model.tag("checkpoint", "last")
+                            .tag("seed", seed)
+                            .tag("first_stage", retriever_tag)
+                        )
 
-                # 2. Last checkpoint
-                if checkpoint_mode in (
-                    CheckpointSelection.LAST,
-                    CheckpointSelection.BOTH,
-                ):
-                    logging.info(
-                        f"Adding last checkpoint for evaluation (Phase {phase_num})"
-                    )
-                    last_model = (
-                        current_outputs.learned_model.tag("checkpoint", "last")
-                        .tag("seed", seed)
-                        .tag("first_stage", retriever_tag)
-                    )
+                        for k, v in cfg_tags.items():
+                            last_model.tag(k, v)
+                        model_id = f"{grid_search_id}{phase_prefix}-last-{seed}"
+                        models_to_evaluate.append(
+                            (model_id, last_model, "last", current_model)
+                        )
 
-                    for k, v in cfg_tags.items():
-                        last_model.tag(k, v)
-                    model_id = f"{grid_search_id}{phase_prefix}-last-{seed}"
-                    models_to_evaluate.append(
-                        (model_id, last_model, "last", current_model)
-                    )
+                    # 3. Specific epoch checkpoint
+                    elif isinstance(mode, int):
+                        target_epoch = mode
+                        logging.info(
+                            f"Adding checkpoint for epoch {target_epoch} for evaluation (Phase {phase_num})"
+                        )
+                        load_model = find_checkpoint(
+                            outputs=current_outputs,
+                            target_epoch=target_epoch,
+                            learner=current_learner,
+                        )
+                        load_model = (
+                            load_model.tag("checkpoint", f"epoch-{target_epoch}")
+                            .tag("seed", seed)
+                            .tag("first_stage", retriever_tag)
+                        )
+                        if cfg.phase2_training:
+                            load_model.tag("phase", phase_num)
+                        for k, v in cfg_tags.items():
+                            load_model.tag(k, v)
+                        model_id = (
+                            f"{grid_search_id}{phase_prefix}-epoch{target_epoch}-{seed}"
+                        )
+                        models_to_evaluate.append(
+                            (
+                                model_id,
+                                load_model,
+                                f"epoch-{target_epoch}",
+                                current_model,
+                            )
+                        )
 
             # Shared evaluation execution loop (Standard & PLAID)
             for model_id, load_model, label, eval_model in models_to_evaluate:

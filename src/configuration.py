@@ -5,6 +5,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Union,
 )
 from experimaestro.experiments.grid import GridSearch
 from xpm_torch.experiments.configuration import TransformerOptimization, Fabric
@@ -114,11 +115,11 @@ class CheckpointSelection(str, Enum):
     VAL = "val"
     """Evaluate only the best validation checkpoint(s)"""
 
+    BEST = "best"
+    """Alias for VAL: evaluate best validation checkpoint(s)"""
+
     LAST = "last"
     """Evaluate only the last checkpoint"""
-
-    BOTH = "both"
-    """Evaluate both best validation and last checkpoints"""
 
 
 @configuration()
@@ -149,8 +150,10 @@ class Evaluation:
     nanobeir: bool = False
     """Whether to evaluate on NanoBEIR datasets"""
 
-    eval_checkpoint: CheckpointSelection = CheckpointSelection.LAST
-    """Checkpoint(s) to evaluate: 'val' (best validation), 'last' (final epoch), or 'both'"""
+    eval_checkpoint: Union[
+        List[Union[CheckpointSelection, int, str]], CheckpointSelection, int, str
+    ] = CheckpointSelection.LAST
+    """Checkpoint(s) to evaluate: 'last', 'val'/'best', a specific epoch int, or a list like ['last', 500]"""
 
     datasets: List[str] = Factory(list)
     """List of specific datasets to evaluate on"""
@@ -158,8 +161,44 @@ class Evaluation:
     fabric: Fabric = Factory(Fabric)
     """Configuration for Fabric device management during evaluation"""
 
-    def get_checkpoint_mode(self) -> CheckpointSelection:
-        return CheckpointSelection(self.eval_checkpoint)
+    def get_checkpoint_modes(self) -> List[Union[CheckpointSelection, int]]:
+        raw = self.eval_checkpoint
+        items = raw if isinstance(raw, list) else [raw]
+        modes: List[Union[CheckpointSelection, int]] = []
+        for item in items:
+            if isinstance(item, int):
+                modes.append(CheckpointSelection.LAST if item == -1 else item)
+            elif isinstance(item, str):
+                item_lower = item.strip().lower()
+                if item_lower == "both":
+                    raise ValueError(
+                        "Option 'both' has been removed. Please specify a list of checkpoints instead, e.g. ['val', 'last'] or [last, '500']."
+                    )
+                elif item_lower in ("val", "best", "best_val", "best val"):
+                    modes.append(CheckpointSelection.VAL)
+                elif item_lower in ("last", "-1"):
+                    modes.append(CheckpointSelection.LAST)
+                else:
+                    try:
+                        modes.append(int(item_lower))
+                    except ValueError:
+                        modes.append(CheckpointSelection(item))
+            elif isinstance(item, CheckpointSelection):
+                modes.append(item)
+            else:
+                modes.append(CheckpointSelection(item))
+
+        # Deduplicate while preserving order
+        seen = set()
+        unique_modes = []
+        for m in modes:
+            if m not in seen:
+                seen.add(m)
+                unique_modes.append(m)
+        return unique_modes
+
+    def get_checkpoint_mode(self) -> List[Union[CheckpointSelection, int]]:
+        return self.get_checkpoint_modes()
 
 
 @configuration()
