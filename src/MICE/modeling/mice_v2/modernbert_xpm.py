@@ -953,7 +953,7 @@ class InitEvalSparsityHook(LightweightTask):
     threshold: Param[Optional[float]] = field(default=None, ignore_default=True)
 
     def execute(self):
-        logger.info(
+        logger.debug(
             f"[InitEvalSparsityHook] Lifecycle Step: Executing InitTask in CWD={Path.cwd()}"
         )
         scorer = self.scorer.module if hasattr(self.scorer, "module") else self.scorer
@@ -966,22 +966,22 @@ class InitEvalSparsityHook(LightweightTask):
                     scorer.hf_model.config, "hard_prune_threshold", effective_threshold
                 )
 
-        logger.info(
-            f"[InitEvalSparsityHook] Effective eval sparsity threshold resolved to: {effective_threshold}"
-        )
+            logger.info(
+                f"[InitEvalSparsityHook] Effective eval sparsity threshold automatically resolved to: {effective_threshold}"
+            )
 
         if (
             not hasattr(scorer, "eval_sparsity_tracker")
             or scorer.eval_sparsity_tracker is None
         ):
-            logger.info(
+            logger.debug(
                 f"[InitEvalSparsityHook] Attaching new EvalSparsityAccumulator(threshold={effective_threshold}) to scorer"
             )
             scorer.eval_sparsity_tracker = EvalSparsityAccumulator(
                 threshold=effective_threshold
             )
         else:
-            logger.info(
+            logger.debug(
                 f"[InitEvalSparsityHook] Updating existing EvalSparsityAccumulator threshold to {effective_threshold}"
             )
             scorer.eval_sparsity_tracker.threshold = effective_threshold

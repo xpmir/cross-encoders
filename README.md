@@ -64,6 +64,14 @@ To install this repository, first ensure you have `git` and [`uv`](https://docs.
     uv sync
     ```
 
+### Flash_attn
+Most experiments are done Using [Flash-Attn](https://github.com/Dao-AILab/flash-attention) that enables much higher troughput and unpadding in both Mice and Cross-encoder models.
+
+The easiest way to install it is via the kernels community.
+
+```bash
+uvx hf download kernels-community/flash-attn2
+````
 
 ### Launching experiments
 If it is the first time using experimaestro, you may first setup your environment to be able to launch experiments. You can follow [the tutorial](https://experimaestro-python.readthedocs.io/en/latest/tutorial.html)

@@ -566,11 +566,7 @@ def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
                                 stats = json.load(fp)
                             existing_text = results_path.read_text()
                             lines_to_append = []
-                            for metric_name in [
-                                "sparsity",
-                                "mean_utility",
-                                "kept_ratio",
-                            ]:
+                            for metric_name in ["sparsity"]:
                                 if (
                                     metric_name in stats
                                     and f"{metric_name:25s}" not in existing_text

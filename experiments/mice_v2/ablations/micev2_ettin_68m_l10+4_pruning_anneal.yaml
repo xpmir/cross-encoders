@@ -33,7 +33,12 @@ evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
     beir13: false
+    datasets:
+        - nfcorpus
+        - arguana
+        - scifact
 
+eval_sparsity: true
 
 #best values from v1
 lambda_reg: 5e-1

@@ -291,7 +291,7 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     pref_attn_implementation: Optional[str] = field(default=None)
     """Attention implementation for HuggingFace models (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
 
-    use_st_scorer: bool = field(default=True)
+    use_st_scorer: GridSearch[bool] = field(default=True)
     """Use sentence-transformers STCrossEncoder instead of HFCrossScorer"""
 
     ettin_subset_exclude: List[str] = field(factory=list)
