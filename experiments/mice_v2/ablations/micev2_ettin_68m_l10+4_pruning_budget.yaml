@@ -34,6 +34,7 @@ evaluation: #default = Minified tests
     in_domain: true
     beir13: false
 
+eval_sparsity: true
 
 #best values from v1
 lambda_reg: 5e-1
@@ -50,7 +51,7 @@ grid_search:
         - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: null} # baseline -> degenerates
         - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1, temp_end: null} # no budget but l2 reg
         # tests with budget and l2 reg
-        - {reg_budget: 0.2, l2_reg: false, lambda_reg: 5e-1, temp_end: null}
-        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 5e-1, temp_end: null}
-        - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0, temp_end: null}
+        # - {reg_budget: 0.2, l2_reg: false, lambda_reg: 5e-1, temp_end: null}
+        # - {reg_budget: 0.2, l2_reg: true, lambda_reg: 5e-1, temp_end: null}
+        # - {reg_budget: 0.2, l2_reg: true, lambda_reg: 1e-0, temp_end: null}
         - {reg_budget: 0.1, l2_reg: true, lambda_reg: 5e-1, temp_end: null}

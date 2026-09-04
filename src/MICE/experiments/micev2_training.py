@@ -46,6 +46,7 @@ from MICE.modeling.mice_v2.modernbert_xpm import (
     UtilityRegularizer,
     GatedValueRegularizer,
     InitMICEV2FromCheckpoint,
+    InitEvalSparsityHook,
 )
 from logging_utils import setup_logging
 
@@ -132,6 +133,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     checkpoint when compress_dim == 1.0, else falls back to 'random'), 'random' (always
     skip seeding, keep each layer's own default init), 'random_projection', or
     'svd_projection' (both only meaningful when compress_dim > 1.0)"""
+
+    eval_sparsity: bool = False
+    """Whether to compute token sparsity, mean utility, and token retention ratio during evaluation benchmarks"""
 
 
 def build_mice_v2(
@@ -601,7 +605,17 @@ def TrainEvaluateMiceV2(
                 if cfg.plaid.use_plaid:
                     load_model.tag("plaid_retriever", False)
 
+                eval_init_tasks = [load_model]
+                if cfg.eval_sparsity:
+                    eval_init_tasks.append(
+                        InitEvalSparsityHook.C(
+                            scorer=eval_model,
+                            threshold=cfg.hard_prune_threshold,
+                        )
+                    )
+
                 all_weights.append(load_model)
+
                 tests.evaluate_retriever(
                     partial(
                         scorer_retriever,
@@ -611,7 +625,7 @@ def TrainEvaluateMiceV2(
                     ),
                     launcher_evaluate,
                     model_id=model_id,
-                    init_tasks=[load_model],
+                    init_tasks=eval_init_tasks,
                     with_run=cfg.save_runs,
                     fabric_config=cfg.evaluation.fabric.get_config(),
                 )
@@ -642,7 +656,7 @@ def TrainEvaluateMiceV2(
                         retriever=mice_plaid_factory,
                         launcher=launcher_evaluate,
                         model_id=f"{model_id}-Plaid",
-                        init_tasks=[load_model],
+                        init_tasks=eval_init_tasks,
                         with_run=cfg.save_runs,
                         fabric_config=cfg.evaluation.fabric.get_config(),
                     )

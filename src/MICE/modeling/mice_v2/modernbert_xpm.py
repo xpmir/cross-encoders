@@ -3,12 +3,13 @@ Experimaestro-IR integration for ModernBERT MICE V2 architecture.
 """
 
 from pathlib import Path
-from typing import Optional, List, Tuple, Union
+from typing import Optional, List, Tuple, Union, Dict
 import logging
 import shutil
 import json
 import os
 import math
+import atexit
 
 import torch
 import torch.nn as nn
@@ -833,8 +834,179 @@ class InitMICEV2FromCheckpoint(LightweightTask):
         # Populate process cwd checkpoints/epoch-00000000
         copy_to_epoch_zero(Path.cwd() / "checkpoints")
 
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            torch.distributed.barrier()
+
+class EvalSparsityAccumulator:
+    """Accumulator for evaluation document token sparsity metrics across batches/ranks."""
+
+    def __init__(self, threshold: float = 0.5):
+        self.threshold = threshold
+        self.total_tokens: int = 0
+        self.pruned_tokens: int = 0
+        self.sum_utilities: float = 0.0
+        logger.info(
+            f"[EvalSparsityAccumulator] Instantiated with threshold={self.threshold}"
+        )
+
+    def reset(self):
+        logger.debug("[EvalSparsityAccumulator] Resetting token accumulators")
+        self.total_tokens = 0
+        self.pruned_tokens = 0
+        self.sum_utilities = 0.0
+
+    def update(self, utilities: torch.Tensor, doc_mask: Optional[torch.Tensor] = None):
+        """Accumulate token counts and utilities for non-padding tokens."""
+        if utilities is None or utilities.numel() == 0:
+            return
+
+        if (
+            doc_mask is not None
+            and utilities.ndim == 3
+            and utilities.shape[:2] == doc_mask.shape[:2]
+        ):
+            mask = doc_mask.unsqueeze(-1).bool()
+            valid_u = utilities.masked_select(mask)
+        else:
+            valid_u = utilities.view(-1)
+
+        if valid_u.numel() == 0:
+            return
+
+        n_tokens = valid_u.numel()
+        n_pruned = int((valid_u < self.threshold).sum().item())
+        sum_u = float(valid_u.sum().item())
+
+        self.total_tokens += n_tokens
+        self.pruned_tokens += n_pruned
+        self.sum_utilities += sum_u
+
+    def compute(self, fabric=None) -> Dict[str, float]:
+        """Aggregate stats across Fabric ranks or torch.distributed (if multi-GPU) and return metrics."""
+        total = self.total_tokens
+        pruned = self.pruned_tokens
+        sum_u = self.sum_utilities
+
+        if fabric is not None and getattr(fabric, "world_size", 1) > 1:
+            t = torch.tensor(
+                [total, pruned, sum_u], device=fabric.device, dtype=torch.float64
+            )
+            t = fabric.all_reduce(t, reduce_op="sum")
+            total = int(t[0].item())
+            pruned = int(t[1].item())
+            sum_u = float(t[2].item())
+            logger.info(
+                f"[EvalSparsityAccumulator] Fabric all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
+            )
+        elif torch.distributed.is_available() and torch.distributed.is_initialized():
+            t = torch.tensor(
+                [total, pruned, sum_u],
+                dtype=torch.float64,
+                device=torch.cuda.current_device(),
+            )
+            torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
+            total = int(t[0].item())
+            pruned = int(t[1].item())
+            sum_u = float(t[2].item())
+            logger.info(
+                f"[EvalSparsityAccumulator] torch.distributed all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
+            )
+
+        denom = max(total, 1)
+        stats = {
+            "sparsity": pruned / denom,
+            "mean_utility": sum_u / denom,
+            "kept_ratio": (total - pruned) / denom,
+            "total_tokens": total,
+        }
+        logger.info(f"[EvalSparsityAccumulator] Computed metrics: {stats}")
+        return stats
+
+    def flush_to_file(self, fabric=None, output_filename: str = "eval_sparsity.json"):
+        """Flush computed metrics to JSON file in current working directory (rank 0 only)."""
+        logger.info(
+            f"[EvalSparsityAccumulator] Triggering flush_to_file at CWD={Path.cwd()} (total_tokens={self.total_tokens})"
+        )
+        if self.total_tokens == 0:
+            logger.warning(
+                "[EvalSparsityAccumulator] total_tokens is 0 during flush_to_file; skipping write."
+            )
+            return
+
+        stats = self.compute(fabric=fabric)
+        if is_rank_zero():
+            out_path = Path.cwd() / output_filename
+            try:
+                with out_path.open("w") as fp:
+                    json.dump(stats, fp, indent=2)
+                logger.info(
+                    f"[EvalSparsityAccumulator] Successfully wrote evaluation sparsity metrics to {out_path}: {stats}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[EvalSparsityAccumulator] Failed to write {output_filename}: {e}"
+                )
+
+
+class InitEvalSparsityHook(LightweightTask):
+    """Init task attached to evaluations that initializes EvalSparsityAccumulator on ModernBertMiceScorer and registers an atexit hook to flush eval_sparsity.json at evaluation process exit."""
+
+    scorer: Param["ModernBertMiceScorer"]
+    threshold: Param[Optional[float]] = field(default=None, ignore_default=True)
+
+    def execute(self):
+        logger.info(
+            f"[InitEvalSparsityHook] Lifecycle Step: Executing InitTask in CWD={Path.cwd()}"
+        )
+        scorer = self.scorer.module if hasattr(self.scorer, "module") else self.scorer
+
+        effective_threshold = self.threshold
+        if effective_threshold is None:
+            effective_threshold = getattr(scorer, "hard_prune_threshold", 0.5)
+            if hasattr(scorer, "hf_model") and hasattr(scorer.hf_model, "config"):
+                effective_threshold = getattr(
+                    scorer.hf_model.config, "hard_prune_threshold", effective_threshold
+                )
+
+        logger.info(
+            f"[InitEvalSparsityHook] Effective eval sparsity threshold resolved to: {effective_threshold}"
+        )
+
+        if (
+            not hasattr(scorer, "eval_sparsity_tracker")
+            or scorer.eval_sparsity_tracker is None
+        ):
+            logger.info(
+                f"[InitEvalSparsityHook] Attaching new EvalSparsityAccumulator(threshold={effective_threshold}) to scorer"
+            )
+            scorer.eval_sparsity_tracker = EvalSparsityAccumulator(
+                threshold=effective_threshold
+            )
+        else:
+            logger.info(
+                f"[InitEvalSparsityHook] Updating existing EvalSparsityAccumulator threshold to {effective_threshold}"
+            )
+            scorer.eval_sparsity_tracker.threshold = effective_threshold
+
+        scorer.eval_sparsity_tracker.reset()
+
+        def _atexit_flush():
+            logger.info(
+                "[InitEvalSparsityHook] Lifecycle Step: atexit handler triggered at process exit"
+            )
+            fabric = getattr(scorer, "fabric", None)
+            if (
+                hasattr(scorer, "eval_sparsity_tracker")
+                and scorer.eval_sparsity_tracker is not None
+            ):
+                scorer.eval_sparsity_tracker.flush_to_file(fabric=fabric)
+            else:
+                logger.warning(
+                    "[InitEvalSparsityHook] atexit handler found no eval_sparsity_tracker on scorer!"
+                )
+
+        atexit.register(_atexit_flush)
+        logger.info(
+            "[InitEvalSparsityHook] Lifecycle Step: Registered _atexit_flush handler"
+        )
 
 
 class ModernBertMiceScorer(AbstractModuleScorer):
@@ -915,6 +1087,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     def __initialize__(self):
         super().__initialize__()
         logger.info("Initializing ModernBertMiceCrossEncoder")
+        self.eval_sparsity_tracker: Optional[EvalSparsityAccumulator] = None
         self.tokenizer.initialize()
 
         loaded_config = AutoConfig.from_pretrained(self.hf_id)
@@ -1132,6 +1305,18 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                     self.hf_model.last_doc_hidden,
                     doc_mask=target_doc_mask,
                 )
+
+        if (
+            not self.training
+            and getattr(self, "eval_sparsity_tracker", None) is not None
+            and getattr(self.hf_model, "last_utilities", None) is not None
+        ):
+            logger.debug(
+                "[ModernBertMiceScorer] Updating eval_sparsity_tracker during evaluation forward pass"
+            )
+            self.eval_sparsity_tracker.update(
+                self.hf_model.last_utilities, doc_mask=target_doc_mask
+            )
 
         return out.logits.squeeze(-1)
 

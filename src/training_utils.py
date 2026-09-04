@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+import json
 from typing import Callable, Optional, Any
 from pathlib import Path
 import numpy as np
@@ -540,6 +541,67 @@ def export_model(
         logger.info(f"Copied {len(list(runs.keys()))} runs to {runs_dir}")
 
 
+def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
+    """Synchronize eval_sparsity.json into aggregated.txt so to_dataframe() parses it natively."""
+    if not hasattr(tests, "collection"):
+        logger.warning(
+            "[sync_eval_sparsity_metrics] tests object has no 'collection' attribute"
+        )
+        return
+
+    for dataset_name, evaluations in tests.collection.items():
+        eval_list = getattr(evaluations, "results", [])
+        if not eval_list and hasattr(evaluations, "per_tags"):
+            eval_list = list(evaluations.per_tags.values())
+
+        for evaluation in eval_list:
+            results_path = getattr(evaluation, "results", None)
+            if results_path is not None:
+                results_path = Path(results_path)
+                if results_path.exists():
+                    sparsity_file = results_path.parent / "eval_sparsity.json"
+                    if sparsity_file.exists():
+                        try:
+                            with sparsity_file.open("r") as fp:
+                                stats = json.load(fp)
+                            existing_text = results_path.read_text()
+                            lines_to_append = []
+                            for metric_name in [
+                                "sparsity",
+                                "mean_utility",
+                                "kept_ratio",
+                            ]:
+                                if (
+                                    metric_name in stats
+                                    and f"{metric_name:25s}" not in existing_text
+                                ):
+                                    lines_to_append.append(
+                                        "{:25s} {:10s} {:.4f}\n".format(
+                                            metric_name,
+                                            "all",
+                                            float(stats[metric_name]),
+                                        )
+                                    )
+                            if lines_to_append:
+                                with results_path.open("a") as fp:
+                                    fp.writelines(lines_to_append)
+                                logger.info(
+                                    f"[sync_eval_sparsity_metrics] Synced eval sparsity metrics ({list(stats.keys())}) into {results_path}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"[sync_eval_sparsity_metrics] Metrics already present in {results_path}"
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                f"[sync_eval_sparsity_metrics] Could not sync eval sparsity for {dataset_name}: {e}"
+                            )
+                    else:
+                        logger.debug(
+                            f"[sync_eval_sparsity_metrics] No eval_sparsity.json found at {sparsity_file}"
+                        )
+
+
 def process_experiment_results(
     tests: EvaluationsCollection,
     all_tags: list,
@@ -551,6 +613,9 @@ def process_experiment_results(
     get_name_fn: Callable,
 ):
     """Shared post-experiment results processing and reporting."""
+
+    # 0. Sync eval sparsity metrics into aggregated results files before building DataFrame
+    sync_eval_sparsity_metrics(tests)
 
     # 1. Exctract data
     df = tests.to_dataframe()

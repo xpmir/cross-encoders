@@ -338,6 +338,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     save_runs: bool = False
     """Whether to save the evaluation runs in the best model folders"""
 
+    eval_sparsity: bool = False
+    """Whether to compute token sparsity, mean utility, and token retention ratio during evaluation benchmarks"""
+
     export_trained_models: bool = True
     """Whether to export the best models to the models/ folder"""
 

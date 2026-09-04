@@ -55,8 +55,8 @@ grid_search:
         - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-1, temp_schedule: linear}
         # Anneal temperature: linear vs cosine vs exp (temp_end: 1e-3)
         - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3, temp_schedule: linear}
-        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3, temp_schedule: cosine}
-        - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3, temp_schedule: exp}
+        # - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3, temp_schedule: cosine}
+        # - {reg_budget: null, l2_reg: false, lambda_reg: 5e-1, temp_end: 1e-3, temp_schedule: exp}
 
         # L2 reg baselines
         - {reg_budget: null, l2_reg: true, lambda_reg: 5e-1, temp_end: null, temp_schedule: linear} # l2 reg
@@ -64,8 +64,8 @@ grid_search:
 
         # Combine annealing (schedules) and l2
         - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3, temp_schedule: linear}
-        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3, temp_schedule: cosine}
-        - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3, temp_schedule: exp}
+        # - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3, temp_schedule: cosine}
+        # - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-3, temp_schedule: exp}
         - {reg_budget: null, l2_reg: true, lambda_reg: 1.0, temp_end: 1e-1, temp_schedule: linear}
 
         #example of Budget reg
