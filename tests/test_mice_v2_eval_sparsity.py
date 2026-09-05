@@ -98,13 +98,13 @@ def test_sync_eval_sparsity_metrics(tmp_path: Path):
 
     content = results_file.read_text()
     assert "sparsity                  all        0.6000" in content
-    assert "mean_utility              all        0.4200" in content
-    assert "kept_ratio                all        0.4000" in content
+    assert "mean_utility" not in content
+    assert "kept_ratio" not in content
 
     # Re-run sync to ensure no duplicate lines appended
     sync_eval_sparsity_metrics(mock_tests)
     lines = results_file.read_text().strip().split("\n")
-    assert len(lines) == 5  # nDCG@10, RR@10, sparsity, mean_utility, kept_ratio
+    assert len(lines) == 3  # nDCG@10, RR@10, sparsity
 
 
 def test_init_eval_sparsity_hook_dynamic_threshold():

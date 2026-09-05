@@ -60,16 +60,17 @@ class InitDistilledSTCrossEncoder(LightweightTask):
     pref_attn_implementation: Param[Optional[str]] = None
 
     def execute(self):
+        model = self.model
         # Initialize basic component properties without triggering the default CrossEncoder load
-        super(STCrossEncoder, self.model).__initialize__()
-        # Mark as initialized so the framework doesn't try to call __initialize__ again later
-        self.model._initialized = True
+        super(STCrossEncoder, model).__initialize__()
+        if model.tokenizer is not None:
+            model.tokenizer.initialize()
 
-        encoder_size = self.model.model_id.split("-")[-1]
+        encoder_size = model.model_id.split("-")[-1]
 
         transformer = Transformer(
-            self.model.model_id,
-            max_seq_length=self.model.max_length,
+            model.model_id,
+            max_seq_length=model.max_length,
             model_kwargs={"attn_implementation": self.pref_attn_implementation},
         )
         transformer.model.config.num_labels = 1
@@ -95,7 +96,7 @@ class InitDistilledSTCrossEncoder(LightweightTask):
         )
 
         # Override the native CrossEncoder with our custom pipeline
-        self.model.st_model = CrossEncoder(
+        model.st_model = CrossEncoder(
             modules=[transformer, pooling, dense_inner, norm, dense_score],
             num_labels=1,
             activation_fn=nn.Identity(),
@@ -105,13 +106,26 @@ class InitDistilledSTCrossEncoder(LightweightTask):
                 license="apache-2.0",
             ),
         )
+        # Mark as initialized so the framework doesn't try to call __initialize__ again later
+        model._initialized = True
 
 
 def build_STCrossEncoder(cfg) -> tuple[STCrossEncoder, list]:
     """Helper factory to build the distilled STCrossEncoder."""
+    from xpmir.neural.huggingface import HFQueryDocTokenizer
+
     attn_impl = getattr(cfg, "pref_attn_implementation", "sdpa")
+    tokenizer = HFQueryDocTokenizer.C(
+        model_id=cfg.base,
+        max_length=cfg.max_length,
+        max_query_length=getattr(cfg, "max_query_length", None),
+        max_doc_length=getattr(cfg, "max_doc_length", None),
+    )
     scorer = STCrossEncoder.C(
-        model_id=cfg.base, max_length=cfg.max_length, pref_attn_implementation=attn_impl
+        model_id=cfg.base,
+        max_length=cfg.max_length,
+        tokenizer=tokenizer,
+        pref_attn_implementation=attn_impl,
     )
     init_task = InitDistilledSTCrossEncoder.C(
         model=scorer, pref_attn_implementation=attn_impl
@@ -262,7 +276,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             hooks.append(gradient_clipping_hook)
 
         # Build the model
-        if getattr(cfg, "use_st_scorer", False):
+        if cfg.use_st_scorer:
             scorer_model, scorer_hf_init_tasks = build_STCrossEncoder(cfg)
         else:
             scorer_model, scorer_hf_init_tasks = hf_cross_scorer(

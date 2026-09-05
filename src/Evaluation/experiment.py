@@ -229,12 +229,13 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                         max_length=cfg.max_length,
                     )
 
-                scorer, ce_init_tasks = st_cross_scorer(
+                scorer = st_cross_scorer(
                     model_id=scorer_id,
                     max_length=cfg.max_length,
                     pref_attn_implementation=cfg.attn_implementation,
                     tokenizer=st_tok,
                 )
+                ce_init_tasks = []
 
             scorer.tag("scorer", scorer_id)
             scorer.tag("scorer_type", scorer_type)

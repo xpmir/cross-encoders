@@ -135,7 +135,7 @@ def test_mice(
         ), "Classifier weights mismatch after standard reload!"
 
         # 4. HF Export/Import Roundtrip
-        hub = TorchHFHub(loader_config)
+        hub = TorchHFHub(loader)
         hub.save_pretrained(hf_save_path)
 
         hf_loader = TorchHFHub.pretrained_loader(hf_save_path, as_instance=True)

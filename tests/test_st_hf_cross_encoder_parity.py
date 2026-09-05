@@ -51,13 +51,9 @@ def test_st_hf_cross_encoder_parity(model_id):
     hf_scorer.eval()
 
     # 2. Setup STCrossEncoder
-    st_cfg, st_tasks = st_cross_scorer(model_id=model_id)
+    st_cfg = st_cross_scorer(model_id=model_id)
     st_scorer = st_cfg.instance()
     st_scorer.initialize()
-    for task in st_tasks:
-        t = task.instance()
-        t.model = st_scorer
-        t.execute()
     st_scorer.to(device)
     st_scorer.eval()
 

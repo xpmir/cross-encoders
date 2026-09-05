@@ -1,0 +1,38 @@
+id: eval_scorer_top100_notok
+title: cross_scorer_evaluation
+description: Evaluation with separate max_len for query and doc,
+  This ensure parity with Mice models that tokenize query and doc separately.
+
+module: Evaluation.experiment
+pre_experiment: pre_experiment
+parent: ../_common.yaml
+
+scorers_st_id:
+  - cross-encoder/ettin-reranker-68m-v1
+#   - cross-encoder/ettin-reranker-400m-v1
+#   - cross-encoder/ettin-reranker-150m-v1
+  # - cross-encoder/ettin-reranker-17m-v1
+#   - Qwen/Qwen3-Reranker-0.6B
+#   - cross-encoder/ms-marco-MiniLM-L12-v2
+#   - mixedbread-ai/mxbai-rerank-base-v2
+#   - xpmir/cross-encoder-MiniLM-L12-infoNCE
+  # - mixedbread-ai/mxbai-rerank-large-v2
+
+
+# Check what happens whith default 8K context
+max_length: null #This is useless (independent max_query / doc len) but kept for identity with other configs
+max_query_length: null
+max_doc_length: null
+
+retrievers_hf_id:
+  - naver/splade-v3-distilbert
+
+evaluation:
+  #just for debugging
+  in_domain: true
+  beir13: false
+  beir13_decontaminated: false
+  datasets:
+    - nfcorpus
+    - nq
+    - scidocs

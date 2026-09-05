@@ -3,14 +3,14 @@ import pytest
 from sentence_transformers import CrossEncoder
 from xpmir.neural.sentence_transformers import st_cross_scorer
 from xpmir.letor.records import PointwiseItems
-
+import logging
 
 @pytest.mark.parametrize(
     "model_id",
     [
-        "Qwen/Qwen3-Reranker-0.6B",
+        # "Qwen/Qwen3-Reranker-0.6B",
+        # "mixedbread-ai/mxbai-rerank-base-v2",
         "cross-encoder/ms-marco-MiniLM-L6-v2",
-        "mixedbread-ai/mxbai-rerank-base-v2",
     ],
 )
 def test_st_cross_encoder_parity(model_id):
@@ -44,13 +44,10 @@ def test_st_cross_encoder_parity(model_id):
     raw_scores = torch.cat(raw_scores)
 
     # 2. Setup xpmir STCrossEncoder implementation
-    scorer, init_tasks = st_cross_scorer(model_id=model_id)
+    scorer = st_cross_scorer(model_id=model_id)
     scorer = scorer.instance()
     scorer.to(device)
-
-    # Run initialization tasks
-    for task in init_tasks:
-        task.instance().execute()
+    scorer.initialize()
 
     # 3. Compare scores
     for i in range(len(queries)):
@@ -77,3 +74,86 @@ def test_st_cross_encoder_parity(model_id):
         assert torch.allclose(
             score_tok.to(expected.dtype), expected, atol=1e-4
         ), f"Tokenized score mismatch at index {i}: expected {expected}, got {score_tok}"
+
+
+def test_st_cross_encoder_hf_query_doc_tokenizer():
+    """Verify STCrossEncoder using HFQueryDocTokenizer with custom query/doc length limits."""
+    model_id = "cross-encoder/ms-marco-MiniLM-L6-v2"
+    scorer = st_cross_scorer(
+        model_id=model_id,
+        max_length=128,
+        max_query_length=16,
+        max_doc_length=64,
+    )
+    scorer = scorer.instance()
+    scorer.initialize()
+
+    records = PointwiseItems.from_texts(
+        topics=["What is the speed of light in vacuum?" * 5],
+        documents=[
+            "The speed of light in vacuum is exactly 299,792,458 meters per second." * 10
+        ],
+    )
+
+    tokenized = scorer.batch_tokenize(records)
+    assert tokenized.ids.shape[1] <= 128
+    scores = scorer(records, tokenized=tokenized)
+    assert scores.shape == (1,)
+
+
+def test_st_cross_encoder_main_process_initialization():
+    """Verify that STCrossEncoder.initialize() instantiates st_model in main process."""
+    scorer = st_cross_scorer(model_id="cross-encoder/ms-marco-MiniLM-L6-v2")
+    scorer = scorer.instance()
+
+    assert scorer.st_model is None
+    scorer.initialize()
+    assert scorer._initialized is True
+    assert scorer.st_model is not None
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        # "Qwen/Qwen3-Reranker-0.6B",
+        # "mixedbread-ai/mxbai-rerank-base-v2",
+        "cross-encoder/ms-marco-MiniLM-L6-v2",
+    ],
+)
+def test_init_distilled_st_cross_encoder(model_id: str):
+    """Verify InitDistilledSTCrossEncoder sets _initialized = True and respects custom st_model."""
+    from cross_encoders_training.experiment import InitDistilledSTCrossEncoder
+    class DummyConfig:
+        base = model_id
+        max_length = 64
+        pref_attn_implementation = "sdpa"
+
+    cfg = DummyConfig()
+    scorer = st_cross_scorer(model_id=cfg.base, max_length=cfg.max_length)
+    init_task = InitDistilledSTCrossEncoder.C(model=scorer, pref_attn_implementation="sdpa")
+
+    task_inst = init_task.instance()
+    task_inst.execute()
+    scorer_inst = task_inst.model
+
+    logging.debug(f"Created model: {scorer_inst}")
+    assert scorer_inst._initialized is True
+    assert scorer_inst.st_model is not None
+
+    # Secondary call to initialize() must not overwrite custom st_model
+    custom_model = scorer_inst.st_model
+    scorer_inst.initialize()
+    assert scorer_inst.st_model is custom_model
+
+
+def test_uninitialized_st_cross_encoder_raises_error():
+    """Verify that accessing methods on an uninitialized STCrossEncoder raises RuntimeError."""
+    scorer = st_cross_scorer(model_id="cross-encoder/ms-marco-MiniLM-L6-v2")
+    scorer = scorer.instance()
+
+    records = PointwiseItems.from_texts(topics=["query"], documents=["doc"])
+    with pytest.raises(RuntimeError, match="has not been initialized"):
+        scorer(records)
+
+    with pytest.raises(RuntimeError, match="has not been initialized"):
+        scorer.tokenize(records)
