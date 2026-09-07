@@ -662,6 +662,11 @@ def TrainEvaluateMiceV2(
                     )
 
     all_configs, all_tags = generate_grid(cfg)
+    if not all_configs:
+        raise ValueError(
+            f"generate_grid returned 0 configurations for {cfg.id}. "
+            "Please check your grid_search configuration or parameter definitions."
+        )
 
     # Simplify tags keys
     new_all_tags = []

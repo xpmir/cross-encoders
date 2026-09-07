@@ -581,7 +581,7 @@ def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
                             if lines_to_append:
                                 with results_path.open("a") as fp:
                                     fp.writelines(lines_to_append)
-                                logger.info(
+                                logger.debug(
                                     f"[sync_eval_sparsity_metrics] Synced eval sparsity metrics ({list(stats.keys())}) into {results_path}"
                                 )
                             else:
