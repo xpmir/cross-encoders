@@ -285,6 +285,133 @@ def _hard_prune_padded_documents(
     return new_d_hidden, new_doc_mask, new_pos_ids
 
 
+def _concat_query_doc_unpadded(
+    q_hidden: torch.Tensor,
+    d_hidden: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_d: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, int, torch.Tensor]:
+    """Concatenates unpadded query and document representations along the sequence dimension
+    for FlashAttention-2 execution.
+
+    Architecture context:
+    - In MICE bottom layers, query and document are encoded independently:
+        Query sequence: [CLS] q_1 ... q_m [SEP]
+        Document sequence: [CLS] d_1 ... d_k [SEP]
+    - To perform joint self-attention in top interaction layers without a duplicate [CLS],
+      we drop the document's leading [CLS] (token index 0 of each doc sequence).
+      The resulting concatenated sequence is exactly:
+        [CLS] q_1 ... q_m [SEP] d_1 ... d_k [SEP]
+      matching ModernBERT's native pair pretraining format.
+    - FlashAttention-2 requires all tokens in sequence `i` to be contiguous in memory:
+      [q_seq_0, d_seq_0, q_seq_1, d_seq_1, ...], with updated cumulative sequence lengths
+      `cu_seqlens_joint` and 1D position IDs `0 .. len_i - 1` for RoPE embeddings.
+
+    Returns:
+        (joint_hidden, cu_seqlens_joint, max_seqlen_joint, pos_ids_joint)
+    """
+    batch_size = cu_seqlens_q.shape[0] - 1
+    device = q_hidden.device
+    hidden_dim = q_hidden.shape[-1]
+
+    # Calculate token counts per sequence; drop document CLS (-1)
+    q_lens = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
+    d_lens = cu_seqlens_d[1:] - cu_seqlens_d[:-1]
+    d_kept_lens = torch.clamp(d_lens - 1, min=0)
+    joint_lens = q_lens + d_kept_lens
+
+    # Build new cumulative sequence lengths for the combined sequence
+    cu_seqlens_joint = torch.zeros(batch_size + 1, dtype=torch.int32, device=device)
+    cu_seqlens_joint[1:] = torch.cumsum(joint_lens, dim=0, dtype=torch.int32)
+    max_seqlen_joint = int(joint_lens.max().item()) if len(joint_lens) > 0 else 0
+    total_joint = int(cu_seqlens_joint[-1].item())
+
+    joint_hidden = torch.empty(
+        (1, total_joint, hidden_dim), dtype=q_hidden.dtype, device=device
+    )
+    pos_ids_joint = torch.empty((1, total_joint), dtype=torch.long, device=device)
+
+    cu_q = cu_seqlens_q.cpu().tolist()
+    cu_d = cu_seqlens_d.cpu().tolist()
+    cu_j = cu_seqlens_joint.cpu().tolist()
+
+    # Interleave query and document tokens per sequence into contiguous blocks
+    for i in range(batch_size):
+        js, je = cu_j[i], cu_j[i + 1]
+        qs, qe = cu_q[i], cu_q[i + 1]
+        ds, de = cu_d[i], cu_d[i + 1]
+
+        q_part = q_hidden[0, qs:qe]
+        # Slice doc tokens from ds + 1 to drop the redundant document [CLS]
+        d_part = (
+            d_hidden[0, ds + 1 : de]
+            if de > ds + 1
+            else q_hidden.new_empty((0, hidden_dim))
+        )
+        joint_hidden[0, js:je] = torch.cat([q_part, d_part], dim=0)
+        # Position IDs reset to 0..L_i-1 for each pair, matching full RoPE pretraining
+        pos_ids_joint[0, js:je] = torch.arange(je - js, device=device)
+
+    return joint_hidden, cu_seqlens_joint, max_seqlen_joint, pos_ids_joint
+
+
+def _concat_query_doc_padded(
+    q_hidden: torch.Tensor,
+    d_hidden: torch.Tensor,
+    query_mask: Optional[torch.Tensor],
+    doc_mask: Optional[torch.Tensor],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Concatenates padded query and document representations along sequence dimension for
+    standard SDPA / eager attention execution.
+
+    Why row-by-row repacking is necessary:
+    - Naively calling `torch.cat([q_hidden, d_hidden[:, 1:]], dim=1)` would leave query padding
+      tokens in the *middle* of the sequence between query tokens and document tokens.
+    - Padding tokens in the middle enlarge and distort relative positional distances in RoPE,
+      violating the contiguous [CLS] q [SEP] d [SEP] pretraining layout.
+    - This helper repacks each sequence so valid query tokens are immediately followed by valid
+      document tokens (minus doc [CLS]), ensuring all padding is contiguous at the end of the row.
+
+    Returns:
+        (joint_hidden, joint_mask) where joint_hidden has shape [B, max_joint_len, D]
+    """
+    batch_size, _, hidden_dim = q_hidden.shape
+    device = q_hidden.device
+
+    if query_mask is None:
+        query_mask = torch.ones(q_hidden.shape[:2], dtype=torch.long, device=device)
+    if doc_mask is None:
+        doc_mask = torch.ones(d_hidden.shape[:2], dtype=torch.long, device=device)
+
+    # Compute valid lengths per sequence
+    q_lens = query_mask.sum(dim=1)
+    d_lens = doc_mask.sum(dim=1)
+    # Drop doc [CLS] (token index 0)
+    d_kept_lens = torch.clamp(d_lens - 1, min=0)
+    joint_lens = q_lens + d_kept_lens
+    max_joint_len = int(joint_lens.max().item()) if len(joint_lens) > 0 else 0
+
+    joint_hidden = torch.zeros(
+        (batch_size, max_joint_len, hidden_dim), dtype=q_hidden.dtype, device=device
+    )
+    joint_mask = torch.zeros(
+        (batch_size, max_joint_len), dtype=torch.long, device=device
+    )
+
+    # Pack valid query tokens immediately followed by valid doc tokens
+    for i in range(batch_size):
+        ql = int(q_lens[i].item())
+        dl = int(d_lens[i].item())
+        q_part = q_hidden[i, :ql]
+        d_part = d_hidden[i, 1:dl] if dl > 1 else q_hidden.new_empty((0, hidden_dim))
+        combined = torch.cat([q_part, d_part], dim=0)
+        c_len = len(combined)
+        joint_hidden[i, :c_len] = combined
+        joint_mask[i, :c_len] = 1
+
+    return joint_hidden, joint_mask
+
+
 class ModernBertMiceConfig(ModernBertConfig):
     model_type = "modernbert_mice"
 
@@ -306,6 +433,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         utility_temp: float = 1.0,
         compress_dim: float = 1.0,
         compress_init_option: str = "seed",
+        use_cross_attn: bool = True,
         num_labels: int = 1,
         **kwargs,
     ):
@@ -332,6 +460,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         assert compress_dim >= 1.0, f"compress_dim must be >= 1.0, got {compress_dim}"
         self.compress_dim = compress_dim
         self.compress_init_option = compress_init_option
+        self.use_cross_attn = use_cross_attn
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -555,17 +684,22 @@ class ModernBertMiceTopLayer(nn.Module):
         self.config = config
         self.layer_idx = layer_idx
 
-        self.cross_attn_norm = nn.LayerNorm(
-            config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
-        )
-        if getattr(config, "top_layers_doc_ln", False):
-            self.doc_cross_attn_norm = nn.LayerNorm(
+        if getattr(config, "use_cross_attn", True):
+            self.cross_attn_norm = nn.LayerNorm(
                 config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
             )
-        else:
-            self.doc_cross_attn_norm = nn.Identity()
+            if getattr(config, "top_layers_doc_ln", False):
+                self.doc_cross_attn_norm = nn.LayerNorm(
+                    config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
+                )
+            else:
+                self.doc_cross_attn_norm = nn.Identity()
 
-        self.cross_attn = ModernBertMiceCrossAttention(config, layer_idx=layer_idx)
+            self.cross_attn = ModernBertMiceCrossAttention(config, layer_idx=layer_idx)
+        else:
+            self.cross_attn_norm = None
+            self.doc_cross_attn_norm = None
+            self.cross_attn = None
 
         self.self_attn_norm = nn.LayerNorm(
             config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
@@ -580,7 +714,7 @@ class ModernBertMiceTopLayer(nn.Module):
     def forward(
         self,
         q_hidden: torch.Tensor,
-        d_hidden: torch.Tensor,
+        d_hidden: Optional[torch.Tensor] = None,
         d_utilities: Optional[torch.Tensor] = None,
         q_mask: Optional[torch.Tensor] = None,
         d_mask: Optional[torch.Tensor] = None,
@@ -594,24 +728,24 @@ class ModernBertMiceTopLayer(nn.Module):
         max_seqlen_d: Optional[int] = None,
         **kwargs,
     ) -> torch.Tensor:
-        # 1. Apply doc_cross_attn_norm (or Identity) to d_hidden
-        norm_d_hidden = self.doc_cross_attn_norm(d_hidden)
-        if d_utilities is not None:
-            norm_d_hidden = norm_d_hidden * d_utilities
-
         # Cross Attention
-        cross_out = self.cross_attn(
-            self.cross_attn_norm(q_hidden),
-            norm_d_hidden,
-            q_mask=q_mask,
-            d_mask=d_mask,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_d=cu_seqlens_d,
-            max_seqlen_q=max_seqlen_q,
-            max_seqlen_d=max_seqlen_d,
-            **kwargs,
-        )
-        q_hidden = q_hidden + cross_out
+        if self.cross_attn is not None and d_hidden is not None:
+            norm_d_hidden = self.doc_cross_attn_norm(d_hidden)
+            if d_utilities is not None:
+                norm_d_hidden = norm_d_hidden * d_utilities
+
+            cross_out = self.cross_attn(
+                self.cross_attn_norm(q_hidden),
+                norm_d_hidden,
+                q_mask=q_mask,
+                d_mask=d_mask,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_d=cu_seqlens_d,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_d=max_seqlen_d,
+                **kwargs,
+            )
+            q_hidden = q_hidden + cross_out
 
         # 2. Self Attention
         if q_position_embeddings is None:
@@ -860,18 +994,30 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         self.post_init()
 
     def get_wv_matrices(self) -> List[torch.Tensor]:
-        """Extract W_V weight matrices from top cross-attention layers."""
+        """Extract W_V weight matrices from top cross-attention (or self-attention) layers."""
         wv_list = []
         for top_layer in self.top_layers:
-            Wqkv = top_layer.cross_attn.Wqkv
-            hidden_size = top_layer.cross_attn.config.hidden_size
+            attn_module = (
+                top_layer.cross_attn
+                if top_layer.cross_attn is not None
+                else top_layer.self_attn
+            )
+            Wqkv = attn_module.Wqkv
+            hidden_size = attn_module.config.hidden_size
             W_V = Wqkv.weight[2 * hidden_size : 3 * hidden_size, :]
             wv_list.append(W_V)
         return wv_list
 
     def get_wo_matrices(self) -> List[torch.Tensor]:
-        """Extract W_O weight matrices from top cross-attention layers."""
-        return [top_layer.cross_attn.Wo.weight for top_layer in self.top_layers]
+        """Extract W_O weight matrices from top cross-attention (or self-attention) layers."""
+        return [
+            (
+                top_layer.cross_attn.Wo.weight
+                if top_layer.cross_attn is not None
+                else top_layer.self_attn.Wo.weight
+            )
+            for top_layer in self.top_layers
+        ]
 
     def get_classifier_norm(self) -> Optional[torch.Tensor]:
         """Compute Frobenius norm of classifier head weight."""
@@ -1251,6 +1397,58 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         # document are done in the post processing.
         if self.adapter is not None:
             q_hidden = self.adapter(q_hidden)
+
+        rotary_for_top = (
+            self.top_rotary_emb
+            if self.top_rotary_emb is not None
+            else self.model.rotary_emb
+        )
+        use_cross = getattr(self.config, "use_cross_attn", True)
+
+        if not use_cross:
+            # When use_cross_attn is False (Concat-Self Attention mode):
+            # 1. Apply any pending soft gating utilities to document representations
+            if d_utilities is not None:
+                d_hidden = d_hidden * d_utilities
+
+            # 2. Concatenate [query, doc] into a single joint sequence [CLS] q [SEP] d [SEP]
+            #    and recompute RoPE embeddings across the entire concatenated sequence.
+            if use_unpadded:
+                (
+                    q_hidden,
+                    cu_seqlens_q,
+                    max_seqlen_q,
+                    pos_ids_joint,
+                ) = _concat_query_doc_unpadded(
+                    q_hidden, d_hidden, cu_seqlens_q, cu_seqlens_d
+                )
+                if getattr(self.config, "use_upper_rope", True):
+                    q_pos_emb_top = rotary_for_top(
+                        q_hidden, pos_ids_joint, layer_type="full_attention"
+                    )
+                else:
+                    q_pos_emb_top = None
+                # Set d_hidden to None: signals top_layer to skip cross-attention and run
+                # self-attention exclusively over the concatenated sequence in q_hidden.
+                d_hidden = None
+                cu_seqlens_d = None
+                max_seqlen_d = None
+            else:
+                q_hidden, query_mask = _concat_query_doc_padded(
+                    q_hidden, d_hidden, query_mask, doc_mask
+                )
+                joint_position_ids = torch.arange(
+                    q_hidden.shape[1], device=q_hidden.device
+                ).unsqueeze(0)
+                if getattr(self.config, "use_upper_rope", True):
+                    q_pos_emb_top = rotary_for_top(
+                        q_hidden, joint_position_ids, layer_type="full_attention"
+                    )
+                else:
+                    q_pos_emb_top = None
+                # Set d_hidden to None to skip cross-attention in top_layer
+                d_hidden = None
+                doc_mask = None
 
         if use_unpadded:
             num_top = len(self.top_layers)

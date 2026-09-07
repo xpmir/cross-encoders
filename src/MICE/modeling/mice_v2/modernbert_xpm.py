@@ -641,18 +641,11 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                                 else None
                             )
                         )
+                        # 1. Unconditionally seed self-attention and MLP modules
                         if norm_to_copy is not None:
-                            top_layer.cross_attn_norm.load_state_dict(
-                                norm_to_copy.state_dict()
-                            )
                             top_layer.self_attn_norm.load_state_dict(
                                 norm_to_copy.state_dict()
                             )
-                            if isinstance(top_layer.doc_cross_attn_norm, nn.LayerNorm):
-                                top_layer.doc_cross_attn_norm.load_state_dict(
-                                    norm_to_copy.state_dict()
-                                )
-
                         if hasattr(src_layer, "mlp_norm") and isinstance(
                             src_layer.mlp_norm, nn.LayerNorm
                         ):
@@ -661,13 +654,27 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                             )
 
                         top_layer.self_attn.load_state_dict(src_layer.attn.state_dict())
-                        top_layer.cross_attn.Wqkv.load_state_dict(
-                            src_layer.attn.Wqkv.state_dict()
-                        )
-                        top_layer.cross_attn.Wo.load_state_dict(
-                            src_layer.attn.Wo.state_dict()
-                        )
                         top_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
+
+                        # 2. Conditionally seed cross-attention modules if enabled
+                        if top_layer.cross_attn is not None:
+                            if norm_to_copy is not None:
+                                top_layer.cross_attn_norm.load_state_dict(
+                                    norm_to_copy.state_dict()
+                                )
+                                if isinstance(
+                                    top_layer.doc_cross_attn_norm, nn.LayerNorm
+                                ):
+                                    top_layer.doc_cross_attn_norm.load_state_dict(
+                                        norm_to_copy.state_dict()
+                                    )
+
+                            top_layer.cross_attn.Wqkv.load_state_dict(
+                                src_layer.attn.Wqkv.state_dict()
+                            )
+                            top_layer.cross_attn.Wo.load_state_dict(
+                                src_layer.attn.Wo.state_dict()
+                            )
         else:
             logger.info(
                 f"Projection-derived init (compress_dim={compress_dim}): "
@@ -1073,6 +1080,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     skip seeding, keep each layer's own default init), 'random_projection', or
     'svd_projection' (both only meaningful when compress_dim > 1.0)"""
 
+    use_cross_attn: Param[bool] = field(default=True, ignore_default=True)
+    """Whether top layers use Cross+Self attention (True) or Concatenated Self-Attention only (False)"""
+
     _version: Constant[str] = "2.0.2"
 
     hf_model: nn.Module
@@ -1139,6 +1149,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             if self.compress_dim != 1.0:
                 apply_override("compress_dim", self.compress_dim)
                 apply_override("compress_init_option", self.compress_init_option)
+            if not self.use_cross_attn:
+                apply_override("use_cross_attn", False)
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -1161,6 +1173,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 utility_temp=self.utility_temp,
                 compress_dim=self.compress_dim,
                 compress_init_option=self.compress_init_option,
+                use_cross_attn=self.use_cross_attn,
                 **config_kwargs,
             )
 
@@ -1712,6 +1725,7 @@ def mice_v2_scorer(
     utility_temp: float = 1.0,
     compress_dim: float = 1.0,
     compress_init_option: str = "seed",
+    use_cross_attn: bool = True,
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -1759,6 +1773,7 @@ def mice_v2_scorer(
         utility_temp=utility_temp,
         compress_dim=compress_dim,
         compress_init_option=compress_init_option,
+        use_cross_attn=use_cross_attn,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

@@ -134,6 +134,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     skip seeding, keep each layer's own default init), 'random_projection', or
     'svd_projection' (both only meaningful when compress_dim > 1.0)"""
 
+    use_cross_attn: GridSearch[bool] = True
+    """Whether top layers use Cross+Self attention (True) or Concatenated Self-Attention only (False)"""
+
     eval_sparsity: bool = False
     """Whether to compute token sparsity, mean utility, and token retention ratio during evaluation benchmarks"""
 
@@ -167,6 +170,7 @@ def build_mice_v2(
         utility_temp=cfg.temp_start,
         compress_dim=cfg.compress_dim,
         compress_init_option=cfg.compress_init_option,
+        use_cross_attn=cfg.use_cross_attn,
         max_length=max_len,
         max_query_length=cfg.max_query_length,
         max_doc_length=cfg.max_doc_length,
