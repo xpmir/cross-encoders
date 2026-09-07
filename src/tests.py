@@ -731,7 +731,7 @@ def build_tests(
         )
 
     if long_evals is None:
-        long_evals = ["fever", "ms_marco", "hotpotqa"]
+        long_evals = ["fever", "msmarco", "hotpotqa"]
 
     tests = EvaluationsCollection(
         long_evals=long_evals,

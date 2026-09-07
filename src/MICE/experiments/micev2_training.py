@@ -240,17 +240,123 @@ def TrainEvaluateMiceV2(
     long_reqs = cfg.retrieval.long_requirements
     long_launcher = find_launcher(long_reqs) if long_reqs else None
 
+    # I - Build the model and initialization tasks
+    all_configs, all_tags = generate_grid(cfg)
+    if not all_configs:
+        raise ValueError(
+            f"generate_grid returned 0 configurations for {cfg.id}. "
+            "Please check your grid_search configuration or parameter definitions."
+        )
+
+    # Simplify tags keys
+    new_all_tags = []
+    for cfg_tags in all_tags:
+        simple_tags = {}
+        for k, v in cfg_tags.items():
+            simple_key = k.split(".")[-1]
+            if simple_key in simple_tags:
+                simple_tags[k] = v
+            else:
+                simple_tags[simple_key] = v
+        new_all_tags.append(simple_tags)
+    all_tags = new_all_tags
+
+    config_map = {}
+
+    ## II - common evaluation for all configs (e.g., first stage retriever runs, validation runs)
+    base_config, base_tags = all_configs[0], all_tags[0]
+    logging.info(
+        f"Running common evaluation for all configs (first stage retriever runs, validation runs) with base config: {base_config.id}, tags: {base_tags} (should not impact first stage retriever runs)"
+    )
+
     tests = build_tests(
-        cfg.evaluation,
+        base_config.evaluation,
         launcher=launcher_preprocessing,
         default_launcher=launcher_evaluate,
         long_launcher=long_launcher,
-        blocking=cfg.preprocessing.blocking_download,
+        blocking=base_config.preprocessing.blocking_download,
     )
 
     # cache the indexes
     learners = []
     all_weights = []
+
+    if base_config.retriever:
+        # We don't use BM25, but a given sparse retriever
+        retriever_tag = base_config.retriever
+        splade_encoder, retriever_init_tasks = splade_encoder_from_pretrained_hf(
+            base_config.retriever
+        )
+
+        # Caches the Splade index task for a document collection
+        val_retrievers_factory = partial(
+            splade_retriever,
+            base_config,
+            retriever_tag,
+            splade_encoder,
+            launcher_index=launcher_index,
+            init_tasks=retriever_init_tasks,
+            topk=base_config.learner.validation_top_k,
+            in_memory=True,
+        )
+
+        test_retrievers_factory = partial(
+            splade_retriever,
+            base_config,
+            retriever_tag,
+            splade_encoder,
+            launcher_index=launcher_index,
+            topk=base_config.retrieval.k,
+            init_tasks=retriever_init_tasks,
+        )
+    else:
+        retriever_tag = "bm25"
+        retriever_init_tasks = []  # no init task for BM25
+
+        val_retrievers_factory = partial(
+            bm25_retriever,
+            base_config,
+            retriever_tag,
+            launcher_index=launcher_index,
+            topk=base_config.learner.validation_top_k,
+        )
+
+        test_retrievers_factory = partial(
+            bm25_retriever,
+            base_config,
+            retriever_tag,
+            launcher_index=launcher_index,
+            topk=base_config.retrieval.k,
+        )
+
+    # evaluate base retrievers alone and precompute runs for faster evaluation (once for the experiment)
+    logging.info(f"Precomputing first stage test runs for {retriever_tag}")
+    test_runs = tests.evaluate_retriever(
+        test_retrievers_factory,
+        launcher=launcher_evaluate,
+        init_tasks=retriever_init_tasks,
+        with_run=True,
+        fabric_config=base_config.evaluation.fabric.get_config(),
+    )
+    test_run_retriever_factory = MultiRunRetrieverFactory.from_results(
+        retriever_tag, test_runs
+    )
+
+    ### Validation (once for the experiment) ###
+    logging.info(f"Precomputing first stage validation runs for {retriever_tag}")
+    validation_set = ValidationSet.load(base_config, launcher_preprocessing)
+    val_tests = validation_set.to_evaluations()
+    val_runs = val_tests.evaluate_retriever(
+        val_retrievers_factory,
+        launcher=launcher_evaluate,
+        init_tasks=retriever_init_tasks,
+        with_run=True,
+        fabric_config=base_config.evaluation.fabric.get_config(),
+    )
+
+    val_run_retriever_factory = MultiRunRetrieverFactory.from_results(
+        retriever_tag, val_runs
+    )
 
     def run_one_config(
         helper: LearningExperimentHelper,
@@ -259,82 +365,6 @@ def TrainEvaluateMiceV2(
         cfg_tags: dict,
     ):
         """Main process for one configuration of the late interaction model."""
-
-        if cfg.retriever:
-            # We don't use BM25, but a given sparse retriever
-            retriever_tag = cfg.retriever
-            splade_encoder, retriever_init_tasks = splade_encoder_from_pretrained_hf(
-                cfg.retriever
-            )
-
-            # Caches the Splade index task for a document collection
-            val_retrievers_factory = partial(
-                splade_retriever,
-                cfg,
-                retriever_tag,
-                splade_encoder,
-                launcher_index=launcher_index,
-                init_tasks=retriever_init_tasks,
-                topk=cfg.learner.validation_top_k,
-                in_memory=True,
-            )
-
-            test_retrievers_factory = partial(
-                splade_retriever,
-                cfg,
-                retriever_tag,
-                splade_encoder,
-                launcher_index=launcher_index,
-                topk=cfg.retrieval.k,
-                init_tasks=retriever_init_tasks,
-            )
-        else:
-            retriever_tag = "bm25"
-            retriever_init_tasks = []  # no init task for BM25
-
-            val_retrievers_factory = partial(
-                bm25_retriever,
-                cfg,
-                retriever_tag,
-                launcher_index=launcher_index,
-                topk=cfg.learner.validation_top_k,
-            )
-
-            test_retrievers_factory = partial(
-                bm25_retriever,
-                cfg,
-                retriever_tag,
-                launcher_index=launcher_index,
-                topk=cfg.retrieval.k,
-            )
-
-        # evaluate base retrievers alone and precompute runs for faster evaluation
-        logging.info(f"Precomputing first stage runs for {retriever_tag}")
-        test_runs = tests.evaluate_retriever(
-            test_retrievers_factory,
-            launcher=launcher_evaluate,
-            init_tasks=retriever_init_tasks,
-            with_run=True,
-            fabric_config=cfg.evaluation.fabric.get_config(),
-        )
-        test_run_retriever_factory = MultiRunRetrieverFactory.from_results(
-            retriever_tag, test_runs
-        )
-
-        ### Validation ###
-        validation_set = ValidationSet.load(cfg, launcher_preprocessing)
-        val_tests = validation_set.to_evaluations()
-        val_runs = val_tests.evaluate_retriever(
-            val_retrievers_factory,
-            launcher=launcher_evaluate,
-            init_tasks=retriever_init_tasks,
-            with_run=True,
-            fabric_config=cfg.evaluation.fabric.get_config(),
-        )
-
-        val_run_retriever_factory = MultiRunRetrieverFactory.from_results(
-            retriever_tag, val_runs
-        )
 
         ### TRAINING CROSS ENCODER
 
@@ -664,28 +694,6 @@ def TrainEvaluateMiceV2(
                         with_run=cfg.save_runs,
                         fabric_config=cfg.evaluation.fabric.get_config(),
                     )
-
-    all_configs, all_tags = generate_grid(cfg)
-    if not all_configs:
-        raise ValueError(
-            f"generate_grid returned 0 configurations for {cfg.id}. "
-            "Please check your grid_search configuration or parameter definitions."
-        )
-
-    # Simplify tags keys
-    new_all_tags = []
-    for cfg_tags in all_tags:
-        simple_tags = {}
-        for k, v in cfg_tags.items():
-            simple_key = k.split(".")[-1]
-            if simple_key in simple_tags:
-                simple_tags[k] = v
-            else:
-                simple_tags[simple_key] = v
-        new_all_tags.append(simple_tags)
-    all_tags = new_all_tags
-
-    config_map = {}
 
     for config, cfg_tags in zip(all_configs, all_tags):
         # Update cfg_tags with base if not present

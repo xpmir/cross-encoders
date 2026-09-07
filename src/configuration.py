@@ -225,7 +225,7 @@ class xpm_torch_Learner:
     loss: GridSearch[str] = Losses.marginMSE.value
     """Loss function to use"""
 
-    validation: GridSearch[str] = Validation.NanoBEIR.value
+    validation: str = Validation.NanoBEIR.value
     """ The validation subset to use """
 
     early_stop_epochs: GridSearch[int] = 0
