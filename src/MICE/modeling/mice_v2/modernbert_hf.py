@@ -285,6 +285,53 @@ def _hard_prune_padded_documents(
     return new_d_hidden, new_doc_mask, new_pos_ids
 
 
+def _concat_query_doc_unpadded_old(
+    q_hidden: torch.Tensor,
+    d_hidden: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_d: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor, int, torch.Tensor]:
+    """Reference loop-based implementation of unpadded query-doc concatenation (kept for output comparison)."""
+    batch_size = cu_seqlens_q.shape[0] - 1
+    device = q_hidden.device
+    hidden_dim = q_hidden.shape[-1]
+
+    q_lens = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
+    d_lens = cu_seqlens_d[1:] - cu_seqlens_d[:-1]
+    d_kept_lens = torch.clamp(d_lens - 1, min=0)
+    joint_lens = q_lens + d_kept_lens
+
+    cu_seqlens_joint = torch.zeros(batch_size + 1, dtype=torch.int32, device=device)
+    cu_seqlens_joint[1:] = torch.cumsum(joint_lens, dim=0, dtype=torch.int32)
+    max_seqlen_joint = int(joint_lens.max().item()) if len(joint_lens) > 0 else 0
+    total_joint = int(cu_seqlens_joint[-1].item())
+
+    joint_hidden = torch.empty(
+        (1, total_joint, hidden_dim), dtype=q_hidden.dtype, device=device
+    )
+    pos_ids_joint = torch.empty((1, total_joint), dtype=torch.long, device=device)
+
+    cu_q = cu_seqlens_q.cpu().tolist()
+    cu_d = cu_seqlens_d.cpu().tolist()
+    cu_j = cu_seqlens_joint.cpu().tolist()
+
+    for i in range(batch_size):
+        js, je = cu_j[i], cu_j[i + 1]
+        qs, qe = cu_q[i], cu_q[i + 1]
+        ds, de = cu_d[i], cu_d[i + 1]
+
+        q_part = q_hidden[0, qs:qe]
+        d_part = (
+            d_hidden[0, ds + 1 : de]
+            if de > ds + 1
+            else q_hidden.new_empty((0, hidden_dim))
+        )
+        joint_hidden[0, js:je] = torch.cat([q_part, d_part], dim=0)
+        pos_ids_joint[0, js:je] = torch.arange(je - js, device=device)
+
+    return joint_hidden, cu_seqlens_joint, max_seqlen_joint, pos_ids_joint
+
+
 def _concat_query_doc_unpadded(
     q_hidden: torch.Tensor,
     d_hidden: torch.Tensor,
@@ -292,7 +339,7 @@ def _concat_query_doc_unpadded(
     cu_seqlens_d: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor, int, torch.Tensor]:
     """Concatenates unpadded query and document representations along the sequence dimension
-    for FlashAttention-2 execution.
+    for FlashAttention-2 execution using fully vectorized tensor operations (no CPU syncs or loops).
 
     Architecture context:
     - In MICE bottom layers, query and document are encoded independently:
@@ -329,28 +376,37 @@ def _concat_query_doc_unpadded(
     joint_hidden = torch.empty(
         (1, total_joint, hidden_dim), dtype=q_hidden.dtype, device=device
     )
-    pos_ids_joint = torch.empty((1, total_joint), dtype=torch.long, device=device)
 
-    cu_q = cu_seqlens_q.cpu().tolist()
-    cu_d = cu_seqlens_d.cpu().tolist()
-    cu_j = cu_seqlens_joint.cpu().tolist()
+    # 1. Vectorized mapping for query tokens
+    seq_ids_q = torch.repeat_interleave(torch.arange(batch_size, device=device), q_lens)
+    offsets_q = torch.arange(q_hidden.shape[1], device=device) - cu_seqlens_q[seq_ids_q]
+    dest_indices_q = cu_seqlens_joint[seq_ids_q] + offsets_q
+    joint_hidden[0, dest_indices_q] = q_hidden[0]
 
-    # Interleave query and document tokens per sequence into contiguous blocks
-    for i in range(batch_size):
-        js, je = cu_j[i], cu_j[i + 1]
-        qs, qe = cu_q[i], cu_q[i + 1]
-        ds, de = cu_d[i], cu_d[i + 1]
-
-        q_part = q_hidden[0, qs:qe]
-        # Slice doc tokens from ds + 1 to drop the redundant document [CLS]
-        d_part = (
-            d_hidden[0, ds + 1 : de]
-            if de > ds + 1
-            else q_hidden.new_empty((0, hidden_dim))
+    # 2. Vectorized mapping for document tokens (dropping leading [CLS] at offset 0)
+    if d_hidden.shape[1] > 0:
+        seq_ids_d_all = torch.repeat_interleave(
+            torch.arange(batch_size, device=device), d_lens
         )
-        joint_hidden[0, js:je] = torch.cat([q_part, d_part], dim=0)
-        # Position IDs reset to 0..L_i-1 for each pair, matching full RoPE pretraining
-        pos_ids_joint[0, js:je] = torch.arange(je - js, device=device)
+        offsets_d_all = (
+            torch.arange(d_hidden.shape[1], device=device) - cu_seqlens_d[seq_ids_d_all]
+        )
+        valid_d_mask = offsets_d_all > 0
+        if valid_d_mask.any():
+            seq_ids_d = seq_ids_d_all[valid_d_mask]
+            offsets_d = (
+                offsets_d_all[valid_d_mask] - 1
+            )  # 0-indexed within kept doc tokens
+            dest_indices_d = cu_seqlens_joint[seq_ids_d] + q_lens[seq_ids_d] + offsets_d
+            joint_hidden[0, dest_indices_d] = d_hidden[0, valid_d_mask]
+
+    # 3. Vectorized position IDs: 0 .. joint_lens[i]-1 for each sequence (for RoPE)
+    seq_ids_joint = torch.repeat_interleave(
+        torch.arange(batch_size, device=device), joint_lens
+    )
+    pos_ids_joint = (
+        torch.arange(total_joint, device=device) - cu_seqlens_joint[seq_ids_joint]
+    ).unsqueeze(0)
 
     return joint_hidden, cu_seqlens_joint, max_seqlen_joint, pos_ids_joint
 
@@ -362,9 +418,9 @@ def _concat_query_doc_padded(
     doc_mask: Optional[torch.Tensor],
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Concatenates padded query and document representations along sequence dimension for
-    standard SDPA / eager attention execution.
+    standard SDPA / eager attention execution using fully vectorized tensor operations.
 
-    Why row-by-row repacking is necessary:
+    Why repacking is necessary:
     - Naively calling `torch.cat([q_hidden, d_hidden[:, 1:]], dim=1)` would leave query padding
       tokens in the *middle* of the sequence between query tokens and document tokens.
     - Padding tokens in the middle enlarge and distort relative positional distances in RoPE,
@@ -394,20 +450,42 @@ def _concat_query_doc_padded(
     joint_hidden = torch.zeros(
         (batch_size, max_joint_len, hidden_dim), dtype=q_hidden.dtype, device=device
     )
-    joint_mask = torch.zeros(
-        (batch_size, max_joint_len), dtype=torch.long, device=device
-    )
+    joint_mask = (
+        torch.arange(max_joint_len, device=device).unsqueeze(0)
+        < joint_lens.unsqueeze(1)
+    ).long()
 
-    # Pack valid query tokens immediately followed by valid doc tokens
-    for i in range(batch_size):
-        ql = int(q_lens[i].item())
-        dl = int(d_lens[i].item())
-        q_part = q_hidden[i, :ql]
-        d_part = d_hidden[i, 1:dl] if dl > 1 else q_hidden.new_empty((0, hidden_dim))
-        combined = torch.cat([q_part, d_part], dim=0)
-        c_len = len(combined)
-        joint_hidden[i, :c_len] = combined
-        joint_mask[i, :c_len] = 1
+    # Vectorized placement of valid query tokens
+    q_valid = query_mask.bool()
+    if q_valid.any():
+        b_idx_q = (
+            torch.arange(batch_size, device=device)
+            .unsqueeze(1)
+            .expand_as(query_mask)[q_valid]
+        )
+        c_idx_q = (
+            torch.arange(q_hidden.shape[1], device=device)
+            .unsqueeze(0)
+            .expand_as(query_mask)[q_valid]
+        )
+        joint_hidden[b_idx_q, c_idx_q] = q_hidden[q_valid]
+
+    # Vectorized placement of valid document tokens (excluding doc CLS at col 0)
+    if d_hidden.shape[1] > 1:
+        d_valid = doc_mask[:, 1:].bool()
+        if d_valid.any():
+            b_idx_d = (
+                torch.arange(batch_size, device=device)
+                .unsqueeze(1)
+                .expand_as(doc_mask[:, 1:])[d_valid]
+            )
+            c_offset = (
+                torch.arange(doc_mask.shape[1] - 1, device=device)
+                .unsqueeze(0)
+                .expand_as(doc_mask[:, 1:])[d_valid]
+            )
+            dest_col_d = q_lens[b_idx_d] + c_offset
+            joint_hidden[b_idx_d, dest_col_d] = d_hidden[:, 1:][d_valid]
 
     return joint_hidden, joint_mask
 

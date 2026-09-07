@@ -154,3 +154,53 @@ def test_mice_v2_concat(
         )
         assert scores is not None
         assert len(scores) == 1
+
+
+@pytest.mark.parametrize("batch_size", [1, 4, 16])
+@pytest.mark.parametrize("hidden_dim", [64, 768])
+def test_concat_unpadded_equivalence_with_old(batch_size: int, hidden_dim: int):
+    """Compares the new vectorized _concat_query_doc_unpadded against the reference
+    _concat_query_doc_unpadded_old to guarantee exact numerical and dimensional equivalence."""
+    from MICE.modeling.mice_v2.modernbert_hf import (
+        _concat_query_doc_unpadded,
+        _concat_query_doc_unpadded_old,
+    )
+
+    torch.manual_seed(42)
+    q_lens = torch.randint(5, 30, (batch_size,))
+    # Include potential edge case where doc has only 1 token (only CLS) or short docs
+    d_lens = torch.randint(1, 100, (batch_size,))
+
+    cu_q = torch.zeros(batch_size + 1, dtype=torch.int32)
+    cu_q[1:] = torch.cumsum(q_lens, dim=0, dtype=torch.int32)
+    cu_d = torch.zeros(batch_size + 1, dtype=torch.int32)
+    cu_d[1:] = torch.cumsum(d_lens, dim=0, dtype=torch.int32)
+
+    total_q = int(cu_q[-1].item())
+    total_d = int(cu_d[-1].item())
+
+    q_hidden = torch.randn(1, total_q, hidden_dim)
+    d_hidden = torch.randn(1, total_d, hidden_dim)
+
+    # Run old reference
+    old_hidden, old_cu, old_max_len, old_pos = _concat_query_doc_unpadded_old(
+        q_hidden, d_hidden, cu_q, cu_d
+    )
+
+    # Run new vectorized
+    new_hidden, new_cu, new_max_len, new_pos = _concat_query_doc_unpadded(
+        q_hidden, d_hidden, cu_q, cu_d
+    )
+
+    assert torch.allclose(new_hidden, old_hidden, atol=1e-6), (
+        "Vectorized joint_hidden does not match old loop implementation!"
+    )
+    assert torch.equal(new_cu, old_cu), (
+        f"cu_seqlens_joint mismatch: new={new_cu}, old={old_cu}"
+    )
+    assert new_max_len == old_max_len, (
+        f"max_seqlen_joint mismatch: new={new_max_len}, old={old_max_len}"
+    )
+    assert torch.equal(new_pos, old_pos), (
+        "pos_ids_joint mismatch between new and old implementation!"
+    )
