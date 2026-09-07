@@ -157,3 +157,94 @@ def test_uninitialized_st_cross_encoder_raises_error():
 
     with pytest.raises(RuntimeError, match="has not been initialized"):
         scorer.tokenize(records)
+
+
+def test_hf_query_doc_tokenizer_flattening():
+    """Verify HFQueryDocTokenizer flattening pre-instantiates collator and produces FA2 kwargs."""
+    from xpmir.neural.huggingface import HFQueryDocTokenizer
+
+    model_id = "cross-encoder/ms-marco-MiniLM-L6-v2"
+    tok = HFQueryDocTokenizer.C(
+        model_id=model_id,
+        max_length=128,
+        max_query_length=16,
+        max_doc_length=64,
+        flatten=True,
+    ).instance()
+
+    assert tok.data_collator is None
+    tok.initialize()
+    assert tok.data_collator is not None
+    collator_ref = tok.data_collator
+
+    records = PointwiseItems.from_texts(
+        topics=["What is the speed of light in vacuum?", "Short query"],
+        documents=[
+            "The speed of light in vacuum is exactly 299,792,458 meters per second.",
+            "Short document text.",
+        ],
+    )
+
+    tokenized = tok.tokenize(records)
+    # Reused collator without re-instantiation
+    assert tok.data_collator is collator_ref
+
+    # Flattened format assertions
+    assert tokenized.ids.ndim == 2
+    assert tokenized.ids.shape[0] == 1  # 1D flattened batch of shape (1, total_tokens)
+    assert tokenized.mask is None
+    assert tokenized.token_type_ids is None
+    assert tokenized.kwargs is not None
+
+    required_keys = {"cu_seq_lens_q", "cu_seq_lens_k", "position_ids", "seq_idx", "max_length_q"}
+    assert required_keys.issubset(tokenized.kwargs.keys())
+    assert tokenized.kwargs["cu_seq_lens_q"].shape == (3,)  # batch_size + 1
+    assert tokenized.kwargs["position_ids"].shape == tokenized.ids.shape
+    assert tokenized.kwargs["seq_idx"].shape == tokenized.ids.shape
+
+
+def test_st_cross_encoder_with_flattened_qd_tokenizer():
+    """Verify STCrossEncoder runs seamlessly with flattened HFQueryDocTokenizer without modifying forward."""
+    from cross_encoders_training.experiment import build_STCrossEncoder
+
+    class DummyConfig:
+        base = "cross-encoder/ms-marco-MiniLM-L6-v2"
+        max_length = 128
+        max_query_length = 16
+        max_doc_length = 64
+        pref_attn_implementation = "sdpa"
+
+    cfg = DummyConfig()
+    scorer, init_tasks = build_STCrossEncoder(cfg)
+    scorer = scorer.instance()
+
+    # Force flattening on the tokenizer to simulate FA2 varlen collation
+    scorer.tokenizer.flatten = True
+
+    # Execute init task (InitDistilledSTCrossEncoder)
+    init_task = init_tasks[0].instance()
+    init_task.model = scorer
+    init_task.execute()
+
+    assert scorer.tokenizer.data_collator is not None
+
+    records = PointwiseItems.from_texts(
+        topics=["What is the speed of light in vacuum?", "Who was Isaac Newton?"],
+        documents=[
+            "The speed of light in vacuum is exactly 299,792,458 meters per second.",
+            "Sir Isaac Newton was an English mathematician and physicist.",
+        ],
+    )
+
+    # Tokenize through the model
+    tokenized = scorer.batch_tokenize(records)
+    assert tokenized.ids.shape[0] == 1
+    assert tokenized.mask is None
+    assert "cu_seq_lens_q" in tokenized.kwargs
+
+    # Forward through the model
+    with torch.no_grad():
+        scores = scorer(records, tokenized=tokenized)
+
+    assert scores.shape == (2,)
+    assert not torch.isnan(scores).any()

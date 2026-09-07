@@ -27,12 +27,19 @@ phase2_max_epochs: 1000
 eval_phase_1: false
 
 
-# Eval only on BEIR
+# Evaluation settings
+eval_sparsity: true
 evaluation: #default = Minified tests
     eval_checkpoint: "last"
     all_datasets: false
-    in_domain: true
+    in_domain: false
     beir13: false
+    datasets:
+        - nfcorpus
+        - scidocs
+        - arguana
+        - trec2019
+        - trec2020
 
 
 #best values from v1

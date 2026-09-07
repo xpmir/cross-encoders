@@ -120,6 +120,7 @@ def build_STCrossEncoder(cfg) -> tuple[STCrossEncoder, list]:
         max_length=cfg.max_length,
         max_query_length=getattr(cfg, "max_query_length", None),
         max_doc_length=getattr(cfg, "max_doc_length", None),
+        pref_attn_implementation=attn_impl,
     )
     scorer = STCrossEncoder.C(
         model_id=cfg.base,
