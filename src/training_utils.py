@@ -3,7 +3,7 @@
 import logging
 import shutil
 import json
-from typing import Callable, Optional, Any
+from typing import Callable, Optional, Any, Dict
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -541,6 +541,73 @@ def export_model(
         logger.info(f"Copied {len(list(runs.keys()))} runs to {runs_dir}")
 
 
+def merge_eval_sparsity_files(task_dir: Path) -> Optional[Dict[str, float]]:
+    """Loads eval_sparsity.json and merges any eval_sparsity_{rank}.json (rank > 0) files if present."""
+    sparsity_file = task_dir / "eval_sparsity.json"
+    rank_files = sorted(task_dir.glob("eval_sparsity_*.json"))
+
+    if not sparsity_file.exists() and not rank_files:
+        return None
+
+    # If only eval_sparsity.json exists and no separate rank files exist, return directly
+    if sparsity_file.exists() and not rank_files:
+        try:
+            with sparsity_file.open("r") as fp:
+                return json.load(fp)
+        except Exception as e:
+            logger.warning(f"Failed to read {sparsity_file}: {e}")
+            return None
+
+    # Gather rank 0 (eval_sparsity.json) and other ranks
+    all_files = []
+    if sparsity_file.exists():
+        all_files.append(sparsity_file)
+    for rf in rank_files:
+        if rf != sparsity_file:
+            all_files.append(rf)
+
+    total_tokens = 0
+    pruned_tokens = 0
+    sum_utilities = 0.0
+
+    for f in all_files:
+        try:
+            with f.open("r") as fp:
+                data = json.load(fp)
+            t = data.get("total_tokens", 0)
+            p = data.get("pruned_tokens", int(round(t * data.get("sparsity", 0.0))))
+            s = data.get("sum_utilities", float(t * data.get("mean_utility", 0.0)))
+            total_tokens += t
+            pruned_tokens += p
+            sum_utilities += s
+        except Exception as e:
+            logger.warning(f"Error reading {f}: {e}")
+
+    if total_tokens == 0:
+        return None
+
+    denom = max(total_tokens, 1)
+    merged_stats = {
+        "sparsity": pruned_tokens / denom,
+        "mean_utility": sum_utilities / denom,
+        "kept_ratio": (total_tokens - pruned_tokens) / denom,
+        "total_tokens": total_tokens,
+        "pruned_tokens": pruned_tokens,
+        "sum_utilities": sum_utilities,
+    }
+
+    try:
+        with sparsity_file.open("w") as fp:
+            json.dump(merged_stats, fp, indent=2)
+        logger.info(
+            f"[merge_eval_sparsity_files] Merged {len(all_files)} sparsity files into {sparsity_file}: {merged_stats}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to write merged {sparsity_file}: {e}")
+
+    return merged_stats
+
+
 def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
     """Synchronize eval_sparsity.json into aggregated.txt so to_dataframe() parses it natively."""
     if not hasattr(tests, "collection"):
@@ -559,11 +626,9 @@ def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
             if results_path is not None:
                 results_path = Path(results_path)
                 if results_path.exists():
-                    sparsity_file = results_path.parent / "eval_sparsity.json"
-                    if sparsity_file.exists():
+                    stats = merge_eval_sparsity_files(results_path.parent)
+                    if stats is not None:
                         try:
-                            with sparsity_file.open("r") as fp:
-                                stats = json.load(fp)
                             existing_text = results_path.read_text()
                             lines_to_append = []
                             for metric_name in ["sparsity"]:
@@ -594,7 +659,7 @@ def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
                             )
                     else:
                         logger.debug(
-                            f"[sync_eval_sparsity_metrics] No eval_sparsity.json found at {sparsity_file}"
+                            f"[sync_eval_sparsity_metrics] No eval sparsity data found in {results_path.parent}"
                         )
 
 

@@ -772,6 +772,22 @@ def is_rank_zero() -> bool:
     return True
 
 
+def get_rank(fabric=None) -> int:
+    """Returns global rank integer (0 if single-process or uninitialized)."""
+    if fabric is not None and getattr(fabric, "global_rank", None) is not None:
+        return int(fabric.global_rank)
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return int(torch.distributed.get_rank())
+    for env_var in ("RANK", "LOCAL_RANK", "SLURM_PROCID"):
+        val = os.environ.get(env_var)
+        if val is not None:
+            try:
+                return int(val)
+            except ValueError:
+                pass
+    return 0
+
+
 class InitMICEV2FromCheckpoint(LightweightTask):
     """Initializes a Phase 2 MICE V2 model from a Phase 1 trained checkpoint path/loader and freezes bottom layers & utility predictor."""
 
@@ -886,36 +902,73 @@ class EvalSparsityAccumulator:
         self.pruned_tokens += n_pruned
         self.sum_utilities += sum_u
 
-    def compute(self, fabric=None) -> Dict[str, float]:
-        """Aggregate stats across Fabric ranks or torch.distributed (if multi-GPU) and return metrics."""
+    def compute(self, fabric=None) -> Tuple[Dict[str, float], bool]:
+        """Aggregate stats across Fabric ranks or torch.distributed (if multi-GPU) and return metrics.
+
+        Returns:
+            (stats, gather_succeeded): Tuple of metric dictionary and a boolean
+            indicating whether multi-rank gathering succeeded.
+        """
         total = self.total_tokens
         pruned = self.pruned_tokens
         sum_u = self.sum_utilities
 
-        if fabric is not None and getattr(fabric, "world_size", 1) > 1:
-            t = torch.tensor(
-                [total, pruned, sum_u], device=fabric.device, dtype=torch.float64
-            )
-            t = fabric.all_reduce(t, reduce_op="sum")
-            total = int(t[0].item())
-            pruned = int(t[1].item())
-            sum_u = float(t[2].item())
-            logger.info(
-                f"[EvalSparsityAccumulator] Fabric all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
-            )
-        elif torch.distributed.is_available() and torch.distributed.is_initialized():
-            t = torch.tensor(
-                [total, pruned, sum_u],
-                dtype=torch.float64,
-                device=torch.cuda.current_device(),
-            )
-            torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
-            total = int(t[0].item())
-            pruned = int(t[1].item())
-            sum_u = float(t[2].item())
-            logger.info(
-                f"[EvalSparsityAccumulator] torch.distributed all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
-            )
+        is_multi_rank = (
+            fabric is not None and getattr(fabric, "world_size", 1) > 1
+        ) or (
+            torch.distributed.is_available()
+            and torch.distributed.is_initialized()
+            and torch.distributed.get_world_size() > 1
+        )
+        gather_succeeded = not is_multi_rank
+
+        if is_multi_rank:
+            try:
+                if not (
+                    torch.distributed.is_available()
+                    and torch.distributed.is_initialized()
+                ):
+                    raise RuntimeError(
+                        "torch.distributed is uninitialized or already destroyed at exit"
+                    )
+
+                if fabric is not None and getattr(fabric, "world_size", 1) > 1:
+                    t = torch.tensor(
+                        [total, pruned, sum_u],
+                        device=fabric.device,
+                        dtype=torch.float64,
+                    )
+                    t = fabric.all_reduce(t, reduce_op="sum")
+                    total = int(t[0].item())
+                    pruned = int(t[1].item())
+                    sum_u = float(t[2].item())
+                    gather_succeeded = True
+                    logger.info(
+                        f"[EvalSparsityAccumulator] Fabric all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
+                    )
+                elif (
+                    torch.distributed.is_available()
+                    and torch.distributed.is_initialized()
+                ):
+                    t = torch.tensor(
+                        [total, pruned, sum_u],
+                        dtype=torch.float64,
+                        device=torch.cuda.current_device(),
+                    )
+                    torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
+                    total = int(t[0].item())
+                    pruned = int(t[1].item())
+                    sum_u = float(t[2].item())
+                    gather_succeeded = True
+                    logger.info(
+                        f"[EvalSparsityAccumulator] torch.distributed all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
+                    )
+            except Exception as e:
+                gather_succeeded = False
+                logger.warning(
+                    f"[EvalSparsityAccumulator] Multi-rank gather failed ({e}). "
+                    f"Falling back to local rank metrics (total_tokens={total})."
+                )
 
         denom = max(total, 1)
         stats = {
@@ -923,33 +976,56 @@ class EvalSparsityAccumulator:
             "mean_utility": sum_u / denom,
             "kept_ratio": (total - pruned) / denom,
             "total_tokens": total,
+            "pruned_tokens": pruned,
+            "sum_utilities": sum_u,
         }
-        logger.info(f"[EvalSparsityAccumulator] Computed metrics: {stats}")
-        return stats
+        logger.info(
+            f"[EvalSparsityAccumulator] Computed metrics (gather_succeeded={gather_succeeded}): {stats}"
+        )
+        return stats, gather_succeeded
 
     def flush_to_file(self, fabric=None, output_filename: str = "eval_sparsity.json"):
-        """Flush computed metrics to JSON file in current working directory (rank 0 only)."""
+        """Flush computed metrics to JSON file.
+
+        - Rank 0: Always writes output_filename (default: eval_sparsity.json).
+        - Rank != 0: Only writes eval_sparsity_{rank}.json if multi-rank gather failed.
+        """
+        rank = get_rank(fabric=fabric)
         logger.info(
-            f"[EvalSparsityAccumulator] Triggering flush_to_file at CWD={Path.cwd()} (total_tokens={self.total_tokens})"
+            f"[EvalSparsityAccumulator] Triggering flush_to_file at CWD={Path.cwd()} (rank={rank}, total_tokens={self.total_tokens})"
         )
         if self.total_tokens == 0:
             logger.warning(
-                "[EvalSparsityAccumulator] total_tokens is 0 during flush_to_file; skipping write."
+                f"[EvalSparsityAccumulator] Rank {rank}: total_tokens is 0 during flush_to_file; skipping write."
             )
             return
 
-        stats = self.compute(fabric=fabric)
-        if is_rank_zero():
+        stats, gather_succeeded = self.compute(fabric=fabric)
+
+        if rank == 0:
             out_path = Path.cwd() / output_filename
             try:
                 with out_path.open("w") as fp:
                     json.dump(stats, fp, indent=2)
                 logger.info(
-                    f"[EvalSparsityAccumulator] Successfully wrote evaluation sparsity metrics to {out_path}: {stats}"
+                    f"[EvalSparsityAccumulator] (Rank 0) Successfully wrote evaluation sparsity metrics to {out_path}: {stats}"
                 )
             except Exception as e:
                 logger.error(
                     f"[EvalSparsityAccumulator] Failed to write {output_filename}: {e}"
+                )
+        elif not gather_succeeded:
+            out_filename = f"eval_sparsity_{rank}.json"
+            out_path = Path.cwd() / out_filename
+            try:
+                with out_path.open("w") as fp:
+                    json.dump(stats, fp, indent=2)
+                logger.warning(
+                    f"[EvalSparsityAccumulator] (Rank {rank}) Wrote fallback per-rank sparsity metrics to {out_path}: {stats}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[EvalSparsityAccumulator] Failed to write {out_filename}: {e}"
                 )
 
 
