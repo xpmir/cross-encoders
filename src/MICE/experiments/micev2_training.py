@@ -116,6 +116,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     temp_start: GridSearch[float] = 1.0
     """Starting temperature for utility predictor sigmoid"""
 
+    utility_bias: GridSearch[float] = 5.0
+    """Initial bias for utility predictor output projection wo.bias (default=5.0, keeping ~99% utility initially)"""
+
     temp_end: GridSearch[Optional[float]] = None
     """Ending temperature for utility predictor linear annealing (e.g. 0.1). If None, temperature remains fixed at temp_start."""
 
@@ -171,6 +174,7 @@ def build_mice_v2(
         bottom_final_norm=cfg.bottom_final_norm,
         top_final_norm=cfg.top_final_norm,
         utility_temp=cfg.temp_start,
+        utility_bias=cfg.utility_bias,
         compress_dim=cfg.compress_dim,
         compress_init_option=cfg.compress_init_option,
         use_cross_attn=cfg.use_cross_attn,
@@ -223,6 +227,9 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     head_type = model_tags.get("head_type", getattr(cfg, "head_type", "linear"))
     head_suffix = f"-{head_type}" if head_type and head_type != "linear" else ""
 
+    utility_bias = model_tags.get("utility_bias", getattr(cfg, "utility_bias", 5.0))
+    ubias_suffix = f"-ubias{utility_bias}" if utility_bias != 5.0 else ""
+
     attn_impl = model_tags.get("attn_implementation", cfg.attn_implementation)
     attn_suffix = f"-{attn_impl}" if attn_impl else ""
 
@@ -231,7 +238,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{head_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(

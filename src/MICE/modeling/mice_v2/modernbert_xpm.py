@@ -1132,6 +1132,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     utility_temp: Param[float] = field(default=1.0, ignore_default=True)
     """Initial temperature for utility predictor sigmoid"""
 
+    utility_bias: Param[float] = field(default=5.0, ignore_default=True)
+    """Initial bias scalar for utility predictor output projection wo.bias"""
+
     compress_dim: Param[float] = field(default=1.0, ignore_default=True)
     """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
 
@@ -1210,6 +1213,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 apply_override("top_final_norm", True)
             if self.utility_temp != 1.0:
                 apply_override("utility_temp", self.utility_temp)
+            if self.utility_bias != 5.0:
+                apply_override("utility_bias", self.utility_bias)
             if self.compress_dim != 1.0:
                 apply_override("compress_dim", self.compress_dim)
                 apply_override("compress_init_option", self.compress_init_option)
@@ -1237,6 +1242,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 bottom_final_norm=self.bottom_final_norm,
                 top_final_norm=self.top_final_norm,
                 utility_temp=self.utility_temp,
+                utility_bias=self.utility_bias,
                 compress_dim=self.compress_dim,
                 compress_init_option=self.compress_init_option,
                 use_cross_attn=self.use_cross_attn,
@@ -1806,6 +1812,7 @@ def mice_v2_scorer(
     bottom_final_norm: bool = True,
     top_final_norm: bool = False,
     utility_temp: float = 1.0,
+    utility_bias: float = 5.0,
     compress_dim: float = 1.0,
     compress_init_option: str = "seed",
     use_cross_attn: bool = True,
@@ -1855,6 +1862,7 @@ def mice_v2_scorer(
         bottom_final_norm=bottom_final_norm,
         top_final_norm=top_final_norm,
         utility_temp=utility_temp,
+        utility_bias=utility_bias,
         compress_dim=compress_dim,
         compress_init_option=compress_init_option,
         use_cross_attn=use_cross_attn,

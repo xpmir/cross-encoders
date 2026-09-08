@@ -930,3 +930,67 @@ def test_modernbert_mice_config_owns_only_utility_temp():
     assert not hasattr(cfg, "temp_start")
     assert not hasattr(cfg, "temp_end")
     assert not hasattr(cfg, "temp_anneal_steps")
+
+
+def test_utility_bias_init():
+    """Test that utility_bias initializes wo.bias in UtilityPredictor."""
+    # Direct UtilityPredictor check
+    p_default = UtilityPredictor(hidden_dim=64)
+    assert p_default.utility_bias == 5.0
+    assert p_default.wo.bias.item() == pytest.approx(5.0)
+
+    p_zero = UtilityPredictor(hidden_dim=64, utility_bias=0.0)
+    assert p_zero.utility_bias == 0.0
+    assert p_zero.wo.bias.item() == pytest.approx(0.0)
+
+    # Full model check with default 5.0
+    cfg_default = ModernBertMiceConfig(hidden_size=64, intermediate_size=128, num_attention_heads=4, utility_pred=True)
+    model_default = ModernBertMiceForSequenceClassification(cfg_default)
+    assert model_default.config.utility_bias == 5.0
+    assert model_default.utility_predictor.utility_bias == 5.0
+    assert model_default.utility_predictor.wo.bias.item() == pytest.approx(5.0)
+
+    # Full model check with custom bias 0.0
+    cfg_zero = ModernBertMiceConfig(hidden_size=64, intermediate_size=128, num_attention_heads=4, utility_pred=True, utility_bias=0.0)
+    model_zero = ModernBertMiceForSequenceClassification(cfg_zero)
+    assert model_zero.config.utility_bias == 0.0
+    assert model_zero.utility_predictor.utility_bias == 0.0
+    assert model_zero.utility_predictor.wo.bias.item() == pytest.approx(0.0)
+
+    # Full model check with negative bias -2.5
+    cfg_neg = ModernBertMiceConfig(hidden_size=64, intermediate_size=128, num_attention_heads=4, utility_pred=True, utility_bias=-2.5)
+    model_neg = ModernBertMiceForSequenceClassification(cfg_neg)
+    assert model_neg.utility_predictor.wo.bias.item() == pytest.approx(-2.5)
+
+
+def test_utility_bias_scorer_and_hash_invariance():
+    """Test Experimaestro hash invariance and scorer execution with utility_bias."""
+    from experimaestro.core.identifier import IdentifierComputer
+
+    scorer_default, tasks_default = mice_v2_scorer(
+        hf_id="jhu-clsp/ettin-encoder-17m",
+        utility_pred=True,
+    )
+    scorer_explicit_5, tasks_explicit_5 = mice_v2_scorer(
+        hf_id="jhu-clsp/ettin-encoder-17m",
+        utility_pred=True,
+        utility_bias=5.0,
+    )
+    scorer_zero, tasks_zero = mice_v2_scorer(
+        hf_id="jhu-clsp/ettin-encoder-17m",
+        utility_pred=True,
+        utility_bias=0.0,
+    )
+
+    # Hashes: default and 5.0 must be identical because ignore_default=True
+    id_default = str(IdentifierComputer.compute(scorer_default))
+    id_explicit = str(IdentifierComputer.compute(scorer_explicit_5))
+    id_zero = str(IdentifierComputer.compute(scorer_zero))
+
+    assert id_default == id_explicit, "Default and explicit utility_bias=5.0 must produce identical scorer hash"
+    assert id_default != id_zero, "utility_bias=0.0 must produce a distinct scorer hash"
+
+    # Verify execution sets wo.bias to 0.0
+    inst = tasks_zero[0].instance()
+    inst.execute()
+    assert inst.scorer.hf_model.utility_predictor.wo.bias.item() == pytest.approx(0.0)

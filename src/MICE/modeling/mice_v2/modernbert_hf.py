@@ -117,11 +117,13 @@ class UtilityPredictor(nn.Module):
         hidden_dim: int,
         bottleneck_dim: Optional[int] = None,
         utility_temp: float = 1.0,
+        utility_bias: float = 5.0,
     ):
         super().__init__()
         if bottleneck_dim is None:
             bottleneck_dim = hidden_dim * 2
 
+        self.utility_bias = utility_bias
         self.wi = nn.Linear(hidden_dim, 2 * bottleneck_dim, bias=False)
         self.wo = nn.Linear(bottleneck_dim, 1, bias=True)
         self.register_buffer(
@@ -131,15 +133,15 @@ class UtilityPredictor(nn.Module):
 
     def _init_weights(self):
         # 1. Initialize wi with standard small weights
-        nn.init.normal_(self.wi.weight, mean=0.0)
+        nn.init.normal_(self.wi.weight, mean=0.0, std=0.02)
 
         # 2. Keep the output weights very small so input variance doesn't overpower the bias
-        nn.init.normal_(self.wo.weight, mean=0.0)
+        nn.init.normal_(self.wo.weight, mean=0.0, std=0.01)
 
-        # 3. Set the bias to a high positive scalar.
+        # 3. Set the bias to the configured scalar.
         # logit = 5.0 -> sigmoid(5.0) = 0.9933 (keeps ~99% of utility)
         if self.wo.bias is not None:
-            nn.init.constant_(self.wo.bias, 5.0)
+            nn.init.constant_(self.wo.bias, self.utility_bias)
 
     # TODO MonkeyPatch for aval - Remove this in next release
     def _load_from_state_dict(
@@ -511,6 +513,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         bottom_final_norm: bool = True,
         top_final_norm: bool = False,
         utility_temp: float = 1.0,
+        utility_bias: float = 5.0,
         compress_dim: float = 1.0,
         compress_init_option: str = "seed",
         use_cross_attn: bool = True,
@@ -538,6 +541,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.bottom_final_norm = bottom_final_norm
         self.top_final_norm = top_final_norm
         self.utility_temp = utility_temp
+        self.utility_bias = utility_bias
         assert compress_dim >= 1.0, f"compress_dim must be >= 1.0, got {compress_dim}"
         self.compress_dim = compress_dim
         self.compress_init_option = compress_init_option
@@ -1109,6 +1113,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             self.utility_predictor = UtilityPredictor(
                 config.hidden_size,
                 utility_temp=config.utility_temp,
+                utility_bias=getattr(config, "utility_bias", 5.0),
             )
         else:
             self.utility_predictor = None

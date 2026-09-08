@@ -34,8 +34,8 @@ eval_sparsity: true
 evaluation: #default = Minified tests
     eval_checkpoint: "last"
     all_datasets: false
-    in_domain: true
-    beir13: true
+    in_domain: false
+    beir13: false
 
 #best values from v1
 lambda_reg: 5e-1
@@ -45,12 +45,28 @@ l2_reg: false
 
 grid_search:
     config_dicts:
-        - {lambda_reg: 5e-1, temp_end: null, temp_schedule: linear} # baseline -> degenerates
+        - {lambda_reg: 5e-1, temp_end: null, temp_schedule: linear, utility_bias: 5.0} # baseline -> degenerates
+
         # Anneal temperature: linear vs cosine vs exp (temp_end: 1e-1)
-        - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp}
-        - {lambda_reg: 0.3, temp_end: 0.1, temp_schedule: exp}
-        - {lambda_reg: 0.5, temp_end: 0.1, temp_schedule: exp}
-        - {lambda_reg: 0.7, temp_end: 0.1, temp_schedule: exp}
-        - {lambda_reg: 1.0, temp_end: 0.1, temp_schedule: exp}
-        - {lambda_reg: 1.0, temp_end: 0.01, temp_schedule: exp}
-        - {lambda_reg: 1.5, temp_end: 0.1, temp_schedule: exp}
+        - {lambda_reg: 0.3, temp_end: 0.1, temp_schedule: exp, utility_bias: 5.0}
+        - {lambda_reg: 0.5, temp_end: 0.1, temp_schedule: exp, utility_bias: 5.0}
+        - {lambda_reg: 0.7, temp_end: 0.1, temp_schedule: exp, utility_bias: 5.0}
+        - {lambda_reg: 1.0, temp_end: 0.1, temp_schedule: exp, utility_bias: 5.0}
+        - {lambda_reg: 1.5, temp_end: 0.1, temp_schedule: exp, utility_bias: 5.0}
+
+        #Test pushing the frontier up
+        - {lambda_reg: 1.0, temp_end: 0.01, temp_schedule: exp, utility_bias: 5.0} # -- not learned
+        - {lambda_reg: 1.0, temp_end: 0.01, temp_schedule: exp, utility_bias: 1.0} # try lower utility bias to see if it learns better
+        - {lambda_reg: 1.0, temp_end: 0.01, temp_schedule: cosine, utility_bias: 1.0} # cosine schedule, lower utility bias
+
+        #Test pushing the frontier down
+        - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp, utility_bias: 5.0} # -- too weak, not learned
+        - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp, utility_bias: 1.0} #
+        - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp, utility_bias: 0.0} #
+        - {lambda_reg: 0.1, temp_end: 0.01, temp_schedule: cosine, utility_bias: 1.0} #
+        - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: cosine, utility_bias: 1.0} #
+
+        # benchmarking the effect of scheduling
+        - {lambda_reg: 0.3, temp_end: 0.1, temp_schedule: cosine, utility_bias: 1.0} # cosine schedule, lower utility bias
+        - {lambda_reg: 0.3, temp_end: 0.1, temp_schedule: exp, utility_bias: 1.0} # cosine schedule, lower utility bias
+        - {lambda_reg: 0.3, temp_end: 0.1, temp_schedule: linear, utility_bias: 1.0} # cosine schedule, lower utility bias
