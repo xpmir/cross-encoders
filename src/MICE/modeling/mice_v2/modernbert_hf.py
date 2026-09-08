@@ -10,7 +10,7 @@ from typing import Any, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
-from sentence_transformers.models import Pooling, Dense, LayerNorm
+from sentence_transformers.models import Dense, LayerNorm
 from transformers import AutoConfig, AutoModel, AutoModelForSequenceClassification
 from transformers.models.modernbert.configuration_modernbert import ModernBertConfig
 
@@ -1057,8 +1057,6 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         num_labels = config.num_labels if hasattr(config, "num_labels") else 1
         head_type = getattr(config, "head_type", "linear")
 
-        pooling = Pooling(embedding_dimension=head_dim, pooling_mode="cls")
-
         if head_type == "st_reranker":
             dense_inner = Dense(
                 in_features=head_dim,
@@ -1080,7 +1078,6 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             self.output_modules = nn.Sequential(
                 OrderedDict(
                     [
-                        ("pooling", pooling),
                         ("dense_inner", dense_inner),
                         ("norm", norm),
                         ("dense_score", dense_score),
@@ -1088,7 +1085,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 )
             )
         else:
-            modules = [("pooling", pooling)]
+            modules = []
             if getattr(config, "top_final_norm", False):
                 norm = LayerNorm(dimension=head_dim)
                 norm.norm = nn.LayerNorm(
@@ -1671,13 +1668,12 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     is_last_layer=(i == num_top - 1),
                 )
 
-        features = {"token_embeddings": q_hidden}
-        if query_mask is not None:
-            features["attention_mask"] = query_mask
-        if use_unpadded and cu_seqlens_q is not None:
-            features["cu_seq_lens_q"] = cu_seqlens_q
-            features["max_length_q"] = max_seqlen_q
+        if use_unpadded:
+            cls_hidden = q_hidden.squeeze(0)  # Shape: [batch_size, D]
+        else:
+            cls_hidden = q_hidden[:, 0]  # Shape: [batch_size, D]
 
+        features = {"sentence_embedding": cls_hidden}
         output_features = self.output_modules(features)
         logits = output_features["scores"]
 

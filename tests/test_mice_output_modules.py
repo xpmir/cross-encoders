@@ -14,7 +14,7 @@ from MICE.modeling.mice_v2.modernbert_xpm import (
     compute_model_norm_metrics,
     mice_v2_scorer,
 )
-from sentence_transformers.models import Pooling, Dense, LayerNorm
+from sentence_transformers.models import Dense, LayerNorm
 
 
 def _small_config(**kwargs):
@@ -37,10 +37,9 @@ def test_linear_head_output_modules():
 
     assert hasattr(model, "output_modules")
     assert isinstance(model.output_modules, nn.Sequential)
-    assert len(model.output_modules) == 2
-    assert "pooling" in model.output_modules._modules
+    assert len(model.output_modules) == 1
     assert "dense_score" in model.output_modules._modules
-    assert isinstance(model.output_modules.pooling, Pooling)
+    assert "pooling" not in model.output_modules._modules
     assert isinstance(model.output_modules.dense_score, Dense)
     assert model.classifier is model.output_modules.dense_score.linear
     assert model.top_final_norm is None
@@ -57,8 +56,9 @@ def test_linear_head_with_top_final_norm():
     config = _small_config(head_type="linear", top_final_norm=True)
     model = ModernBertMiceForSequenceClassification(config)
 
-    assert len(model.output_modules) == 3
+    assert len(model.output_modules) == 2
     assert "norm" in model.output_modules._modules
+    assert "dense_score" in model.output_modules._modules
     assert isinstance(model.output_modules.norm, LayerNorm)
     assert model.top_final_norm is model.output_modules.norm.norm
 
@@ -70,18 +70,14 @@ def test_st_reranker_head_output_modules():
 
     assert hasattr(model, "output_modules")
     assert isinstance(model.output_modules, nn.Sequential)
-    assert len(model.output_modules) == 4
+    assert len(model.output_modules) == 3
 
     names = list(model.output_modules._modules.keys())
-    assert names == ["pooling", "dense_inner", "norm", "dense_score"]
+    assert names == ["dense_inner", "norm", "dense_score"]
 
-    pooling = model.output_modules.pooling
     dense_inner = model.output_modules.dense_inner
     norm = model.output_modules.norm
     dense_score = model.output_modules.dense_score
-
-    assert isinstance(pooling, Pooling)
-    assert pooling.pooling_mode == "cls"
 
     assert isinstance(dense_inner, Dense)
     assert dense_inner.linear.in_features == 64
@@ -105,22 +101,16 @@ def test_st_reranker_head_output_modules():
     assert out.logits.shape == (3, 1)
 
 
-def test_unpadded_output_modules_forward():
-    """Test output_modules directly with unpadded cu_seq_lens_q."""
+def test_output_modules_direct_forward():
+    """Test output_modules directly with sentence_embedding input."""
     config = _small_config(head_type="st_reranker")
     model = ModernBertMiceForSequenceClassification(config)
 
-    # 2 sequences: lengths 4 and 6, total 10 tokens
-    unpadded_q = torch.randn(1, 10, 64)
-    cu_seq_lens_q = torch.tensor([0, 4, 10], dtype=torch.int32)
-    features = {
-        "token_embeddings": unpadded_q,
-        "cu_seq_lens_q": cu_seq_lens_q,
-        "max_length_q": 6,
-    }
+    cls_hidden = torch.randn(4, 64)
+    features = {"sentence_embedding": cls_hidden}
     out = model.output_modules(features)
     assert "scores" in out
-    assert out["scores"].shape == (2, 1)
+    assert out["scores"].shape == (4, 1)
 
 
 def test_state_dict_backward_compatibility():
@@ -205,3 +195,20 @@ def test_init_scorer_execution_both_head_types():
                     doc_mask=doc_mask,
                 )
             assert out.logits.shape == (2, 1)
+
+
+def test_unpadded_forward_simulation():
+    """Verify that unpadded top-layer output with token count >> batch size passes cleanly through output_modules."""
+    config = _small_config(head_type="st_reranker")
+    model = ModernBertMiceForSequenceClassification(config)
+
+    # 4 sequences, total 150 tokens. Sliced CLS output has shape [1, 4, 64]
+    batch_size = 4
+    dim = config.hidden_size
+    mock_unpadded_cls = torch.randn(1, batch_size, dim)
+
+    # In use_unpadded mode, cls_hidden = mock_unpadded_cls.squeeze(0) -> [4, 64]
+    cls_hidden = mock_unpadded_cls.squeeze(0)
+    features = {"sentence_embedding": cls_hidden}
+    out = model.output_modules(features)
+    assert out["scores"].shape == (batch_size, 1)
