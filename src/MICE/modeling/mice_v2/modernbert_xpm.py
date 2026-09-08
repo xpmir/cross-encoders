@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 def compute_model_norm_metrics(
     hf_model: nn.Module,
 ) -> dict:
-    """Compute Frobenius norms of W_V, W_O, and classifier head weights."""
+    """Compute Frobenius norms of W_V and W_O weights."""
     metrics = {}
     if hasattr(hf_model, "get_wv_matrices"):
         wv_list = hf_model.get_wv_matrices()
@@ -66,11 +66,6 @@ def compute_model_norm_metrics(
             norms = [torch.norm(w, p="fro") for w in wo_list]
             metrics["wo_norm/mean"] = torch.stack(norms).mean()
             metrics["wo_norm/layer_0"] = norms[0]
-
-    if hasattr(hf_model, "get_classifier_norm"):
-        cls_norm = hf_model.get_classifier_norm()
-        if cls_norm is not None:
-            metrics["classifier_norm"] = cls_norm
 
     return metrics
 
@@ -701,16 +696,6 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                 full_backbone.model.final_norm.state_dict()
             )
 
-        if (
-            compress_init_option == "seed"
-            and hasattr(scorer.hf_model, "top_final_norm")
-            and scorer.hf_model.top_final_norm is not None
-        ):
-            logger.info("Seeding top_final_norm from backbone")
-            scorer.hf_model.top_final_norm.load_state_dict(
-                full_backbone.model.final_norm.state_dict()
-            )
-
         # 6. Classifier / Head
         if hasattr(full_backbone, "head"):
             logger.info("Seeding head from backbone")
@@ -1159,6 +1144,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     use_cross_attn: Param[bool] = field(default=True, ignore_default=True)
     """Whether top layers use Cross+Self attention (True) or Concatenated Self-Attention only (False)"""
 
+    head_type: Param[str] = field(default="linear", ignore_default=True)
+    """Type of classification head pipeline: 'linear' (default, legacy single linear layer) or 'st_reranker' (ST pooling + dense + LayerNorm + dense)"""
+
     _version: Constant[str] = "2.0.2"
 
     hf_model: nn.Module
@@ -1227,6 +1215,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 apply_override("compress_init_option", self.compress_init_option)
             if not self.use_cross_attn:
                 apply_override("use_cross_attn", False)
+            if self.head_type != "linear":
+                apply_override("head_type", self.head_type)
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -1250,6 +1240,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 compress_dim=self.compress_dim,
                 compress_init_option=self.compress_init_option,
                 use_cross_attn=self.use_cross_attn,
+                head_type=self.head_type,
                 **config_kwargs,
             )
 
@@ -1707,10 +1698,26 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             from safetensors.torch import load_file
 
             state_dict = load_file(path / "model.safetensors")
+            for old_k, new_k in [
+                ("classifier.weight", "output_modules.dense_score.linear.weight"),
+                ("classifier.bias", "output_modules.dense_score.linear.bias"),
+                ("top_final_norm.weight", "output_modules.norm.norm.weight"),
+                ("top_final_norm.bias", "output_modules.norm.norm.bias"),
+            ]:
+                if old_k in state_dict and new_k not in state_dict:
+                    state_dict[new_k] = state_dict.pop(old_k)
             self.hf_model.load_state_dict(state_dict)
             logger.info(f"Loaded weights from {path / 'model.safetensors'}")
         elif (path / "pytorch_model.bin").exists():
             state_dict = torch.load(path / "pytorch_model.bin", map_location="cpu")
+            for old_k, new_k in [
+                ("classifier.weight", "output_modules.dense_score.linear.weight"),
+                ("classifier.bias", "output_modules.dense_score.linear.bias"),
+                ("top_final_norm.weight", "output_modules.norm.norm.weight"),
+                ("top_final_norm.bias", "output_modules.norm.norm.bias"),
+            ]:
+                if old_k in state_dict and new_k not in state_dict:
+                    state_dict[new_k] = state_dict.pop(old_k)
             self.hf_model.load_state_dict(state_dict)
             logger.info(f"Loaded weights from {path / 'pytorch_model.bin'}")
         else:
@@ -1802,6 +1809,7 @@ def mice_v2_scorer(
     compress_dim: float = 1.0,
     compress_init_option: str = "seed",
     use_cross_attn: bool = True,
+    head_type: str = "linear",
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
@@ -1850,6 +1858,7 @@ def mice_v2_scorer(
         compress_dim=compress_dim,
         compress_init_option=compress_init_option,
         use_cross_attn=use_cross_attn,
+        head_type=head_type,
     )
 
     init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)

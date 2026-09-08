@@ -137,6 +137,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     use_cross_attn: GridSearch[bool] = True
     """Whether top layers use Cross+Self attention (True) or Concatenated Self-Attention only (False)"""
 
+    head_type: GridSearch[str] = "linear"
+    """Type of classification head: 'linear' (default) or 'st_reranker'"""
+
     eval_sparsity: bool = False
     """Whether to compute token sparsity, mean utility, and token retention ratio during evaluation benchmarks"""
 
@@ -171,6 +174,7 @@ def build_mice_v2(
         compress_dim=cfg.compress_dim,
         compress_init_option=cfg.compress_init_option,
         use_cross_attn=cfg.use_cross_attn,
+        head_type=cfg.head_type,
         max_length=max_len,
         max_query_length=cfg.max_query_length,
         max_doc_length=cfg.max_doc_length,
@@ -216,6 +220,9 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     top_final_norm = model_tags.get("top_final_norm", cfg.top_final_norm)
     topln_suffix = "-topln" if top_final_norm else ""
 
+    head_type = model_tags.get("head_type", getattr(cfg, "head_type", "linear"))
+    head_suffix = f"-{head_type}" if head_type and head_type != "linear" else ""
+
     attn_impl = model_tags.get("attn_implementation", cfg.attn_implementation)
     attn_suffix = f"-{attn_impl}" if attn_impl else ""
 
@@ -224,7 +231,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{head_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(

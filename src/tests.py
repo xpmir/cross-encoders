@@ -495,6 +495,24 @@ def nano_beir_tests(
 
 
 @lru_cache
+def limit_tests(
+    test_topic_nb: int,
+    retrievers_only: bool = False,
+    launcher=None,
+    blocking: Optional[bool] = None,
+) -> EvaluationsCollection:
+    """LIMIT theoretical stress-test benchmarks (full 50k and small 46 docs)."""
+    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+    evals = {}
+    for name in ["limit", "limit_small"]:
+        ds = prepare_dataset(f"co.huggingface.{name}", download=blocking)
+        ds = get_fold(ds, test_topic_nb, launcher=launcher)
+        evals[name] = Evaluations(ds, measures=measures)
+
+    return EvaluationsCollection(**evals)
+
+
+@lru_cache
 def paper_tests(
     test_topic_nb: int,
     check_docs: bool = True,

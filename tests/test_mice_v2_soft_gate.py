@@ -339,14 +339,9 @@ def test_bottom_top_final_norm_toggles():
         inst_task.execute()
         scorer = inst_task.scorer
 
-    full_backbone = AutoModelForSequenceClassification.from_pretrained("jhu-clsp/ettin-encoder-17m")
-
     assert scorer.hf_model.config.bottom_final_norm is False
     assert scorer.hf_model.config.top_final_norm is True
     assert isinstance(scorer.hf_model.top_final_norm, torch.nn.LayerNorm)
-
-    # Verify top_final_norm was seeded from backbone final_norm
-    assert torch.equal(scorer.hf_model.top_final_norm.weight, full_backbone.model.final_norm.weight)
 
     # Test forward pass in unpadded and padded modes
     query_ids = torch.randint(0, 1000, (2, 8))
@@ -582,7 +577,6 @@ def test_compensation_diagnostics_metrics():
 
     assert "wo_norm/mean" in metrics_dict, "wo_norm/mean should be logged"
     assert "wo_norm/layer_0" in metrics_dict, "wo_norm/layer_0 should be logged"
-    assert "classifier_norm" in metrics_dict, "classifier_norm should be logged"
     assert "doc_hidden_norm/mean" in metrics_dict, "doc_hidden_norm/mean should be logged"
     assert "gated_doc_norm/mean" in metrics_dict, "gated_doc_norm/mean should be logged"
 

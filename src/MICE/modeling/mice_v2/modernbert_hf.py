@@ -5,10 +5,12 @@ Custom PreTrainedModel and Modules supporting SDPA, Flash Attention 2, and ST ex
 
 import copy
 import logging
+from collections import OrderedDict
 from typing import Any, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
+from sentence_transformers.models import Pooling, Dense, LayerNorm
 from transformers import AutoConfig, AutoModel, AutoModelForSequenceClassification
 from transformers.models.modernbert.configuration_modernbert import ModernBertConfig
 
@@ -512,6 +514,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         compress_dim: float = 1.0,
         compress_init_option: str = "seed",
         use_cross_attn: bool = True,
+        head_type: str = "linear",
         num_labels: int = 1,
         **kwargs,
     ):
@@ -539,6 +542,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.compress_dim = compress_dim
         self.compress_init_option = compress_init_option
         self.use_cross_attn = use_cross_attn
+        self.head_type = head_type
 
 
 class ModernBertMiceCrossAttention(nn.Module):
@@ -595,6 +599,7 @@ class ModernBertMiceCrossAttention(nn.Module):
             and cu_seqlens_d is not None
             and is_flash_impl
             and q_hidden.is_cuda
+            and is_fa2_available()
         ):
             # Unpadded FlashAttention 2 path
             total_q = q_hidden.shape[1]
@@ -667,6 +672,7 @@ class ModernBertMiceCrossAttention(nn.Module):
 
         if (
             is_flash_impl
+            and is_fa2_available()
             and q_hidden.is_cuda
             and _unpad_input is not None
             and _pad_input is not None
@@ -1047,17 +1053,60 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             self.top_rotary_emb = None
             self.adapter = None
 
-        self.classifier = nn.Linear(
-            top_config.hidden_size,
-            config.num_labels if hasattr(config, "num_labels") else 1,
-        )
+        head_dim = top_config.hidden_size
+        num_labels = config.num_labels if hasattr(config, "num_labels") else 1
+        head_type = getattr(config, "head_type", "linear")
 
-        if getattr(config, "top_final_norm", False):
-            self.top_final_norm = nn.LayerNorm(
-                top_config.hidden_size, eps=config.norm_eps, bias=config.norm_bias
+        pooling = Pooling(embedding_dimension=head_dim, pooling_mode="cls")
+
+        if head_type == "st_reranker":
+            dense_inner = Dense(
+                in_features=head_dim,
+                out_features=head_dim,
+                bias=False,
+                activation_function=nn.GELU(),
+                module_input_name="sentence_embedding",
+                module_output_name="sentence_embedding",
+            )
+            norm = LayerNorm(dimension=head_dim)
+            dense_score = Dense(
+                in_features=head_dim,
+                out_features=num_labels,
+                bias=True,
+                activation_function=nn.Identity(),
+                module_input_name="sentence_embedding",
+                module_output_name="scores",
+            )
+            self.output_modules = nn.Sequential(
+                OrderedDict(
+                    [
+                        ("pooling", pooling),
+                        ("dense_inner", dense_inner),
+                        ("norm", norm),
+                        ("dense_score", dense_score),
+                    ]
+                )
             )
         else:
-            self.top_final_norm = None
+            modules = [("pooling", pooling)]
+            if getattr(config, "top_final_norm", False):
+                norm = LayerNorm(dimension=head_dim)
+                norm.norm = nn.LayerNorm(
+                    head_dim,
+                    eps=getattr(config, "norm_eps", 1e-5),
+                    bias=getattr(config, "norm_bias", False),
+                )
+                modules.append(("norm", norm))
+            dense_score = Dense(
+                in_features=head_dim,
+                out_features=num_labels,
+                bias=True,
+                activation_function=nn.Identity(),
+                module_input_name="sentence_embedding",
+                module_output_name="scores",
+            )
+            modules.append(("dense_score", dense_score))
+            self.output_modules = nn.Sequential(OrderedDict(modules))
 
         if getattr(config, "utility_pred", False):
             self.utility_predictor = UtilityPredictor(
@@ -1097,11 +1146,60 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             for top_layer in self.top_layers
         ]
 
-    def get_classifier_norm(self) -> Optional[torch.Tensor]:
-        """Compute Frobenius norm of classifier head weight."""
-        if hasattr(self, "classifier") and hasattr(self.classifier, "weight"):
-            return torch.norm(self.classifier.weight, p="fro")
+    @property
+    def classifier(self):
+        """Compatibility property returning the linear layer of dense_score."""
+        if (
+            hasattr(self, "output_modules")
+            and "dense_score" in self.output_modules._modules
+        ):
+            return self.output_modules.dense_score.linear
         return None
+
+    @property
+    def top_final_norm(self):
+        """Compatibility property returning the top final LayerNorm if top_final_norm is enabled."""
+        if (
+            getattr(self.config, "top_final_norm", False)
+            and getattr(self.config, "head_type", "linear") == "linear"
+        ):
+            if (
+                hasattr(self, "output_modules")
+                and "norm" in self.output_modules._modules
+            ):
+                return self.output_modules.norm.norm
+        return None
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        """Remap legacy classifier.* and top_final_norm.* keys to output_modules for backward compatibility."""
+        for old_suffix, new_suffix in [
+            ("classifier.weight", "output_modules.dense_score.linear.weight"),
+            ("classifier.bias", "output_modules.dense_score.linear.bias"),
+            ("top_final_norm.weight", "output_modules.norm.norm.weight"),
+            ("top_final_norm.bias", "output_modules.norm.norm.bias"),
+        ]:
+            old_key = prefix + old_suffix
+            new_key = prefix + new_suffix
+            if old_key in state_dict and new_key not in state_dict:
+                state_dict[new_key] = state_dict.pop(old_key)
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
 
     def _init_weights(self, module):
         super()._init_weights(module)
@@ -1543,7 +1641,6 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     max_seqlen_d=max_seqlen_d,
                     **kwargs,
                 )
-            cls_hidden = q_hidden.squeeze(0)
         else:
             q_attn_mask = None
             q_sw_attn_mask = None
@@ -1573,12 +1670,16 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     q_position_embeddings=q_pos_emb_top,
                     is_last_layer=(i == num_top - 1),
                 )
-            cls_hidden = q_hidden[:, 0]
 
-        if self.top_final_norm is not None:
-            cls_hidden = self.top_final_norm(cls_hidden)
+        features = {"token_embeddings": q_hidden}
+        if query_mask is not None:
+            features["attention_mask"] = query_mask
+        if use_unpadded and cu_seqlens_q is not None:
+            features["cu_seq_lens_q"] = cu_seqlens_q
+            features["max_length_q"] = max_seqlen_q
 
-        logits = self.classifier(cls_hidden)
+        output_features = self.output_modules(features)
+        logits = output_features["scores"]
 
         loss = None
         if labels is not None:
