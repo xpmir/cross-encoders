@@ -50,5 +50,7 @@ grid_search:
         - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp}
         - {lambda_reg: 0.3, temp_end: 0.1, temp_schedule: exp}
         - {lambda_reg: 0.5, temp_end: 0.1, temp_schedule: exp}
+        - {lambda_reg: 0.7, temp_end: 0.1, temp_schedule: exp}
         - {lambda_reg: 1.0, temp_end: 0.1, temp_schedule: exp}
+        - {lambda_reg: 1.0, temp_end: 0.01, temp_schedule: exp}
         - {lambda_reg: 1.5, temp_end: 0.1, temp_schedule: exp}
