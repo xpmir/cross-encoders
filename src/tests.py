@@ -1,26 +1,33 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from functools import lru_cache
+import logging
+from pathlib import Path
+from typing import Annotated, Callable, List, Optional, Union
+
+from configuration import Evaluation
 from datamaestro import prepare_dataset
-from typing import Union, List, Optional
-from xpmir.datasets.adapters import RandomFold
+from datamaestro_ir.data import Adhoc
+from datamaestro_ir.data.csv import Topics as CSVTopics
+from datamaestro_ir.data.trec import TrecAdhocAssessments
+from experimaestro import Launcher, Param, Task, pathgenerator
 from samplers import prepare_collection
+from xpmir.datasets.adapters import RandomFold
 from xpmir.evaluation import (
     Evaluations,
     EvaluationsCollection as XpmirEvaluationsCollection,
     Retriever,
     RetrieverFactory,
 )
-from xpmir.measures import RR, nDCG, R, Success
-from configuration import Evaluation
-from experimaestro import Task, Param, pathgenerator, Launcher
-from datamaestro_ir.data.csv import Topics as CSVTopics
-from datamaestro_ir.data.trec import TrecAdhocAssessments
-from datamaestro_ir.data import Adhoc
-from pathlib import Path
-from typing import Annotated
-
-import logging
+from xpmir.measures import RR, R, Success, nDCG
 
 logger = logging.getLogger(__name__)
+
+
+# -----------------------------------------------------------------------------
+# EvaluationsCollection with Launcher Routing
+# -----------------------------------------------------------------------------
 
 
 class EvaluationsCollection(XpmirEvaluationsCollection):
@@ -58,7 +65,6 @@ class EvaluationsCollection(XpmirEvaluationsCollection):
                 self.default_launcher if self.default_launcher is not None else launcher
             )
 
-    # override the evaluate_retriever method with smart routing to the appropriate launcher based on dataset name
     def evaluate_retriever(
         self,
         retriever: Union[Retriever, RetrieverFactory],
@@ -76,9 +82,7 @@ class EvaluationsCollection(XpmirEvaluationsCollection):
 
         results = []
         for key, evaluations in self.collection.items():
-            # Determine which launcher to use
             launcher_to_use = self.choose_launcher(key, launcher)
-
             result = evaluations.evaluate_retriever(
                 key,
                 retriever,
@@ -89,7 +93,6 @@ class EvaluationsCollection(XpmirEvaluationsCollection):
             )
             results.append(result)
 
-        # Adds to per model results
         if model_id is not None:
             self.per_model[model_id] = results
 
@@ -97,15 +100,16 @@ class EvaluationsCollection(XpmirEvaluationsCollection):
 
 
 def check_datasets_docs(evaluations_collection: EvaluationsCollection):
-    """Ensure that documents exists -> triggers any lazy loading issues now
-    ir_datasets show download them with prepare_dataset ... but not load them until accessed
+    """Ensure that documents exist -> triggers any lazy loading issues now.
+    ir_datasets should download them with prepare_dataset ... but not load them until accessed.
     """
     for evals in evaluations_collection.collection.values():
         try:
             _ = next(evals.dataset.documents.iter_documents())
         except FileNotFoundError as e:
             logger.error(
-                f"{e}- cannot dowload {evals.dataset.documents.id}, please consider adding it manually (may happen for proprietary datasets such as Robust04)"
+                f"{e}- cannot download {evals.dataset.documents.id}, please consider "
+                f"adding it manually (may happen for proprietary datasets such as Robust04)"
             )
 
 
@@ -122,187 +126,9 @@ def get_fold(dataset, size, seed=0, launcher=None):
     return dataset
 
 
-@lru_cache
-def minified_tests(
-    test_topic_nb: int,
-    check_docs: bool = True,
-    retrievers_only: bool = False,
-    launcher=None,
-    blocking: Optional[bool] = None,
-) -> EvaluationsCollection:
-    """Returns the pool of queries for the evaluations to use for testing."""
-
-    v1_devsmall_ds = prepare_collection(
-        "com.microsoft.msmarco.passage.dev.small", download=blocking
-    )
-    dl19 = prepare_dataset(
-        "com.microsoft.msmarco.passage.trec2019.judged", download=blocking
-    )
-    dl20 = prepare_dataset(
-        "com.microsoft.msmarco.passage.trec2020.judged", download=blocking
-    )
-
-    v1_devsmall_ds = get_fold(v1_devsmall_ds, test_topic_nb, launcher=launcher)
-
-    scifact = prepare_dataset("org.beir.scifact.test", download=blocking)  # 300 queries
-    scifact = get_fold(scifact, test_topic_nb, launcher=launcher)
-
-    touche = prepare_dataset("org.beir.webis.touche2020.v2", download=blocking)
-
-    fiqa = prepare_dataset("org.beir.fiqa.test", download=blocking)  # 648 queries
-    fiqa = get_fold(fiqa, test_topic_nb, launcher=launcher)
-
-    nfcorpus = prepare_dataset(
-        "org.beir.nfcorpus.test", download=blocking
-    )  # 323 queries
-    nfcorpus = get_fold(nfcorpus, test_topic_nb, launcher=launcher)
-
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-    tests = EvaluationsCollection(
-        msmarco_dev=Evaluations(v1_devsmall_ds, measures=measures),
-        trec2019=Evaluations(dl19, measures=measures),
-        trec2020=Evaluations(dl20, measures=measures),
-        scifact=Evaluations(scifact, measures=measures),
-        touche=Evaluations(touche, measures=measures),
-        fiqa=Evaluations(fiqa, measures=measures),
-        nfcorpus=Evaluations(nfcorpus, measures=measures),
-    )
-
-    if check_docs:
-        logger.info("Checking docs in datasets...")
-        check_datasets_docs(tests)
-
-    return tests
-
-
-@lru_cache
-def BEIR_13_tests(
-    test_topic_nb: int,
-    retrievers_only: bool = False,
-    launcher=None,
-    blocking: Optional[bool] = None,
-) -> EvaluationsCollection:
-    """All of BEIR (minus the 5 datasets not publicly available)"""
-
-    ## BEIR datasets
-    scifact = prepare_dataset("org.beir.scifact.test", download=blocking)
-    scifact = get_fold(scifact, test_topic_nb, launcher=launcher)
-
-    touche = prepare_dataset("org.beir.webis.touche2020.v2", download=blocking)
-
-    fiqa = prepare_dataset("org.beir.fiqa.test", download=blocking)
-    fiqa = get_fold(fiqa, test_topic_nb, launcher=launcher)
-
-    nfcorpus = prepare_dataset("org.beir.nfcorpus.test", download=blocking)
-    nfcorpus = get_fold(nfcorpus, test_topic_nb, launcher=launcher)
-
-    arguana = prepare_dataset("org.beir.arguana", download=blocking)
-    arguana = get_fold(arguana, test_topic_nb, launcher=launcher)
-
-    climate_fever = prepare_dataset("org.beir.climate.fever", download=blocking)
-    climate_fever = get_fold(climate_fever, test_topic_nb, launcher=launcher)
-
-    dbpedia = prepare_dataset("org.beir.dbpedia.entity.test", download=blocking)
-    dbpedia = get_fold(dbpedia, test_topic_nb, launcher=launcher)
-
-    fever = prepare_dataset("org.beir.fever.test", download=blocking)
-    fever = get_fold(fever, test_topic_nb, launcher=launcher)
-
-    hotpotqa = prepare_dataset("org.beir.hotpotqa.test", download=blocking)
-    hotpotqa = get_fold(hotpotqa, test_topic_nb, launcher=launcher)
-
-    nq = prepare_dataset("org.beir.nq", download=blocking)
-    nq = get_fold(nq, test_topic_nb, launcher=launcher)
-
-    quora = prepare_dataset("org.beir.quora.test", download=blocking)
-    quora = get_fold(quora, test_topic_nb, launcher=launcher)
-
-    scidocs = prepare_dataset("org.beir.scidocs", download=blocking)
-    scidocs = get_fold(scidocs, test_topic_nb, launcher=launcher)
-
-    trec_covid = prepare_dataset("org.beir.trec.covid", download=blocking)
-    trec_covid = get_fold(trec_covid, test_topic_nb, launcher=launcher)
-
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-    return EvaluationsCollection(
-        fever=Evaluations(fever, measures=measures),
-        arguana=Evaluations(arguana, measures=measures),
-        climate_fever=Evaluations(climate_fever, measures=measures),
-        dbpedia=Evaluations(dbpedia, measures=measures),
-        fiqa=Evaluations(fiqa, measures=measures),
-        hotpotqa=Evaluations(hotpotqa, measures=measures),
-        nfcorpus=Evaluations(nfcorpus, measures=measures),
-        nq=Evaluations(nq, measures=measures),
-        quora=Evaluations(quora, measures=measures),
-        scidocs=Evaluations(scidocs, measures=measures),
-        scifact=Evaluations(scifact, measures=measures),
-        touche=Evaluations(touche, measures=measures),
-        trec_covid=Evaluations(trec_covid, measures=measures),
-    )
-
-
-BEIR13_DECONTAMINATED_KEYS = {
-    "arguana_decontaminated": "ai.lighton.beir_decontaminated.arguana.test",
-    "climate_fever_decontaminated": "ai.lighton.beir_decontaminated.climate_fever.test",
-    "dbpedia_decontaminated": "ai.lighton.beir_decontaminated.dbpedia_entity.test",
-    "fever_decontaminated": "ai.lighton.beir_decontaminated.fever.test",
-    "fiqa_decontaminated": "ai.lighton.beir_decontaminated.fiqa.test",
-    "hotpotqa_decontaminated": "ai.lighton.beir_decontaminated.hotpotqa.test",
-    "nfcorpus_decontaminated": "ai.lighton.beir_decontaminated.nfcorpus.test",
-    "nq_decontaminated": "ai.lighton.beir_decontaminated.nq.test",
-    "quora_decontaminated": "ai.lighton.beir_decontaminated.quora.test",
-    "scidocs_decontaminated": "ai.lighton.beir_decontaminated.scidocs.test",
-    "scifact_decontaminated": "ai.lighton.beir_decontaminated.scifact.test",
-    "touche_decontaminated": "ai.lighton.beir_decontaminated.webis_touche2020.test",
-    "trec_covid_decontaminated": "ai.lighton.beir_decontaminated.trec_covid.test",
-}
-
-BEIR_KEYS = {
-    "scifact": "org.beir.scifact.test",
-    "touche": "org.beir.webis.touche2020.v2",
-    "fiqa": "org.beir.fiqa.test",
-    "nfcorpus": "org.beir.nfcorpus.test",
-    "arguana": "org.beir.arguana",
-    "climate_fever": "org.beir.climate.fever",
-    "dbpedia": "org.beir.dbpedia.entity.test",
-    "fever": "org.beir.fever.test",
-    "hotpotqa": "org.beir.hotpotqa.test",
-    "nq": "org.beir.nq",
-    "quora": "org.beir.quora.test",
-    "scidocs": "org.beir.scidocs",
-    "trec_covid": "org.beir.trec.covid",
-}
-
-INDOMAIN_KEYS = {
-    "msmarco_dev": "com.microsoft.msmarco.passage.dev.small",
-    "trec2019": "com.microsoft.msmarco.passage.trec2019.judged",
-    "trec2020": "com.microsoft.msmarco.passage.trec2020.judged",
-}
-
-LOTTE_KEYS = {
-    "lotte_writing": "edu.stanford.lotte.writing.test.search",
-    "lotte_recreation": "edu.stanford.lotte.recreation.test.search",
-    "lotte_science": "edu.stanford.lotte.science.test.search",
-    "lotte_technology": "edu.stanford.lotte.technology.test.search",
-    "lotte_lifestyle": "edu.stanford.lotte.lifestyle.test.search",
-}
-
-
-def get_decontaminated_test(
-    key: str,
-    test_topic_nb: int,
-    retrievers_only: bool = False,
-    launcher=None,
-    blocking: Optional[bool] = None,
-) -> Evaluations:
-    """Build a single LightOn decontaminated BEIR dataset evaluation."""
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-    dataset_id = BEIR13_DECONTAMINATED_KEYS[key]
-    ds = prepare_dataset(dataset_id, download=blocking)
-    # Apply the filter before taking the fold or evaluating
-    ds = FilterUnassessedTopics.C(dataset=ds).submit(launcher=launcher)
-    ds = get_fold(ds, test_topic_nb, launcher=launcher)
-    return Evaluations(ds, measures=measures)
+# -----------------------------------------------------------------------------
+# Pre-filtering Tasks
+# -----------------------------------------------------------------------------
 
 
 class FilterUnassessedTopics(Task):
@@ -355,102 +181,55 @@ class FilterUnassessedTopics(Task):
                         fp.write(f"{qrels.topic_id} 0 {qrel.doc_id} {qrel.rel}\n")
 
 
-@lru_cache
-def BEIR13_decontaminated_tests(
-    test_topic_nb: int,
-    retrievers_only: bool = False,
-    launcher=None,
-    blocking: Optional[bool] = None,
-) -> EvaluationsCollection:
-    """All 13 LightOn decontaminated BEIR datasets."""
-    evals = {}
-    for key in BEIR13_DECONTAMINATED_KEYS:
-        evals[key] = get_decontaminated_test(
-            key,
-            test_topic_nb,
-            retrievers_only=retrievers_only,
-            launcher=launcher,
-            blocking=blocking,
-        )
+# -----------------------------------------------------------------------------
+# Public Dataset Key Dictionaries (Backwards Compatibility)
+# -----------------------------------------------------------------------------
 
-    return EvaluationsCollection(**evals)
+INDOMAIN_KEYS = {
+    "msmarco_dev": "com.microsoft.msmarco.passage.dev.small",
+    "trec2019": "com.microsoft.msmarco.passage.trec2019.judged",
+    "trec2020": "com.microsoft.msmarco.passage.trec2020.judged",
+}
 
+BEIR_KEYS = {
+    "scifact": "org.beir.scifact.test",
+    "touche": "org.beir.webis.touche2020.v2",
+    "fiqa": "org.beir.fiqa.test",
+    "nfcorpus": "org.beir.nfcorpus.test",
+    "arguana": "org.beir.arguana",
+    "climate_fever": "org.beir.climate.fever",
+    "dbpedia": "org.beir.dbpedia.entity.test",
+    "fever": "org.beir.fever.test",
+    "hotpotqa": "org.beir.hotpotqa.test",
+    "nq": "org.beir.nq",
+    "quora": "org.beir.quora.test",
+    "scidocs": "org.beir.scidocs",
+    "trec_covid": "org.beir.trec.covid",
+}
 
-@lru_cache
-def Robust04_test(
-    test_topic_nb: int,
-    retrievers_only: bool = False,
-    launcher=None,
-    blocking: Optional[bool] = None,
-) -> EvaluationsCollection:
-    """Robust04 dataset"""
-    logger.info("Preparing Robust04 dataset...")
-    robust04 = prepare_dataset(
-        "gov.nist.trec.adhoc.robust.2004.withstore", download=blocking
-    )
-    robust04 = get_fold(robust04, test_topic_nb, launcher=launcher)
+BEIR13_DECONTAMINATED_KEYS = {
+    "arguana_decontaminated": "ai.lighton.beir_decontaminated.arguana.test",
+    "climate_fever_decontaminated": "ai.lighton.beir_decontaminated.climate_fever.test",
+    "dbpedia_decontaminated": "ai.lighton.beir_decontaminated.dbpedia_entity.test",
+    "fever_decontaminated": "ai.lighton.beir_decontaminated.fever.test",
+    "fiqa_decontaminated": "ai.lighton.beir_decontaminated.fiqa.test",
+    "hotpotqa_decontaminated": "ai.lighton.beir_decontaminated.hotpotqa.test",
+    "nfcorpus_decontaminated": "ai.lighton.beir_decontaminated.nfcorpus.test",
+    "nq_decontaminated": "ai.lighton.beir_decontaminated.nq.test",
+    "quora_decontaminated": "ai.lighton.beir_decontaminated.quora.test",
+    "scidocs_decontaminated": "ai.lighton.beir_decontaminated.scidocs.test",
+    "scifact_decontaminated": "ai.lighton.beir_decontaminated.scifact.test",
+    "touche_decontaminated": "ai.lighton.beir_decontaminated.webis_touche2020.test",
+    "trec_covid_decontaminated": "ai.lighton.beir_decontaminated.trec_covid.test",
+}
 
-    return EvaluationsCollection(
-        robust04=Evaluations(
-            robust04, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-    )
-
-
-@lru_cache
-def LoTTE_tests(
-    test_topic_nb: int,
-    retrievers_only: bool = False,
-    launcher=None,
-    blocking: Optional[bool] = None,
-) -> EvaluationsCollection:
-    """LoTTE Search dataset"""
-    logger.info("Preparing LoTTE Search datasets...")
-    lotte_writing = prepare_dataset(
-        "edu.stanford.lotte.writing.test.search", download=blocking
-    )
-    lotte_writing = get_fold(lotte_writing, test_topic_nb, launcher=launcher)
-
-    lotte_recreation = prepare_dataset(
-        "edu.stanford.lotte.recreation.test.search", download=blocking
-    )
-    lotte_recreation = get_fold(lotte_recreation, test_topic_nb, launcher=launcher)
-
-    lotte_science = prepare_dataset(
-        "edu.stanford.lotte.science.test.search", download=blocking
-    )
-    lotte_science = get_fold(lotte_science, test_topic_nb, launcher=launcher)
-
-    lotte_technology = prepare_dataset(
-        "edu.stanford.lotte.technology.test.search", download=blocking
-    )
-    lotte_technology = get_fold(lotte_technology, test_topic_nb, launcher=launcher)
-
-    lotte_lifestyle = prepare_dataset(
-        "edu.stanford.lotte.lifestyle.test.search", download=blocking
-    )
-    lotte_lifestyle = get_fold(lotte_lifestyle, test_topic_nb, launcher=launcher)
-
-    return EvaluationsCollection(
-        lotte_writing=Evaluations(
-            lotte_writing, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-        lotte_recreation=Evaluations(
-            lotte_recreation,
-            CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES,
-        ),
-        lotte_science=Evaluations(
-            lotte_science, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-        lotte_technology=Evaluations(
-            lotte_technology,
-            CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES,
-        ),
-        lotte_lifestyle=Evaluations(
-            lotte_lifestyle, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-    )
-
+LOTTE_KEYS = {
+    "lotte_writing": "edu.stanford.lotte.writing.test.search",
+    "lotte_recreation": "edu.stanford.lotte.recreation.test.search",
+    "lotte_science": "edu.stanford.lotte.science.test.search",
+    "lotte_technology": "edu.stanford.lotte.technology.test.search",
+    "lotte_lifestyle": "edu.stanford.lotte.lifestyle.test.search",
+}
 
 NANO_BEIR_IDS = [
     "arguana",
@@ -468,10 +247,452 @@ NANO_BEIR_IDS = [
     "webis-touche2020",
 ]
 
-# Nano Beir Datamaestro Ids from id
 NANO_BEIR_KEYS = {
     f"nano_{name}": f"co.huggingface.nano-beir.{name}" for name in NANO_BEIR_IDS
 }
+
+LIMIT_KEYS = {
+    "limit": "co.huggingface.limit",
+    "limit_small": "co.huggingface.limit_small",
+}
+
+ROBUST04_KEYS = {
+    "robust04": "gov.nist.trec.adhoc.robust.2004.withstore",
+}
+
+
+# -----------------------------------------------------------------------------
+# Lazy Dataset Specification & Registry
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class DatasetSpec:
+    """Declarative specification for an evaluation dataset.
+
+    Execution (loading, filtering, folding) is deferred until `build()` is called.
+    """
+
+    name: str
+    datamaestro_id: str
+    is_collection: bool = False
+    filter_unassessed: bool = False
+    aliases: list[str] = field(default_factory=list)
+    loader: Optional[Callable] = None
+
+    def build(
+        self,
+        test_topic_nb: int = 0,
+        retrievers_only: bool = False,
+        launcher: Optional[Launcher] = None,
+        blocking: Optional[bool] = None,
+        measures: Optional[list] = None,
+    ) -> Evaluations:
+        """Lazily instantiate the dataset and return an Evaluations object."""
+        if self.loader is not None:
+            ds = self.loader(
+                test_topic_nb=test_topic_nb,
+                launcher=launcher,
+                blocking=blocking,
+            )
+        else:
+            if self.is_collection:
+                ds = prepare_collection(self.datamaestro_id, download=blocking)
+            else:
+                ds = prepare_dataset(self.datamaestro_id, download=blocking)
+
+            if self.filter_unassessed:
+                ds = FilterUnassessedTopics.C(dataset=ds).submit(launcher=launcher)
+
+            ds = get_fold(ds, test_topic_nb, launcher=launcher)
+
+        if measures is None:
+            measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+
+        return Evaluations(ds, measures=measures)
+
+
+class TestRegistry:
+    """Centralized registry for evaluation datasets and aggregations."""
+
+    __test__ = False
+
+    def __init__(self):
+        self._datasets: dict[str, DatasetSpec] = {}
+        self._dataset_aliases: dict[str, str] = {}
+        self._aggregations: dict[str, list[str]] = {}
+        self._agg_aliases: dict[str, str] = {}
+        self._display_names: dict[str, str] = {}
+
+    def register_dataset(
+        self,
+        name: str,
+        datamaestro_id: str,
+        *,
+        is_collection: bool = False,
+        filter_unassessed: bool = False,
+        aliases: Optional[list[str]] = None,
+        loader: Optional[Callable] = None,
+    ) -> DatasetSpec:
+        """Register a single dataset specification."""
+        spec = DatasetSpec(
+            name=name,
+            datamaestro_id=datamaestro_id,
+            is_collection=is_collection,
+            filter_unassessed=filter_unassessed,
+            aliases=aliases or [],
+            loader=loader,
+        )
+        self._datasets[name] = spec
+        self._dataset_aliases[name.lower()] = name
+        for alias in spec.aliases:
+            self._dataset_aliases[alias.lower()] = name
+        return spec
+
+    def register_dict(
+        self,
+        dataset_dict: dict[str, str],
+        *,
+        is_collection_fn: Optional[Callable[[str, str], bool]] = None,
+        filter_unassessed: bool = False,
+        aliases_map: Optional[dict[str, list[str]]] = None,
+    ):
+        """Batch-register dataset specifications from an existing {name: datamaestro_id} dictionary."""
+        for name, dmid in dataset_dict.items():
+            is_coll = is_collection_fn(name, dmid) if is_collection_fn else False
+            aliases = aliases_map.get(name, []) if aliases_map else []
+            self.register_dataset(
+                name=name,
+                datamaestro_id=dmid,
+                is_collection=is_coll,
+                filter_unassessed=filter_unassessed,
+                aliases=aliases,
+            )
+
+    def register_aggregation(
+        self,
+        name: str,
+        dataset_or_agg_names: list[str],
+        display_name: Optional[str] = None,
+    ):
+        """Register a named aggregation of datasets (or sub-aggregations)."""
+        canonical = name.lower().replace(" ", "_").replace("-", "_")
+        self._aggregations[canonical] = list(dataset_or_agg_names)
+        self._agg_aliases[name.lower()] = canonical
+        self._agg_aliases[canonical] = canonical
+        if display_name:
+            self._display_names[canonical] = display_name
+            self._agg_aliases[display_name.lower()] = canonical
+
+    def resolve_dataset_name(self, name: str) -> Optional[str]:
+        """Look up canonical dataset name from alias or exact match."""
+        if name in self._datasets:
+            return name
+        return self._dataset_aliases.get(name.lower(), None)
+
+    def resolve_aggregation_name(self, name: str) -> Optional[str]:
+        """Look up canonical aggregation name from alias or exact match."""
+        if name in self._aggregations:
+            return name
+        canonical = name.lower().replace(" ", "_").replace("-", "_")
+        if canonical in self._aggregations:
+            return canonical
+        return self._agg_aliases.get(name.lower(), None)
+
+    def resolve_names(self, targets: Union[str, list[str]]) -> list[str]:
+        """Recursively expand aggregations and resolve aliases into unique dataset names."""
+        if isinstance(targets, str):
+            targets = [targets]
+
+        resolved = []
+        seen = set()
+
+        def _resolve_item(item: str, visited_aggs: set[str]):
+            # 1. Check if item matches an aggregation not yet visited in this branch
+            agg_key = self.resolve_aggregation_name(item)
+            if agg_key and agg_key not in visited_aggs:
+                new_visited = visited_aggs | {agg_key}
+                for child in self._aggregations[agg_key]:
+                    _resolve_item(child, new_visited)
+                return
+
+            # 2. Check if item is a dataset
+            ds_name = self.resolve_dataset_name(item)
+            if ds_name and ds_name in self._datasets:
+                if ds_name not in seen:
+                    seen.add(ds_name)
+                    resolved.append(ds_name)
+                return
+
+            # 3. Support dynamic ad-hoc Datamaestro IDs (e.g. 'org.beir.scifact.test')
+            if "." in item:
+                dyn_name = item.split(".")[-1].replace("-", "_")
+                if dyn_name not in self._datasets:
+                    self.register_dataset(dyn_name, item)
+                if dyn_name not in seen:
+                    seen.add(dyn_name)
+                    resolved.append(dyn_name)
+                return
+
+            logger.warning(
+                f"Dataset or aggregation {item!r} not found in test registry"
+            )
+
+        for target in targets:
+            _resolve_item(target, set())
+
+        return resolved
+
+    def build_collection(
+        self,
+        targets: Union[str, list[str]],
+        test_topic_nb: int = 0,
+        retrievers_only: bool = False,
+        launcher: Optional[Launcher] = None,
+        blocking: Optional[bool] = None,
+        default_launcher: Optional[Launcher] = None,
+        long_launcher: Optional[Launcher] = None,
+        long_evals: Optional[list[str]] = None,
+        check_docs: bool = False,
+    ) -> EvaluationsCollection:
+        """Lazily build and return an EvaluationsCollection for ONLY the requested targets."""
+        dataset_names = self.resolve_names(targets)
+        evals_dict = {}
+
+        for name in dataset_names:
+            spec = self._datasets[name]
+            evals_dict[name] = spec.build(
+                test_topic_nb=test_topic_nb,
+                retrievers_only=retrievers_only,
+                launcher=launcher,
+                blocking=blocking,
+            )
+
+        if long_evals is None:
+            long_evals = ["fever", "msmarco", "hotpotqa"]
+
+        collection = EvaluationsCollection(
+            long_evals=long_evals,
+            long_launcher=long_launcher,
+            default_launcher=default_launcher or launcher,
+            **evals_dict,
+        )
+
+        if check_docs:
+            logger.info("Checking docs in datasets...")
+            check_datasets_docs(collection)
+
+        return collection
+
+    def get_display_aggregations(self) -> dict[str, list[str]]:
+        """Generate aggregations dictionary with display names for format.py and training_utils.py."""
+        res = {}
+        for agg_name, members in self._aggregations.items():
+            display = self._display_names.get(agg_name, agg_name)
+            res[display] = self.resolve_names(members)
+        return res
+
+
+# -----------------------------------------------------------------------------
+# Global Test Registry Initialization
+# -----------------------------------------------------------------------------
+
+test_registry = TestRegistry()
+
+# 1. Register all datasets from existing dictionaries
+test_registry.register_dict(
+    INDOMAIN_KEYS,
+    is_collection_fn=lambda name, dmid: "dev.small" in dmid,
+)
+test_registry.register_dict(BEIR_KEYS)
+test_registry.register_dict(BEIR13_DECONTAMINATED_KEYS, filter_unassessed=True)
+test_registry.register_dict(LOTTE_KEYS)
+test_registry.register_dict(NANO_BEIR_KEYS)
+test_registry.register_dict(
+    LIMIT_KEYS,
+    aliases_map={"limit_small": ["limit-small"]},
+)
+test_registry.register_dict(ROBUST04_KEYS)
+
+# 2. Register aggregations directly from the dictionary keys
+test_registry.register_aggregation(
+    "in_domain",
+    list(INDOMAIN_KEYS.keys()),
+    display_name="In Domain",
+)
+test_registry.register_aggregation(
+    "beir13",
+    list(BEIR_KEYS.keys()),
+    display_name="BEIR13",
+)
+test_registry.register_aggregation(
+    "beir13_decontaminated",
+    list(BEIR13_DECONTAMINATED_KEYS.keys()),
+    display_name="BEIR13 Decontaminated",
+)
+test_registry.register_aggregation(
+    "lotte",
+    list(LOTTE_KEYS.keys()),
+    display_name="Lotte-S",
+)
+test_registry.register_aggregation(
+    "nano_beir",
+    list(NANO_BEIR_KEYS.keys()),
+    display_name="Nano BEIR",
+)
+test_registry.register_aggregation(
+    "limit",
+    list(LIMIT_KEYS.keys()),
+    display_name="LIMIT",
+)
+test_registry.register_aggregation(
+    "robust04",
+    ["robust04"],
+    display_name="Robust04",
+)
+test_registry.register_aggregation(
+    "minified",
+    [
+        "msmarco_dev",
+        "trec2019",
+        "trec2020",
+        "scifact",
+        "touche",
+        "fiqa",
+        "nfcorpus",
+    ],
+    display_name="minified",
+)
+test_registry.register_aggregation(
+    "paper",
+    ["in_domain", "beir13", "robust04", "lotte"],
+    display_name="Paper Tests",
+)
+test_registry.register_aggregation(
+    "all_datasets",
+    ["beir13", "in_domain", "robust04", "lotte"],
+    display_name="All Datasets",
+)
+
+# Export aggregations dict for format.py / training_utils.py
+aggregations = test_registry.get_display_aggregations()
+aggregation_hf = {
+    "Mean In Domain": aggregations["In Domain"],
+    "BEIR 13": aggregations["BEIR13"],
+    "BEIR 13 (Decontaminated)": aggregations["BEIR13 Decontaminated"],
+    "LoTTE (OOD)": aggregations["Lotte-S"],
+    "Nano BEIR": aggregations["Nano BEIR"],
+    "LIMIT": aggregations["LIMIT"],
+}
+
+
+# -----------------------------------------------------------------------------
+# Backwards-Compatible Evaluation Helpers
+# -----------------------------------------------------------------------------
+
+
+def get_decontaminated_test(
+    key: str,
+    test_topic_nb: int,
+    retrievers_only: bool = False,
+    launcher=None,
+    blocking: Optional[bool] = None,
+) -> Evaluations:
+    """Build a single LightOn decontaminated BEIR dataset evaluation."""
+    spec = test_registry._datasets[key]
+    return spec.build(
+        test_topic_nb=test_topic_nb,
+        retrievers_only=retrievers_only,
+        launcher=launcher,
+        blocking=blocking,
+    )
+
+
+@lru_cache
+def minified_tests(
+    test_topic_nb: int,
+    check_docs: bool = True,
+    retrievers_only: bool = False,
+    launcher=None,
+    blocking: Optional[bool] = None,
+) -> EvaluationsCollection:
+    """Returns the pool of queries for the evaluations to use for testing."""
+    return test_registry.build_collection(
+        "minified",
+        test_topic_nb=test_topic_nb,
+        retrievers_only=retrievers_only,
+        launcher=launcher,
+        blocking=blocking,
+        check_docs=check_docs,
+    )
+
+
+@lru_cache
+def BEIR_13_tests(
+    test_topic_nb: int,
+    retrievers_only: bool = False,
+    launcher=None,
+    blocking: Optional[bool] = None,
+) -> EvaluationsCollection:
+    """All of BEIR (minus the 5 datasets not publicly available)"""
+    return test_registry.build_collection(
+        "beir13",
+        test_topic_nb=test_topic_nb,
+        retrievers_only=retrievers_only,
+        launcher=launcher,
+        blocking=blocking,
+    )
+
+
+@lru_cache
+def BEIR13_decontaminated_tests(
+    test_topic_nb: int,
+    retrievers_only: bool = False,
+    launcher=None,
+    blocking: Optional[bool] = None,
+) -> EvaluationsCollection:
+    """All 13 LightOn decontaminated BEIR datasets."""
+    return test_registry.build_collection(
+        "beir13_decontaminated",
+        test_topic_nb=test_topic_nb,
+        retrievers_only=retrievers_only,
+        launcher=launcher,
+        blocking=blocking,
+    )
+
+
+@lru_cache
+def Robust04_test(
+    test_topic_nb: int,
+    retrievers_only: bool = False,
+    launcher=None,
+    blocking: Optional[bool] = None,
+) -> EvaluationsCollection:
+    """Robust04 dataset"""
+    return test_registry.build_collection(
+        "robust04",
+        test_topic_nb=test_topic_nb,
+        retrievers_only=retrievers_only,
+        launcher=launcher,
+        blocking=blocking,
+    )
+
+
+@lru_cache
+def LoTTE_tests(
+    test_topic_nb: int,
+    retrievers_only: bool = False,
+    launcher=None,
+    blocking: Optional[bool] = None,
+) -> EvaluationsCollection:
+    """LoTTE Search dataset"""
+    return test_registry.build_collection(
+        "lotte",
+        test_topic_nb=test_topic_nb,
+        retrievers_only=retrievers_only,
+        launcher=launcher,
+        blocking=blocking,
+    )
 
 
 @lru_cache
@@ -482,16 +703,13 @@ def nano_beir_tests(
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
     """NanoBEIR datasets"""
-
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-    evals = {}
-    for key, dataset_id in NANO_BEIR_KEYS.items():
-        # Map back to the dataset name (e.g., nano_arguana -> arguana)
-        ds = prepare_dataset(dataset_id, download=blocking)
-        ds = get_fold(ds, test_topic_nb, launcher=launcher)
-        evals[key] = Evaluations(ds, measures=measures)
-
-    return EvaluationsCollection(**evals)
+    return test_registry.build_collection(
+        "nano_beir",
+        test_topic_nb=test_topic_nb,
+        retrievers_only=retrievers_only,
+        launcher=launcher,
+        blocking=blocking,
+    )
 
 
 @lru_cache
@@ -502,14 +720,13 @@ def limit_tests(
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
     """LIMIT theoretical stress-test benchmarks (full 50k and small 46 docs)."""
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-    evals = {}
-    for name in ["limit", "limit_small"]:
-        ds = prepare_dataset(f"co.huggingface.{name}", download=blocking)
-        ds = get_fold(ds, test_topic_nb, launcher=launcher)
-        evals[name] = Evaluations(ds, measures=measures)
-
-    return EvaluationsCollection(**evals)
+    return test_registry.build_collection(
+        "limit",
+        test_topic_nb=test_topic_nb,
+        retrievers_only=retrievers_only,
+        launcher=launcher,
+        blocking=blocking,
+    )
 
 
 @lru_cache
@@ -521,61 +738,19 @@ def paper_tests(
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
     """Returns the pool of queries for the evaluations to include in the paper."""
-
-    # In domain - MS Marco + TREC DL
-    v1_dev = prepare_collection(
-        "com.microsoft.msmarco.passage.dev.small", download=blocking
-    )
-    dl19 = prepare_dataset(
-        "com.microsoft.msmarco.passage.trec2019.judged", download=blocking
-    )
-    dl20 = prepare_dataset(
-        "com.microsoft.msmarco.passage.trec2020.judged", download=blocking
-    )
-
-    v1_dev = get_fold(v1_dev, test_topic_nb, launcher=launcher)
-    dl19 = get_fold(dl19, test_topic_nb, launcher=launcher)
-    dl20 = get_fold(dl20, test_topic_nb, launcher=launcher)
-
-    # Out of domain - BEIR
-    beir = BEIR_13_tests(
-        test_topic_nb,
+    return test_registry.build_collection(
+        "paper",
+        test_topic_nb=test_topic_nb,
         retrievers_only=retrievers_only,
         launcher=launcher,
         blocking=blocking,
-    )
-    robust04 = Robust04_test(
-        test_topic_nb,
-        retrievers_only=retrievers_only,
-        launcher=launcher,
-        blocking=blocking,
-    )
-    lotte = LoTTE_tests(
-        test_topic_nb,
-        retrievers_only=retrievers_only,
-        launcher=launcher,
-        blocking=blocking,
+        check_docs=check_docs,
     )
 
-    paper_tests_res = EvaluationsCollection(
-        msmarco_dev=Evaluations(
-            v1_dev, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-        trec2019=Evaluations(
-            dl19, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-        trec2020=Evaluations(
-            dl20, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-        **beir.collection,
-        **robust04.collection,
-        **lotte.collection,
-    )
 
-    if check_docs:
-        logger.info("Checking docs in datasets...")
-        check_datasets_docs(paper_tests_res)
-    return paper_tests_res
+# -----------------------------------------------------------------------------
+# Main Test Builder Function
+# -----------------------------------------------------------------------------
 
 
 def build_tests(
@@ -589,180 +764,56 @@ def build_tests(
     long_evals: Optional[List[str]] = None,
 ) -> EvaluationsCollection:
     """Build the tests to use for evaluation during training or at the end of it.
-    :param cfg: Configuration for the evaluation
-    :param check_docs: Whether to check that documents are accessible (triggers downloads if needed)
-    :returns: The evaluations collection to use
+
+    Supports:
+    - Suite selection via flags (`in_domain`, `beir13`, `nanobeir`, `lotte_search`, `limit`, etc.)
+    - Cherry-picking specific datasets or aggregations via `cfg.datasets`
+    - Lazy loading: only the resolved datasets are instantiated
     """
-    all_evals = {}
+    targets = []
 
-    # Helper to add evals to the dictionary
-    def add_evals(evals_collection: EvaluationsCollection):
-        for name, evals in evals_collection.collection.items():
-            if name not in all_evals:
-                all_evals[name] = evals
-
-    # 2. In-domain (MSMarco + TREC DL)
-    if cfg.in_domain or cfg.all_datasets:
-        v1_dev = prepare_collection(
-            "com.microsoft.msmarco.passage.dev.small", download=blocking
-        )
-        dl19 = prepare_dataset(
-            "com.microsoft.msmarco.passage.trec2019.judged", download=blocking
-        )
-        dl20 = prepare_dataset(
-            "com.microsoft.msmarco.passage.trec2020.judged", download=blocking
-        )
-
-        v1_dev = get_fold(v1_dev, cfg.test_max_topics, launcher=launcher)
-        dl19 = get_fold(dl19, cfg.test_max_topics, launcher=launcher)
-        dl20 = get_fold(dl20, cfg.test_max_topics, launcher=launcher)
-
-        measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        add_evals(
-            EvaluationsCollection(
-                msmarco_dev=Evaluations(v1_dev, measures),
-                trec2019=Evaluations(dl19, measures),
-                trec2020=Evaluations(dl20, measures),
-            )
-        )
-
-    # 3. BEIR13 (All of it)
-    if cfg.beir13 or cfg.all_datasets:
-        add_evals(
-            BEIR_13_tests(
-                cfg.test_max_topics,
-                retrievers_only=retrievers_only,
-                launcher=launcher,
-                blocking=blocking,
-            )
-        )
-
-    # 3b. BEIR13 Decontaminated
+    # 1. Collect from boolean flags
+    if cfg.in_domain:
+        targets.append("in_domain")
+    if cfg.beir13:
+        targets.append("beir13")
     if cfg.beir13_decontaminated:
-        add_evals(
-            BEIR13_decontaminated_tests(
-                cfg.test_max_topics,
-                retrievers_only=retrievers_only,
-                launcher=launcher,
-                blocking=blocking,
-            )
-        )
-
-    if cfg.robust04 or cfg.all_datasets:
-        add_evals(
-            Robust04_test(
-                cfg.test_max_topics,
-                retrievers_only=retrievers_only,
-                launcher=launcher,
-                blocking=blocking,
-            )
-        )
-
-    if cfg.lotte_search or cfg.all_datasets:
-        add_evals(
-            LoTTE_tests(
-                cfg.test_max_topics,
-                retrievers_only=retrievers_only,
-                launcher=launcher,
-                blocking=blocking,
-            )
-        )
-
-    # 1. NanoBEIR
+        targets.append("beir13_decontaminated")
+    if cfg.robust04:
+        targets.append("robust04")
+    if cfg.lotte_search:
+        targets.append("lotte")
     if cfg.nanobeir:
-        add_evals(
-            nano_beir_tests(
-                cfg.test_max_topics,
-                retrievers_only=retrievers_only,
-                launcher=launcher,
-                blocking=blocking,
-            )
-        )
-    # 4. Filter or add specific datasets if provided
+        targets.append("nano_beir")
+    if cfg.limit:
+        targets.append("limit")
+    if cfg.all_datasets:
+        targets.append("all_datasets")
+
+    # 2. Collect cherry-picked datasets or aggregation names
     if cfg.datasets:
-        beir13_all = None
-        for ds_name in cfg.datasets:
-            if ds_name in all_evals:
-                continue
+        targets.extend(cfg.datasets)
 
-            if ds_name in BEIR13_DECONTAMINATED_KEYS:
-                all_evals[ds_name] = get_decontaminated_test(
-                    ds_name,
-                    cfg.test_max_topics,
-                    retrievers_only=retrievers_only,
-                    launcher=launcher,
-                    blocking=blocking,
-                )
-            elif ds_name in BEIR_KEYS:
-                if beir13_all is None:
-                    beir13_all = BEIR_13_tests(
-                        cfg.test_max_topics,
-                        retrievers_only=retrievers_only,
-                        launcher=launcher,
-                        blocking=blocking,
-                    )
-                all_evals[ds_name] = beir13_all.collection[ds_name]
-            elif ds_name in INDOMAIN_KEYS:
-                ds_id = INDOMAIN_KEYS[ds_name]
-                if "dev.small" in ds_id:
-                    ds = prepare_collection(ds_id, download=blocking)
-                else:
-                    ds = prepare_dataset(ds_id, download=blocking)
-                ds = get_fold(ds, cfg.test_max_topics, launcher=launcher)
-                measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-                all_evals[ds_name] = Evaluations(ds, measures=measures)
-            elif ds_name in NANO_BEIR_KEYS:
-                nano_all = nano_beir_tests(
-                    cfg.test_max_topics,
-                    retrievers_only=retrievers_only,
-                    launcher=launcher,
-                    blocking=blocking,
-                )
-                all_evals[ds_name] = nano_all.collection[ds_name]
-            elif ds_name in LOTTE_KEYS:
-                lotte_all = LoTTE_tests(
-                    cfg.test_max_topics,
-                    retrievers_only=retrievers_only,
-                    launcher=launcher,
-                    blocking=blocking,
-                )
-                all_evals[ds_name] = lotte_all.collection[ds_name]
-            elif ds_name == "robust04":
-                rob_all = Robust04_test(
-                    cfg.test_max_topics,
-                    retrievers_only=retrievers_only,
-                    launcher=launcher,
-                    blocking=blocking,
-                )
-                all_evals[ds_name] = rob_all.collection["robust04"]
-            else:
-                logger.warning(f"Dataset {ds_name} not found in supported dataset list")
+    # 3. Default fallback if nothing was selected
+    if not targets:
+        targets = ["minified"]
 
-    # If nothing was selected, use minified_tests as default (original behavior)
-    if not all_evals and not cfg.all_datasets:
-        return minified_tests(
-            cfg.test_max_topics,
-            check_docs=check_docs,
-            retrievers_only=retrievers_only,
-            launcher=launcher,
-            blocking=blocking,
-        )
-
-    if long_evals is None:
-        long_evals = ["fever", "msmarco", "hotpotqa"]
-
-    tests = EvaluationsCollection(
-        long_evals=long_evals,
+    return test_registry.build_collection(
+        targets=targets,
+        test_topic_nb=cfg.test_max_topics,
+        retrievers_only=retrievers_only,
+        launcher=launcher,
+        blocking=blocking,
+        default_launcher=default_launcher,
         long_launcher=long_launcher,
-        default_launcher=default_launcher or launcher,
-        **all_evals,
+        long_evals=long_evals,
+        check_docs=check_docs,
     )
 
-    if check_docs:
-        logger.info("Checking docs in datasets...")
-        check_datasets_docs(tests)
 
-    return tests
+# -----------------------------------------------------------------------------
+# Utilities
+# -----------------------------------------------------------------------------
 
 
 def get_max_query_length(
@@ -780,13 +831,12 @@ def get_max_query_length(
         - 'sample': a random query from the dataset
         - 'sample_len': the token length of the sample
     """
-    from xpmir.text.huggingface.tokenizers import HFTokenizer
-    from datamaestro import prepare_dataset
     import random
+    from datamaestro import prepare_dataset
+    from xpmir.text.huggingface.tokenizers import HFTokenizer
 
     res = {}
 
-    # Get the underlying transformers tokenizer
     if isinstance(tokenizer, HFTokenizer):
         if not hasattr(tokenizer, "tokenizer"):
             tokenizer.__initialize__()
@@ -794,7 +844,6 @@ def get_max_query_length(
     else:
         hf_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
 
-    # Normalize datasets to a dictionary of dataset objects
     dataset_dict = {}
     if isinstance(datasets, EvaluationsCollection):
         for name, evals in datasets.collection.items():
@@ -803,12 +852,10 @@ def get_max_query_length(
         dataset_dict[datasets] = prepare_dataset(datasets)
     elif isinstance(datasets, list):
         for ds_id in datasets:
-            # For list of strings, use the ID as name
             dataset_dict[ds_id] = prepare_dataset(ds_id)
 
     for name, dataset in dataset_dict.items():
         try:
-            # Try different ways to iterate topics
             if hasattr(dataset, "topics") and hasattr(dataset.topics, "iter_topics"):
                 topics = dataset.topics.iter_topics()
             elif hasattr(dataset, "topics") and hasattr(dataset.topics, "instance"):
@@ -826,13 +873,11 @@ def get_max_query_length(
             res[name] = {"max_len": 0, "sample": "", "sample_len": 0}
             continue
 
-        # Tokenize all queries and find the maximum length
         lengths = [
             len(hf_tokenizer.encode(q, add_special_tokens=False))
             for q in unique_queries
         ]
 
-        # Pick a random sample
         sample_query = random.choice(unique_queries)
         sample_len = len(hf_tokenizer.encode(sample_query, add_special_tokens=False))
 

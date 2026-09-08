@@ -131,10 +131,10 @@ class UtilityPredictor(nn.Module):
 
     def _init_weights(self):
         # 1. Initialize wi with standard small weights
-        nn.init.normal_(self.wi.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.wi.weight, mean=0.0)
 
         # 2. Keep the output weights very small so input variance doesn't overpower the bias
-        nn.init.normal_(self.wo.weight, mean=0.0, std=0.01)
+        nn.init.normal_(self.wo.weight, mean=0.0)
 
         # 3. Set the bias to a high positive scalar.
         # logit = 5.0 -> sigmoid(5.0) = 0.9933 (keeps ~99% of utility)

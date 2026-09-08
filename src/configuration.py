@@ -150,6 +150,9 @@ class Evaluation:
     nanobeir: bool = False
     """Whether to evaluate on NanoBEIR datasets"""
 
+    limit: bool = False
+    """Whether to evaluate on LIMIT theoretical stress-test benchmarks"""
+
     eval_checkpoint: Union[
         List[Union[CheckpointSelection, int, str]], CheckpointSelection, int, str
     ] = CheckpointSelection.LAST
