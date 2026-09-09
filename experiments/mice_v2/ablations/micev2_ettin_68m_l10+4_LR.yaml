@@ -25,5 +25,5 @@ grid_search:
     learner.optimization.lr:
         - 1e-5
         - 3e-5 # tom's value
-        - 7e-5
+        - 7e-5 # best value for Mice-Ettin-68m (v1)
         - 1e-4

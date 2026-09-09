@@ -62,9 +62,11 @@ grid_search:
         #Test pushing the frontier down
         - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp, utility_bias: 5.0} # -- too weak, not learned
         - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp, utility_bias: 1.0} #
-        - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp, utility_bias: 0.0} #
+        - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp, utility_bias: 0.0} # too low even if don't degenerate, not learned
         - {lambda_reg: 0.1, temp_end: 0.01, temp_schedule: cosine, utility_bias: 1.0} #
         - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: cosine, utility_bias: 1.0} #
+        - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: cosine, utility_bias: 3.0} #
+        - {lambda_reg: 0.1, temp_end: 0.1, temp_schedule: exp, utility_bias: 3.0} #
 
         # benchmarking the effect of scheduling
         - {lambda_reg: 0.3, temp_end: 0.1, temp_schedule: cosine, utility_bias: 1.0} # cosine schedule, lower utility bias

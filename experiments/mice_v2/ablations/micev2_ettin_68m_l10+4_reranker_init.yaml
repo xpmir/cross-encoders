@@ -1,0 +1,26 @@
+id: train_micev2_ettin68m_l10+4_abl_reranker_init
+title: "Mice-Ettin-68m Reranker Initialization Ablation"
+description:
+    Ablating reranker initialization
+
+module: MICE.experiments.micev2_training
+parent: ../_ettin68m_abl.yaml
+nb_repetitions: 2
+
+
+top_layers_doc_ln: true # default false, best is true
+bottom_final_norm: false # default true, best is false
+top_final_norm: false # default false, best false
+normalize_doc_embeds: true # needed for plaid
+
+# Eval only on BEIR
+evaluation: #default = Minified tests
+    eval_checkpoint: "last"
+    all_datasets: false
+    in_domain: true
+    beir13: true
+
+grid_search:
+    base:
+        - cross-encoder/ettin-reranker-68m-v1
+        - jhu-clsp/ettin-encoder-68m

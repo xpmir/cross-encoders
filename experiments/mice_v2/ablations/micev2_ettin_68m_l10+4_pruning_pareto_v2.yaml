@@ -1,0 +1,56 @@
+id: train_micev2_ettin68m_l10+4_abl_pruning_pareto_v2
+title: "Mice-Ettin-68m Bottom LayerNorm Ablation"
+description:
+    Keeps the best choices from budget and schedule, and find the pareto optimal regularization for pruning
+
+
+module: MICE.experiments.micev2_training
+parent: ../_ettin68m_abl.yaml
+nb_repetitions: 2
+export_trained_models: false
+
+base: cross-encoder/ettin-reranker-68m-v1
+
+# This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
+learner:
+    optimization:
+        max_epochs: 2000 #  x 256 x 100 = ??M Samples < 145M in full dataset
+        lr: 7e-5 # best value for Mice-Ettin-68m (v1)
+    requirements: duration=10h & cpu(cores=16) & cuda(mem=80G)*2 # H100
+
+
+top_layers_doc_ln: true
+bottom_final_norm: false
+normalize_doc_embeds: true
+
+# Test Utility Soft Gating & Phase 2 Hard Token Pruning
+utility_pred: true
+hard_prune_threshold: 0.1
+phase2_training: true
+phase2_max_epochs: 1000
+eval_phase_1: false
+
+
+# Eval only on BEIR
+eval_sparsity: true
+evaluation: #default = Minified tests
+    eval_checkpoint: "last"
+    all_datasets: false
+    in_domain: false
+    beir13: true
+
+#best values from v1
+reg_target: u
+l2_reg: false
+lambda_reg:
+    - 0.1
+    - 0.3
+    - 0.5
+    - 0.7
+    - 1.0
+
+# Utility schedule - Best settings from xp_pareto_v1
+temp_schedule: exp
+temp_start: 1.0
+temp_end: 0.1
+utility_bias: 3.0

@@ -6,7 +6,7 @@ description:
 module: MICE.experiments.micev2_training
 parent: ../_ettin68m_abl.yaml
 nb_repetitions: 2
-
+export_trained_models: false
 
 top_layers_doc_ln: true # default false, best is true
 bottom_final_norm: false # default true, best is false
@@ -20,5 +20,5 @@ n_contextualization_layers:
 evaluation: #default = Minified tests
     eval_checkpoint: "last"
     all_datasets: false
-    in_domain: true
+    in_domain: false
     beir13: false

@@ -23,4 +23,4 @@ evaluation: #default = Minified tests
     eval_checkpoint: "last"
     all_datasets: false
     in_domain: true
-    beir13: false
+    beir13: true
