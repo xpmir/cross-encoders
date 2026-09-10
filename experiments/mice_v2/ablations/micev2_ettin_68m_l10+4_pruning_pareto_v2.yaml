@@ -54,3 +54,8 @@ temp_schedule: exp
 temp_start: 1.0
 temp_end: 0.1
 utility_bias: 3.0
+
+
+grid_search:
+    config_dicts:
+        - {lambda_reg: 5e-1, temp_end: null} # baseline -> degenerates
