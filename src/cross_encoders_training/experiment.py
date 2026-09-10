@@ -30,7 +30,7 @@ from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
-from configuration import CE_FineTuning, CheckpointSelection
+from configuration import CE_FineTuning, CheckpointSelection, ScorerType
 from tests import build_tests
 from format import loss_names, backbone_names_lower
 
@@ -42,7 +42,11 @@ from training_utils import (
 
 from typing import Optional
 from experimaestro import LightweightTask, Param
-from xpmir.neural.sentence_transformers import STCrossEncoder
+from xpmir.neural.sentence_transformers import (
+    STCrossEncoder,
+    STMultiVectorEncoder,
+    st_multivector_scorer,
+)
 from sentence_transformers import CrossEncoder
 from sentence_transformers.cross_encoder import CrossEncoderModelCardData
 from sentence_transformers.models import Transformer, Pooling, Dense, LayerNorm
@@ -134,6 +138,26 @@ def build_STCrossEncoder(cfg) -> tuple[STCrossEncoder, list]:
     return scorer, [init_task]
 
 
+def build_STMultiVectorEncoder(cfg) -> tuple[STMultiVectorEncoder, list]:
+    """Helper factory to build the STMultiVectorEncoder."""
+    attn_impl = getattr(cfg, "pref_attn_implementation", None)
+    dim = getattr(cfg.plaid, "dim", 128) if hasattr(cfg, "plaid") else 128
+    query_maxlen = getattr(cfg, "max_query_length", None) or 32
+    doc_maxlen = (
+        getattr(cfg, "max_doc_length", None) or getattr(cfg, "max_length", None) or 180
+    )
+
+    scorer = st_multivector_scorer(
+        model_id=cfg.base,
+        dim=dim,
+        query_maxlen=query_maxlen,
+        doc_maxlen=doc_maxlen,
+        pref_attn_implementation=attn_impl,
+        similarity_fn_name="maxsim",
+    )
+    return scorer, []
+
+
 def get_ce_name(model_tags: dict) -> str:
     """Creates the HF id from tags using formatting conventions."""
     loss = model_tags.get("loss", "")
@@ -150,7 +174,13 @@ def get_ce_name(model_tags: dict) -> str:
         extra_parts.append(str(model_tags["checkpoint"]))
 
     extra = f"-{'-'.join(extra_parts)}" if extra_parts else ""
-    return f"cross-encoder-{base}{loss}{extra}"
+    scorer_type = model_tags.get("scorer_type", ScorerType.stCrossEncoder.value)
+    prefix = (
+        "colbert"
+        if scorer_type == ScorerType.stMultiVectorEncoder.value
+        else "cross-encoder"
+    )
+    return f"{prefix}-{base}{loss}{extra}"
 
 
 @learning_experiment()
@@ -277,15 +307,23 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
             hooks.append(gradient_clipping_hook)
 
         # Build the model
-        if cfg.use_st_scorer:
+        scorer_type = ScorerType(cfg.scorer_type)
+        if scorer_type == ScorerType.stCrossEncoder:
             scorer_model, scorer_hf_init_tasks = build_STCrossEncoder(cfg)
-        else:
+        elif scorer_type == ScorerType.stMultiVectorEncoder:
+            scorer_model, scorer_hf_init_tasks = build_STMultiVectorEncoder(cfg)
+        elif scorer_type == ScorerType.hfCrossScorer:
             scorer_model, scorer_hf_init_tasks = hf_cross_scorer(
                 hf_id=cfg.base,
                 max_length=cfg.max_length,
                 max_query_length=cfg.max_query_length,
                 max_doc_length=cfg.max_doc_length,
                 pref_attn_implementation=getattr(cfg, "pref_attn_implementation", None),
+            )
+        else:
+            raise ValueError(
+                f"Unknown scorer_type: '{cfg.scorer_type}'. "
+                f"Expected one of {[e.value for e in ScorerType]}"
             )
 
         for k, v in cfg_tags.items():

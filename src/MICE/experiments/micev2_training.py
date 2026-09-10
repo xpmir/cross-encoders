@@ -713,12 +713,14 @@ def TrainEvaluateMiceV2(
         # Update cfg_tags with base if not present
         if "base" not in cfg_tags:
             cfg_tags["base"] = config.base
+        for k, v in cfg_tags.items():
+            cfg_tags[k] = str(v)  # ensure cfg_tags has all keys from config
         # just run the config
         tagspath = "_".join(f"{k}={v}" for k, v in cfg_tags.items())
-        config_map[frozenset(cfg_tags.items())] = config
         logging.info(
             f"Running config with tags:\n- {'\n- '.join(f'{k}: {v}' for k, v in cfg_tags.items())}"
         )
+        config_map[frozenset(cfg_tags.items())] = config
 
         prepare_hf_model(config.base)
 

@@ -57,7 +57,7 @@ ettin_subset_exclude:
   - rerank_nq
 
 retriever: "naver/splade-v3-distilbert" #BM25
-use_st_scorer: false # Use HFCrossScorer instead of STCrossEncoder
+scorer_type: hfCrossScorer # Use HFCrossScorer instead of STCrossEncoder
 
 
 preprocessing:

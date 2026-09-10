@@ -7,9 +7,9 @@ description:
 module: cross_encoders_training.experiment
 parent: ./ettin_68m.yaml
 
-use_st_scorer:
-    - true # baseline: Use STCrossEncoder instead of HFCrossScorer
-    - false # Use HFCrossScorer instead of STCrossEncoder
+scorer_type:
+    - stCrossEncoder # baseline: Use STCrossEncoder
+    - hfCrossScorer # Use HFCrossScorer
 
 
 evaluation: #default = Minified tests

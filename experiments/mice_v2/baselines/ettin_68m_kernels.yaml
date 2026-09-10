@@ -11,7 +11,7 @@ nb_repetitions: 2
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 retriever: "naver/splade-v3-distilbert" #BM25
-use_st_scorer: true # Use HFCrossScorer instead of STCrossEncoder
+scorer_type: stCrossEncoder
 base: jhu-clsp/ettin-encoder-68m
 max_length: 1024
 

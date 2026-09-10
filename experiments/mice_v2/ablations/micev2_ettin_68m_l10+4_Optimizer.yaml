@@ -1,0 +1,20 @@
+id: train_micev2_ettin68m_l10+4_abl_LR
+title: "Mice-Ettin-68m Baseline"
+description:
+    Check Legacy optimizer vs proper weight decay ignore for LN paramers
+
+module: MICE.experiments.micev2_training
+parent: ./micev2_ettin_68m_l10+4_ablations.yaml
+nb_repetitions: 2
+
+
+evaluation: #all false = Minified tests
+    eval_checkpoint: "last"
+    all_datasets: false
+    in_domain: false
+    beir13: true
+
+grid_search:
+    learner.optimization.re_no_l2_regularization:
+        - ['\.bias$', '\.LayerNorm\.'] # Default value from _common.yaml
+        - ['\.bias$', '(?i)norm' ]

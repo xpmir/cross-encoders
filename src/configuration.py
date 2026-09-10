@@ -64,6 +64,14 @@ class PoolingMethod(str, Enum):
     """Mean pooling"""
 
 
+class ScorerType(str, Enum):
+    """Supported neural scorer architectures."""
+
+    stCrossEncoder = "stCrossEncoder"
+    stMultiVectorEncoder = "stMultiVectorEncoder"
+    hfCrossScorer = "hfCrossScorer"
+
+
 class Validation(str, Enum):
     """Possible validation subsets"""
 
@@ -294,8 +302,8 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     pref_attn_implementation: Optional[str] = field(default=None)
     """Attention implementation for HuggingFace models (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
 
-    use_st_scorer: GridSearch[bool] = field(default=True)
-    """Use sentence-transformers STCrossEncoder instead of HFCrossScorer"""
+    scorer_type: GridSearch[str] = ScorerType.stCrossEncoder.value
+    """Type of scorer model: stCrossEncoder, stMultiVectorEncoder, or hfCrossScorer"""
 
     ettin_subset_exclude: List[str] = field(factory=list)
     """The subset config names of cross_encoder.ettin_reranker_v1_data to exclude from training"""

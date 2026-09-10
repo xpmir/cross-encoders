@@ -42,20 +42,24 @@ evaluation: #default = Minified tests
 #best values from v1
 reg_target: u
 l2_reg: false
-lambda_reg:
-    - 0.1
-    - 0.3
-    - 0.5
-    - 0.7
-    - 1.0
 
 # Utility schedule - Best settings from xp_pareto_v1
 temp_schedule: exp
 temp_start: 1.0
-temp_end: 0.1
 utility_bias: 3.0
+temp_end: 0.1
 
 
 grid_search:
     config_dicts:
-        - {lambda_reg: 5e-1, temp_end: null} # baseline -> degenerates
+        - {lambda_reg: 0.1, temp_end: 0.1}
+        - {lambda_reg: 0.1, temp_end: 0.05}
+        - {lambda_reg: 0.1, temp_end: 0.01}
+        - {lambda_reg: 0.3, temp_end: 0.1}
+        - {lambda_reg: 0.5, temp_end: 0.1}
+        - {lambda_reg: 0.5, temp_end: 0.05} # -> better ?
+        - {lambda_reg: 0.5, temp_end: 0.01} # -> better ?
+
+        #degenerates..
+        - {lambda_reg: 0.7, temp_end: 0.1}
+        - {lambda_reg: 1.0, temp_end: 0.1}
