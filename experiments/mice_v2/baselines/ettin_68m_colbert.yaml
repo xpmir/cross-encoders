@@ -25,7 +25,9 @@ scorer_type:
     - stCrossEncoder
 
 #override _common.yaml
-max_len: null
+max_length: null
+max_query_length: 32
+max_doc_length: 512
 
 evaluation: #default = Minified tests
     all_datasets: false

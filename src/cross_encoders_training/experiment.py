@@ -30,7 +30,7 @@ from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
 from retrievers import splade_retriever, bm25_retriever
 from validations import ValidationSet
-from configuration import CE_FineTuning, CheckpointSelection, ScorerType
+from configuration import CE_FineTuning, CheckpointSelection, ScorerType, Losses
 from tests import build_tests
 from format import loss_names, backbone_names_lower
 
@@ -55,6 +55,8 @@ from torch import nn
 from logging_utils import setup_logging
 
 setup_logging(level=logging.INFO)
+
+logger = logging.getLogger(__name__)
 
 
 class InitDistilledSTCrossEncoder(LightweightTask):
@@ -143,9 +145,25 @@ def build_STMultiVectorEncoder(cfg) -> tuple[STMultiVectorEncoder, list]:
     attn_impl = getattr(cfg, "pref_attn_implementation", None)
     dim = getattr(cfg.plaid, "dim", 128) if hasattr(cfg, "plaid") else 128
     query_maxlen = getattr(cfg, "max_query_length", None) or 32
+    if query_maxlen > 128:
+        logger.warning(
+            f"max_query_length {query_maxlen} is unusually large for multi-vector encoder (ColBERT queries are typically 32 tokens). Clamping to 32."
+        )
+        query_maxlen = 32
+
     doc_maxlen = (
-        getattr(cfg, "max_doc_length", None) or getattr(cfg, "max_length", None) or 180
+        getattr(cfg, "max_doc_length", None) or getattr(cfg, "max_length", None) or 300
     )
+    if doc_maxlen > 512:
+        logger.warning(
+            f"max_doc_length {doc_maxlen} is unusually large for multi-vector encoder passages. Clamping to 300."
+        )
+        doc_maxlen = 512
+
+    loss_val = getattr(cfg.learner, "loss", None) if hasattr(cfg, "learner") else None
+    if isinstance(loss_val, Losses):
+        loss_val = loss_val.value
+    affine_scaling = loss_val == Losses.MSE_mixedbread_large.value
 
     scorer = st_multivector_scorer(
         model_id=cfg.base,
@@ -154,6 +172,8 @@ def build_STMultiVectorEncoder(cfg) -> tuple[STMultiVectorEncoder, list]:
         doc_maxlen=doc_maxlen,
         pref_attn_implementation=attn_impl,
         similarity_fn_name="maxsim",
+        affine_scaling=affine_scaling,
+        query_expansion=None,
     )
     return scorer, []
 
