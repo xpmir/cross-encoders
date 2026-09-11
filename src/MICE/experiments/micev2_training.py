@@ -149,6 +149,12 @@ class MiceV2_FineTuning(CE_FineTuning):
     eval_sparsity: bool = False
     """Whether to compute token sparsity, mean utility, and token retention ratio during evaluation benchmarks"""
 
+    query_prompt: GridSearch[Optional[str]] = None
+    """Optional query prompt template or prefix (e.g. '[Q] ' or 'query: ')"""
+
+    doc_prompt: GridSearch[Optional[str]] = None
+    """Optional document prompt template or prefix (e.g. '[D] ' or 'passage: ')"""
+
 
 def build_mice_v2(
     cfg: MiceV2_FineTuning,
@@ -185,6 +191,8 @@ def build_mice_v2(
         max_length=max_len,
         max_query_length=cfg.max_query_length,
         max_doc_length=cfg.max_doc_length,
+        query_prompt=cfg.query_prompt,
+        doc_prompt=cfg.doc_prompt,
     )
 
     if phase_2:

@@ -96,6 +96,12 @@ class Mice_FineTuning(CE_FineTuning):
     compress_dim: GridSearch[float] = 1.0
     """Factor by which to divide the hidden dimensions of the top layers"""
 
+    query_prompt: GridSearch[Optional[str]] = None
+    """Optional query prompt template or prefix (e.g. '[Q] ' or 'query: ')"""
+
+    doc_prompt: GridSearch[Optional[str]] = None
+    """Optional document prompt template or prefix (e.g. '[D] ' or 'passage: ')"""
+
 
 def build_mice(cfg: Mice_FineTuning) -> Tuple[MiceCrossEncoder, List[LightweightTask]]:
     """Build the MICE model using the unified scorer factory."""
@@ -127,6 +133,8 @@ def build_mice(cfg: Mice_FineTuning) -> Tuple[MiceCrossEncoder, List[Lightweight
         max_length=max_len,
         max_query_length=cfg.max_query_length,
         max_doc_length=cfg.max_doc_length,
+        query_prompt=cfg.query_prompt,
+        doc_prompt=cfg.doc_prompt,
     )
 
 

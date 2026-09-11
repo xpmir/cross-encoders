@@ -1,6 +1,8 @@
 from enum import Enum
 from copy import deepcopy
-from typing import List, Tuple, Optional, NamedTuple, Union
+from typing import List, Tuple, Optional, NamedTuple, Union, Dict
+import json
+import os
 from datamaestro_ir.data.base import IDTextRecord
 import torch
 import torch.nn as nn
@@ -142,12 +144,165 @@ class MICEQueryDocTokenizer(HFTokenizer):
     max_doc_length: Param[Optional[int]]
     """maximum number of tokens for the document side"""
 
+    query_prompt: Param[Optional[str]] = field(default=None, ignore_default=True)
+    """Optional prompt template/prefix for queries (e.g. '[Q] ' or 'query: {text}')"""
+
+    doc_prompt: Param[Optional[str]] = field(default=None, ignore_default=True)
+    """Optional prompt template/prefix for documents (e.g. '[D] ' or 'passage: {text}')"""
+
     def __post_init__(self):
+        if (
+            self.max_length is None
+            and self.model_id
+            and os.path.exists(str(self.model_id))
+        ):
+            cfg_file = Path(self.model_id) / "config.json"
+            if cfg_file.is_file():
+                try:
+                    with open(cfg_file, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                    self.max_length = cfg.get("max_position_embeddings", 512)
+                except Exception:
+                    self.max_length = 512
+            else:
+                self.max_length = 512
         super().__post_init__()
         if self.max_doc_length is None:
             self.max_doc_length = self.max_length
         if self.max_query_length is None:
             self.max_query_length = self.max_length
+
+    @property
+    def prompts(self) -> Dict[str, str]:
+        """Dictionary of configured prompts (for SentenceTransformers compatibility)."""
+        p = {}
+        if self.query_prompt is not None:
+            p["query"] = self.query_prompt
+        if self.doc_prompt is not None:
+            p["document"] = self.doc_prompt
+        return p
+
+    def resolve_prompt(
+        self, prompt: Optional[str] = None, task: str = "query"
+    ) -> Optional[str]:
+        """Resolve prompt string, falling back to task-specific configured prompt."""
+        if prompt is not None:
+            return prompt
+        if task == "query":
+            return self.query_prompt
+        if task in ("document", "passage", "corpus"):
+            return self.doc_prompt
+        return None
+
+    @staticmethod
+    def format_prompt(prompt: Optional[str], text: str, task: str = "") -> str:
+        """Apply a prompt prefix or format template to a text."""
+        if not prompt:
+            return text
+        if "{text}" in prompt:
+            return prompt.format(text=text)
+        if "{query}" in prompt:
+            return prompt.format(query=text)
+        if "{document}" in prompt:
+            return prompt.format(document=text)
+        if "{passage}" in prompt:
+            return prompt.format(passage=text)
+        return prompt + text
+
+    def __initialize__(self):
+        super().__initialize__()
+
+        # Discover checkpoint prompts and apply apply_override
+        loaded_prompts = {}
+        model_id_or_path = self.model_id
+        if model_path := os.environ.get("XPMIR_TRANSFORMERS_CACHE", None):
+            path = Path(model_path) / "tokenizers" / Path(self.model_id)
+            if path.is_dir():
+                model_id_or_path = path
+
+        candidate_paths = []
+        if isinstance(model_id_or_path, (str, Path)):
+            p = Path(model_id_or_path)
+            if p.is_dir():
+                candidate_paths.append(p / "config_sentence_transformers.json")
+                candidate_paths.append(p / "tokenizer_config.json")
+
+        for cp in candidate_paths:
+            if cp.is_file():
+                try:
+                    with open(cp, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if "prompts" in data and isinstance(data["prompts"], dict):
+                        loaded_prompts = data["prompts"]
+                        break
+                except Exception as e:
+                    logger.debug("Could not read prompts from %s: %s", cp, e)
+
+        if (
+            not loaded_prompts
+            and isinstance(model_id_or_path, str)
+            and not Path(model_id_or_path).exists()
+        ):
+            try:
+                from transformers.utils import cached_file
+
+                resolved = cached_file(
+                    model_id_or_path,
+                    "config_sentence_transformers.json",
+                    _raise_exceptions_for_missing_entries=False,
+                )
+                if resolved and Path(resolved).is_file():
+                    with open(resolved, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if "prompts" in data and isinstance(data["prompts"], dict):
+                        loaded_prompts = data["prompts"]
+            except Exception:
+                pass
+
+        def apply_override(
+            attr_name: str, self_val: Optional[str], ckpt_val: Optional[str]
+        ) -> Optional[str]:
+            if ckpt_val is not None and ckpt_val != "":
+                if self_val is not None and self_val != ckpt_val:
+                    logger.warning(
+                        f"[MICE Tokenizer Config Override] Overriding checkpoint prompt '{attr_name}' "
+                        f"from '{ckpt_val}' (loaded from {self.model_id}) to '{self_val}' "
+                        f"(specified on {self.__class__.__name__}). "
+                        "This creates an architectural/tokenization discrepancy with pre-trained weights!"
+                    )
+                    return self_val
+                return ckpt_val
+            return self_val
+
+        self.query_prompt = apply_override(
+            "query_prompt",
+            self.query_prompt,
+            loaded_prompts.get("query"),
+        )
+        self.doc_prompt = apply_override(
+            "doc_prompt",
+            self.doc_prompt,
+            loaded_prompts.get("document")
+            or loaded_prompts.get("passage")
+            or loaded_prompts.get("corpus"),
+        )
+
+    def save_pretrained(self, save_directory: Union[str, Path]):
+        """Save underlying tokenizer and config_sentence_transformers.json if prompts are configured."""
+        save_directory = Path(save_directory)
+        save_directory.mkdir(parents=True, exist_ok=True)
+        if hasattr(self, "tokenizer") and self.tokenizer is not None:
+            self.tokenizer.save_pretrained(save_directory)
+        if self.prompts:
+            st_config = {
+                "prompts": self.prompts,
+                "default_prompt_name": None,
+            }
+            config_file = save_directory / "config_sentence_transformers.json"
+            config_file.write_text(json.dumps(st_config, indent=2), encoding="utf-8")
+            logger.info(
+                "Saved SentenceTransformers prompt configuration to %s", config_file
+            )
 
     def tokenize(
         self,
@@ -159,9 +314,10 @@ class MICEQueryDocTokenizer(HFTokenizer):
         q_max = self.max_query_length
         d_max = self.max_doc_length
 
-        def _encode(texts: List[str], max_tokens: int):
+        def _encode(texts: List[str], max_tokens: int, prompt: Optional[str] = None):
+            formatted_texts = [self.format_prompt(prompt, t) for t in texts]
             r = self.tokenizer(
-                texts,
+                formatted_texts,
                 add_special_tokens=True,
                 truncation=True,
                 max_length=max_tokens,
@@ -177,13 +333,16 @@ class MICEQueryDocTokenizer(HFTokenizer):
                 token_type_ids=r.get("token_type_ids", None),
             )
 
+        q_prompt = self.resolve_prompt(self.query_prompt, "query")
+        d_prompt = self.resolve_prompt(self.doc_prompt, "document")
+
         if input_nature == QueryDocInput.PAIRS:
             ix_qs, ix_ds = input_records.pairs()
             queries = [input_records.unique_topics[i]["text_item"].text for i in ix_qs]
             docs = [input_records.unique_documents[i]["text_item"].text for i in ix_ds]
             tokenized_texts = MICETokenizedTexts(
-                tokenized_q=_encode(queries, q_max),
-                tokenized_docs=_encode(docs, d_max),
+                tokenized_q=_encode(queries, q_max, prompt=q_prompt),
+                tokenized_docs=_encode(docs, d_max, prompt=d_prompt),
             )
         elif input_nature == QueryDocInput.QUERY:
             if hasattr(input_records, "unique_topics"):
@@ -210,7 +369,7 @@ class MICEQueryDocTokenizer(HFTokenizer):
                 ]
             tokenized_texts = (
                 MICETokenizedTexts(
-                    tokenized_q=_encode(queries, q_max),
+                    tokenized_q=_encode(queries, q_max, prompt=q_prompt),
                     tokenized_docs=None,  # No documents to encode
                 ).tokenized_q
             )  # Returns only the queries in that case, to be compatible later on
@@ -230,7 +389,7 @@ class MICEQueryDocTokenizer(HFTokenizer):
             tokenized_texts = (
                 MICETokenizedTexts(
                     tokenized_q=None,
-                    tokenized_docs=_encode(docs, d_max),
+                    tokenized_docs=_encode(docs, d_max, prompt=d_prompt),
                 ).tokenized_docs
             )  # Returns only the docs in that case, to be compatible later on
 
@@ -497,7 +656,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
         # Save model weights
         save_file(self.state_dict(), str(path / "model.safetensors"))
         # Save tokenizer
-        if (
+        if hasattr(self.tokenizer, "save_pretrained"):
+            self.tokenizer.save_pretrained(path)
+        elif (
             hasattr(self.tokenizer, "tokenizer")
             and self.tokenizer.tokenizer is not None
         ):
@@ -533,7 +694,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
         if hasattr(self, "head_config") and self.head_config is not None:
             (save_directory / "head").mkdir(exist_ok=True)
             self.head_config.save_pretrained(save_directory / "head")
-        if (
+        if hasattr(self.tokenizer, "save_pretrained"):
+            self.tokenizer.save_pretrained(save_directory)
+        elif (
             hasattr(self.tokenizer, "tokenizer")
             and self.tokenizer.tokenizer is not None
         ):
@@ -1979,6 +2142,8 @@ def mice_scorer(
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
+    query_prompt: Optional[str] = None,
+    doc_prompt: Optional[str] = None,
 ) -> Tuple[MiceCrossEncoder, List[LightweightTask]]:
     """
     Unified entry point for creating a MICE scorer.
@@ -2000,6 +2165,8 @@ def mice_scorer(
         max_query_length: Maximum number of tokens for the query.
         max_doc_length: Maximum number of tokens for the document.
         max_length: Maximum total number of tokens (used as default for query/doc if not specified).
+        query_prompt: Optional prompt template/prefix for queries (e.g. '[Q] ' or 'query: {text}').
+        doc_prompt: Optional prompt template/prefix for documents (e.g. '[D] ' or 'passage: {text}').
     """
     # Automatically unbind bottom layers if n_docs_ctx_layers is specified
     if n_docs_ctx_layers is not None and bound_bottom_layers:
@@ -2013,6 +2180,8 @@ def mice_scorer(
         max_query_length=max_query_length,
         max_doc_length=max_doc_length,
         max_length=max_length,
+        query_prompt=query_prompt,
+        doc_prompt=doc_prompt,
     )
 
     common_kwargs = dict(

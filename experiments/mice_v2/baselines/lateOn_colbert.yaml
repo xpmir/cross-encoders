@@ -16,7 +16,7 @@ learner:
         batch_size: 256
         lr: 1e-5
         re_no_l2_regularization: [ '\.bias$', '(?i)norm' ]
-    requirements: duration=2h & cpu(cores=16, mem=10G) & cuda(mem=50G) * 2
+    requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=50G) * 2
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 base: lightonai/LateOn-unsupervised

@@ -1676,17 +1676,17 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         logger.info(f"Saved ModernBERT MICE model configuration and weights to {path}")
 
         # 2. Save tokenizer
-        if (
+        if hasattr(self.tokenizer, "save_pretrained"):
+            if hasattr(self.tokenizer, "name_or_path"):
+                self.tokenizer.name_or_path = str(path)
+            self.tokenizer.save_pretrained(path)
+            logger.info(f"Saved tokenizer to {path}")
+        elif (
             hasattr(self.tokenizer, "tokenizer")
             and self.tokenizer.tokenizer is not None
         ):
             self.tokenizer.tokenizer.name_or_path = str(path)
             self.tokenizer.tokenizer.save_pretrained(path)
-            logger.info(f"Saved tokenizer to {path}")
-        elif hasattr(self.tokenizer, "save_pretrained"):
-            if hasattr(self.tokenizer, "name_or_path"):
-                self.tokenizer.name_or_path = str(path)
-            self.tokenizer.save_pretrained(path)
             logger.info(f"Saved tokenizer to {path}")
         else:
             logger.warning(
@@ -1840,6 +1840,8 @@ def mice_v2_scorer(
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
+    query_prompt: Optional[str] = None,
+    doc_prompt: Optional[str] = None,
 ) -> Tuple[ModernBertMiceScorer, List[LightweightTask]]:
     """
     Factory function for ModernBERT MICE V2 scorer.
@@ -1863,6 +1865,8 @@ def mice_v2_scorer(
         max_query_length=max_query_length,
         max_doc_length=max_doc_length,
         max_length=max_length,
+        query_prompt=query_prompt,
+        doc_prompt=doc_prompt,
     )
 
     scorer = ModernBertMiceScorer.C(

@@ -21,6 +21,7 @@ from xpm_torch.experiments.helpers import LearningExperimentHelper, learning_exp
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import Learner
 from xpm_torch.optim import GradientLogHook, GradientClippingHook
+from xpm_torch.huggingface import prepare_hf_model
 
 from xpmir.papers.results import PaperResults
 from xpmir.neural.huggingface import hf_cross_scorer
@@ -497,6 +498,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
         logging.info(
             f"Running config with tags:\n- {'\n- '.join(f'{k}: {v}' for k, v in cfg_tags.items())}"
         )
+        prepare_hf_model(config.base)
         run_one_config(
             helper=helper, cfg=config, grid_search_id=tagspath, cfg_tags=cfg_tags
         )
