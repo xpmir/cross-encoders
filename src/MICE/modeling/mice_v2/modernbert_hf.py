@@ -1333,25 +1333,30 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
             return last_hidden, pos_emb_top
 
-    def freeze_bottom_and_utility(self):
-        """Freezes bottom contextualization layers, embeddings, and utility predictor for Phase 2 training."""
+    def freeze_utility(self):
+        """Freezes utility predictor parameters."""
+        if self.utility_predictor is not None:
+            for param in self.utility_predictor.parameters():
+                param.requires_grad = False
+            logger.info("[MICE v2] Frozen utility predictor.")
+        else:
+            logger.debug(
+                "[MICE v2] freeze_utility called but utility_predictor is None."
+            )
+
+    def freeze_bottom_layers(self):
+        """Freezes bottom contextualization layers, embeddings, and rotary embeddings."""
         for param in self.model.embeddings.parameters():
             param.requires_grad = False
 
         for param in self.model.layers.parameters():
             param.requires_grad = False
 
-        if self.utility_predictor is not None:
-            for param in self.utility_predictor.parameters():
-                param.requires_grad = False
-
         if hasattr(self.model, "rotary_emb"):
             for param in self.model.rotary_emb.parameters():
                 param.requires_grad = False
 
-        logger.info(
-            "[MICE v2] Frozen embeddings, bottom layers, and utility predictor for Phase 2 training."
-        )
+        logger.info("[MICE v2] Frozen embeddings and bottom contextualization layers.")
 
     def _document_embed_post_process(
         self,

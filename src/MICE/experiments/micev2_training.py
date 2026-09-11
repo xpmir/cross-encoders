@@ -98,6 +98,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     phase2_max_epochs: GridSearch[int] = 3
     """Number of training epochs for Phase 2 top layer fine-tuning"""
 
+    freeze_bottom_layers: GridSearch[bool] = True
+    """Whether to freeze bottom contextualization layers during Phase 2 training (utility predictor is always frozen)"""
+
     eval_phase_1: GridSearch[bool] = False
     """Whether to also evaluate the Phase 1 model (soft gating without hard pruning) when phase2_training is enabled."""
 
@@ -537,6 +540,7 @@ def TrainEvaluateMiceV2(
                     checkpoint_loader=stop_tags(
                         outputs.learned_model
                     ),  # use outputs from phase 1 as init for phase 2
+                    freeze_bottom_layers=cfg.freeze_bottom_layers,
                 )
 
                 outputs_p2 = learner_p2.submit(

@@ -95,8 +95,23 @@ def test_modernbert_hf_hard_pruning_and_freezing():
     )
     model = ModernBertMiceForSequenceClassification(config)
 
-    # Verify freeze_bottom_and_utility
-    model.freeze_bottom_and_utility()
+    # 1. Verify no automatic freezing upon initialization
+    for param in model.parameters():
+        assert param.requires_grad, "Model parameters must remain trainable upon initialization"
+
+    # 2. Verify freeze_bottom_and_utility(freeze_bottom_layers=False)
+    model.freeze_bottom_and_utility(freeze_bottom_layers=False)
+    for param in model.utility_predictor.parameters():
+        assert not param.requires_grad
+    for param in model.model.embeddings.parameters():
+        assert param.requires_grad
+    for param in model.model.layers.parameters():
+        assert param.requires_grad
+    for param in model.top_layers.parameters():
+        assert param.requires_grad
+
+    # 3. Verify freeze_bottom_and_utility(freeze_bottom_layers=True)
+    model.freeze_bottom_and_utility(freeze_bottom_layers=True)
     for param in model.model.embeddings.parameters():
         assert not param.requires_grad
     for param in model.model.layers.parameters():
@@ -144,7 +159,21 @@ def test_modernbert_xpm_hard_pruning():
         inst_task.execute()
         scorer = inst_task.scorer
 
-    scorer.freeze_bottom_and_utility()
+    # Verify no automatic freezing upon initialization in XPM scorer
+    for param in scorer.hf_model.parameters():
+        assert param.requires_grad, "Scorer parameters must remain trainable upon initialization"
+
+    # Test freeze with freeze_bottom_layers=False
+    scorer.freeze_bottom_and_utility(freeze_bottom_layers=False)
+    for param in scorer.hf_model.utility_predictor.parameters():
+        assert not param.requires_grad
+    for param in scorer.hf_model.model.embeddings.parameters():
+        assert param.requires_grad
+    for param in scorer.hf_model.model.layers.parameters():
+        assert param.requires_grad
+
+    # Test freeze with freeze_bottom_layers=True
+    scorer.freeze_bottom_and_utility(freeze_bottom_layers=True)
 
     # Verify frozen layers
     for param in scorer.hf_model.model.embeddings.parameters():
@@ -198,8 +227,81 @@ def test_hard_pruning_save_load():
         assert reloaded_model.hf_model.config.hard_prune_threshold == 0.5
 
 
+def test_init_micev2_from_checkpoint_freezing(monkeypatch):
+    """Test InitMICEV2FromCheckpoint parameter freezing with freeze_bottom_layers=True and False."""
+    import json
+    from MICE.modeling.mice_v2.modernbert_xpm import InitMICEV2FromCheckpoint, mice_v2_scorer
+    from xpm_torch.module import SimpleModuleLoader
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        workdir = Path(tmpdir) / "work"
+        workdir.mkdir()
+        monkeypatch.chdir(workdir)
+
+        ckpt_dir = Path(tmpdir) / "checkpoints" / "epoch-00000001"
+        ckpt_dir.mkdir(parents=True)
+        with (ckpt_dir / "info.json").open("wt") as fp:
+            json.dump({"epoch": 1, "steps": 100}, fp)
+        (ckpt_dir / "trainer.pth").touch()
+        (ckpt_dir / "optimizer.pth").touch()
+
+        # 1. Test freeze_bottom_layers=True (default)
+        p2_scorer_cfg1, p2_init_tasks1 = mice_v2_scorer(
+            hf_id="jhu-clsp/ettin-encoder-17m",
+            n_contextualization_layers=2,
+            utility_pred=True,
+            hard_pruning=True,
+        )
+        for task in p2_init_tasks1:
+            task.instance().execute()
+
+        init_task_true = InitMICEV2FromCheckpoint.C(
+            scorer=p2_scorer_cfg1,
+            freeze_bottom_layers=True,
+            checkpoint_loader=SimpleModuleLoader.C(value=p2_scorer_cfg1, path=ckpt_dir.parent),
+        ).instance()
+        init_task_true.execute()
+
+        scorer1 = init_task_true.scorer
+        for param in scorer1.hf_model.utility_predictor.parameters():
+            assert not param.requires_grad
+        for param in scorer1.hf_model.model.embeddings.parameters():
+            assert not param.requires_grad
+        for param in scorer1.hf_model.model.layers.parameters():
+            assert not param.requires_grad
+        for param in scorer1.hf_model.top_layers.parameters():
+            assert param.requires_grad
+
+        # 2. Test freeze_bottom_layers=False (utility frozen, bottom trainable)
+        p2_scorer_cfg2, p2_init_tasks2 = mice_v2_scorer(
+            hf_id="jhu-clsp/ettin-encoder-17m",
+            n_contextualization_layers=2,
+            utility_pred=True,
+            hard_pruning=True,
+        )
+        for task in p2_init_tasks2:
+            task.instance().execute()
+
+        init_task_false = InitMICEV2FromCheckpoint.C(
+            scorer=p2_scorer_cfg2,
+            freeze_bottom_layers=False,
+            checkpoint_loader=SimpleModuleLoader.C(value=p2_scorer_cfg2, path=ckpt_dir.parent),
+        ).instance()
+        init_task_false.execute()
+
+        scorer2 = init_task_false.scorer
+        for param in scorer2.hf_model.utility_predictor.parameters():
+            assert not param.requires_grad
+        for param in scorer2.hf_model.model.embeddings.parameters():
+            assert param.requires_grad
+        for param in scorer2.hf_model.model.layers.parameters():
+            assert param.requires_grad
+        for param in scorer2.hf_model.top_layers.parameters():
+            assert param.requires_grad
+
+
 def test_init_micev2_rank_zero_guard():
-    """Test that is_rank_zero correctly identifies non-zero ranks and skips execution."""
+    """Test that is_rank_zero correctly freezes parameters across ranks while skipping file copies on non-zero ranks."""
     from MICE.modeling.mice_v2.modernbert_xpm import is_rank_zero, InitMICEV2FromCheckpoint, mice_v2_scorer
     from xpm_torch.module import SimpleModuleLoader
 
@@ -210,15 +312,28 @@ def test_init_micev2_rank_zero_guard():
     os.environ["RANK"] = "1"
     try:
         assert is_rank_zero() is False
-        p2_scorer_cfg, _ = mice_v2_scorer(
+        p2_scorer_cfg, init_tasks = mice_v2_scorer(
             hf_id="jhu-clsp/ettin-encoder-17m",
             n_contextualization_layers=2,
+            utility_pred=True,
         )
+        for task in init_tasks:
+            task.instance().execute()
+
         init_task = InitMICEV2FromCheckpoint.C(
             scorer=p2_scorer_cfg,
+            freeze_bottom_layers=True,
             checkpoint_loader=SimpleModuleLoader.C(value=p2_scorer_cfg, path=Path(".")),
         ).instance()
-        # Should return early without raising AttributeError or FileNotFoundError
+        # Should execute freezing on rank 1 and return early without attempting checkpoint copy
         init_task.execute()
+
+        # Parameter freezing must be applied even on non-zero ranks
+        for param in init_task.scorer.hf_model.utility_predictor.parameters():
+            assert not param.requires_grad
+        for param in init_task.scorer.hf_model.model.embeddings.parameters():
+            assert not param.requires_grad
+        for param in init_task.scorer.hf_model.top_layers.parameters():
+            assert param.requires_grad
     finally:
         os.environ.pop("RANK", None)

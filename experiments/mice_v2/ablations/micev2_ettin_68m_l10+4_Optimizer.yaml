@@ -1,4 +1,4 @@
-id: train_micev2_ettin68m_l10+4_abl_LR
+id: train_micev2_ettin68m_l10+4_abl_Optimizer
 title: "Mice-Ettin-68m Baseline"
 description:
     Check Legacy optimizer vs proper weight decay ignore for LN paramers

@@ -47,19 +47,26 @@ l2_reg: false
 temp_schedule: exp
 temp_start: 1.0
 utility_bias: 3.0
-temp_end: 0.1
+temp_end: 0.1 # not ok with new LR = 7e-5, but ok with LR = 3e-5 (v1)
 
 
 grid_search:
     config_dicts:
         - {lambda_reg: 0.1, temp_end: 0.1}
-        - {lambda_reg: 0.1, temp_end: 0.05}
-        - {lambda_reg: 0.1, temp_end: 0.01}
         - {lambda_reg: 0.3, temp_end: 0.1}
         - {lambda_reg: 0.5, temp_end: 0.1}
-        - {lambda_reg: 0.5, temp_end: 0.05} # -> better ?
-        - {lambda_reg: 0.5, temp_end: 0.01} # -> better ?
 
         #degenerates..
         - {lambda_reg: 0.7, temp_end: 0.1}
         - {lambda_reg: 1.0, temp_end: 0.1}
+
+        #tests # still degenerates
+        - {lambda_reg: 0.5, temp_end: 0.05} # -> better ?
+        - {lambda_reg: 0.1, temp_end: 0.05}
+
+        #Ok with LR = 7e-5 !
+        - {lambda_reg: 0.05, temp_end: 0.01}
+        - {lambda_reg: 0.1, temp_end: 0.01}
+        - {lambda_reg: 0.2, temp_end: 0.01}
+        - {lambda_reg: 0.3, temp_end: 0.01}
+        - {lambda_reg: 0.5, temp_end: 0.01}

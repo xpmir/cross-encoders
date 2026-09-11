@@ -778,10 +778,23 @@ class InitMICEV2FromCheckpoint(LightweightTask):
 
     scorer: Param["ModernBertMiceScorer"]
 
+    freeze_bottom_layers: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to freeze the bottom contextualization layers and utility predictor after loading Phase 1 checkpoint"""
+
     checkpoint_loader: Param[ModuleLoader]
     """Path or ModuleLoader to the Phase 1 trained checkpoint (should contain model.safetensors or model/ directory)."""
 
     def execute(self):
+        # 1. Initialize scorer and freeze parameters on all ranks
+        if not self.scorer._initialized:
+            self.scorer.initialize()
+
+        self.scorer.freeze_utility()
+
+        if self.freeze_bottom_layers:
+            self.scorer.freeze_bottom_layers()
+
+        # 2. Checkpoint copying only on rank zero
         if not is_rank_zero():
             logger.info(
                 "[InitMICEV2] Skipping checkpoint initialization on non-zero rank (RANK=%s, LOCAL_RANK=%s)",
@@ -841,6 +854,9 @@ class InitMICEV2FromCheckpoint(LightweightTask):
 
         # Populate process cwd checkpoints/epoch-00000000
         copy_to_epoch_zero(Path.cwd() / "checkpoints")
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.barrier()
 
 
 class EvalSparsityAccumulator:
@@ -1154,12 +1170,19 @@ class ModernBertMiceScorer(AbstractModuleScorer):
 
     hf_model: nn.Module
 
-    def freeze_bottom_and_utility(self):
-        """Freezes bottom layers, embeddings, and utility predictor."""
-        if hasattr(self, "hf_model") and hasattr(
-            self.hf_model, "freeze_bottom_and_utility"
-        ):
-            self.hf_model.freeze_bottom_and_utility()
+    def freeze_utility(self):
+        """Freezes utility predictor."""
+        self.hf_model.freeze_utility()
+
+    def freeze_bottom_layers(self):
+        """Freezes bottom layers and embeddings."""
+        self.hf_model.freeze_bottom_layers()
+
+    def freeze_bottom_and_utility(self, freeze_bottom_layers: bool = True):
+        """Freezes utility predictor, and optionally bottom layers and embeddings."""
+        self.hf_model.freeze_bottom_and_utility(
+            freeze_bottom_layers=freeze_bottom_layers
+        )
 
     def __initialize__(self):
         super().__initialize__()
@@ -1259,9 +1282,6 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             hf_model = ModernBertMiceForSequenceClassification(mice_config)
 
         self.add_module("hf_model", hf_model)
-
-        if self.hard_pruning:
-            self.freeze_bottom_and_utility()
 
         attn_impl = getattr(hf_model.config, "_attn_implementation", "sdpa")
         if "flash" in str(attn_impl).lower():
