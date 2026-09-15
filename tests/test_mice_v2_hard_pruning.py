@@ -99,23 +99,17 @@ def test_modernbert_hf_hard_pruning_and_freezing():
     for param in model.parameters():
         assert param.requires_grad, "Model parameters must remain trainable upon initialization"
 
-    # 2. Verify freeze_bottom_and_utility(freeze_bottom_layers=False)
-    model.freeze_bottom_and_utility(freeze_bottom_layers=False)
-    for param in model.utility_predictor.parameters():
-        assert not param.requires_grad
+    # 2. Verify freeze_bottom_layers()
+    model.freeze_bottom_layers()
     for param in model.model.embeddings.parameters():
-        assert param.requires_grad
+        assert not param.requires_grad
     for param in model.model.layers.parameters():
-        assert param.requires_grad
+        assert not param.requires_grad
     for param in model.top_layers.parameters():
         assert param.requires_grad
 
-    # 3. Verify freeze_bottom_and_utility(freeze_bottom_layers=True)
-    model.freeze_bottom_and_utility(freeze_bottom_layers=True)
-    for param in model.model.embeddings.parameters():
-        assert not param.requires_grad
-    for param in model.model.layers.parameters():
-        assert not param.requires_grad
+    # 3. Verify freeze_utility
+    model.freeze_utility()
     for param in model.utility_predictor.parameters():
         assert not param.requires_grad
 
@@ -146,7 +140,7 @@ def test_modernbert_hf_hard_pruning_and_freezing():
 
 
 def test_modernbert_xpm_hard_pruning():
-    """Test ModernBertMiceScorer with hard_pruning=True and freeze_bottom_and_utility."""
+    """Test ModernBertMiceScorer with hard_pruning=True and freezing."""
     scorer_cfg, init_tasks = mice_v2_scorer(
         hf_id="jhu-clsp/ettin-encoder-17m",
         n_contextualization_layers=2,
@@ -163,8 +157,8 @@ def test_modernbert_xpm_hard_pruning():
     for param in scorer.hf_model.parameters():
         assert param.requires_grad, "Scorer parameters must remain trainable upon initialization"
 
-    # Test freeze with freeze_bottom_layers=False
-    scorer.freeze_bottom_and_utility(freeze_bottom_layers=False)
+    # Test freeze utilitu
+    scorer.freeze_utility()
     for param in scorer.hf_model.utility_predictor.parameters():
         assert not param.requires_grad
     for param in scorer.hf_model.model.embeddings.parameters():
@@ -173,7 +167,7 @@ def test_modernbert_xpm_hard_pruning():
         assert param.requires_grad
 
     # Test freeze with freeze_bottom_layers=True
-    scorer.freeze_bottom_and_utility(freeze_bottom_layers=True)
+    scorer.freeze_bottom_layers()
 
     # Verify frozen layers
     for param in scorer.hf_model.model.embeddings.parameters():

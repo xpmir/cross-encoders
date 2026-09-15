@@ -514,6 +514,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         top_final_norm: bool = False,
         utility_temp: float = 1.0,
         utility_bias: float = 5.0,
+        gate_target: str = "h",
         compress_dim: float = 1.0,
         compress_init_option: str = "seed",
         use_cross_attn: bool = True,
@@ -542,6 +543,11 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.top_final_norm = top_final_norm
         self.utility_temp = utility_temp
         self.utility_bias = utility_bias
+        if gate_target not in ("h", "v"):
+            raise ValueError(
+                f"Unknown gate_target: '{gate_target}'. Expected 'h' or 'v'."
+            )
+        self.gate_target = gate_target
         assert compress_dim >= 1.0, f"compress_dim must be >= 1.0, got {compress_dim}"
         self.compress_dim = compress_dim
         self.compress_init_option = compress_init_option
@@ -593,6 +599,7 @@ class ModernBertMiceCrossAttention(nn.Module):
         cu_seqlens_d: Optional[torch.Tensor] = None,
         max_seqlen_q: Optional[int] = None,
         max_seqlen_d: Optional[int] = None,
+        d_utilities: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
         attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
@@ -623,6 +630,11 @@ class ModernBertMiceCrossAttention(nn.Module):
             value_states = d_qkv[:, :, 2].transpose(
                 1, 2
             )  # [1, heads, total_d, head_dim]
+
+            if d_utilities is not None:
+                # Value-only gating: broadcast [1, total_d, 1] -> [1, 1, total_d, 1] over heads & head_dim
+                u_scale = d_utilities.squeeze(-1)[:, None, :, None]
+                value_states = value_states * u_scale
 
             attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
                 attn_impl, eager_attention_forward
@@ -664,6 +676,11 @@ class ModernBertMiceCrossAttention(nn.Module):
         )
         key_states = d_qkv[:, :, 1].transpose(1, 2)  # [B, heads, d_len, head_dim]
         value_states = d_qkv[:, :, 2].transpose(1, 2)  # [B, heads, d_len, head_dim]
+
+        if d_utilities is not None:
+            # Value-only gating: broadcast [B, d_len, 1] -> [B, 1, d_len, 1] over heads & head_dim
+            u_scale = d_utilities.squeeze(-1)[:, None, :, None]
+            value_states = value_states * u_scale
 
         if q_mask is None:
             q_mask = torch.ones(
@@ -819,8 +836,17 @@ class ModernBertMiceTopLayer(nn.Module):
         # Cross Attention
         if self.cross_attn is not None and d_hidden is not None:
             norm_d_hidden = self.doc_cross_attn_norm(d_hidden)
-            if d_utilities is not None:
-                norm_d_hidden = norm_d_hidden * d_utilities
+            gate_target = getattr(self.config, "gate_target", "h")
+            if gate_target == "h":
+                if d_utilities is not None:
+                    norm_d_hidden = norm_d_hidden * d_utilities
+                cross_attn_utilities = None
+            elif gate_target == "v":
+                cross_attn_utilities = d_utilities
+            else:
+                raise ValueError(
+                    f"Unknown gate_target: '{gate_target}'. Expected 'h' or 'v'."
+                )
 
             cross_out = self.cross_attn(
                 self.cross_attn_norm(q_hidden),
@@ -831,6 +857,7 @@ class ModernBertMiceTopLayer(nn.Module):
                 cu_seqlens_d=cu_seqlens_d,
                 max_seqlen_q=max_seqlen_q,
                 max_seqlen_d=max_seqlen_d,
+                d_utilities=cross_attn_utilities,
                 **kwargs,
             )
             q_hidden = q_hidden + cross_out
@@ -1408,12 +1435,21 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                         d_hidden, doc_mask, self.last_utilities, threshold=threshold
                     )
             else:
-                if not getattr(self.config, "top_layers_doc_ln", False):
-                    # Legacy soft gating: multiply in post-processing
-                    d_hidden = d_hidden * self.last_utilities
-                else:
-                    # Defer soft gating to top_layers (applied post-doc_cross_attn_norm)
+                gate_target = getattr(self.config, "gate_target", "h")
+                if gate_target == "h":
+                    if not getattr(self.config, "top_layers_doc_ln", False):
+                        # Legacy soft gating: multiply in post-processing
+                        d_hidden = d_hidden * self.last_utilities
+                    else:
+                        # Defer soft gating to top_layers (applied post-doc_cross_attn_norm)
+                        pass
+                elif gate_target == "v":
+                    # Value-only gating: defer gating to cross-attention Value projections
                     pass
+                else:
+                    raise ValueError(
+                        f"Unknown gate_target: '{gate_target}'. Expected 'h' or 'v'."
+                    )
         else:
             self.last_utilities = None
             self.last_doc_hidden = None
@@ -1571,7 +1607,10 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             if (
                 self.utility_predictor is not None
                 and not getattr(self.config, "hard_pruning", False)
-                and getattr(self.config, "top_layers_doc_ln", False)
+                and (
+                    getattr(self.config, "top_layers_doc_ln", False)
+                    or getattr(self.config, "gate_target", "h") == "v"
+                )
             )
             else None
         )
@@ -1586,12 +1625,15 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             if self.top_rotary_emb is not None
             else self.model.rotary_emb
         )
-        use_cross = getattr(self.config, "use_cross_attn", True)
-
-        if not use_cross:
+        if not self.config.use_cross_attn:
             # When use_cross_attn is False (Concat-Self Attention mode):
             # 1. Apply any pending soft gating utilities to document representations
             if d_utilities is not None:
+                if self.config.gate_target == "v":
+                    logger.warning(
+                        "[ModernBertMiceModel] gate_target='v' was configured but use_cross_attn=False (Concat-Self Attention mode). "
+                        "Falling back to gating d_hidden directly."
+                    )
                 d_hidden = d_hidden * d_utilities
 
             # 2. Concatenate [query, doc] into a single joint sequence [CLS] q [SEP] d [SEP]

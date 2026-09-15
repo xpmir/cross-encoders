@@ -1151,6 +1151,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     utility_bias: Param[float] = field(default=5.0, ignore_default=True)
     """Initial bias scalar for utility predictor output projection wo.bias"""
 
+    gate_target: Param[str] = field(default="h", ignore_default=True)
+    """Target representation for gating: 'h' (default, gate full document hidden states) or 'v' (gate only cross-attention Value vectors)"""
+
     compress_dim: Param[float] = field(default=1.0, ignore_default=True)
     """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
 
@@ -1177,12 +1180,6 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     def freeze_bottom_layers(self):
         """Freezes bottom layers and embeddings."""
         self.hf_model.freeze_bottom_layers()
-
-    def freeze_bottom_and_utility(self, freeze_bottom_layers: bool = True):
-        """Freezes utility predictor, and optionally bottom layers and embeddings."""
-        self.hf_model.freeze_bottom_and_utility(
-            freeze_bottom_layers=freeze_bottom_layers
-        )
 
     def __initialize__(self):
         super().__initialize__()
@@ -1238,6 +1235,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 apply_override("utility_temp", self.utility_temp)
             if self.utility_bias != 5.0:
                 apply_override("utility_bias", self.utility_bias)
+            if self.gate_target != "h":
+                apply_override("gate_target", self.gate_target)
             if self.compress_dim != 1.0:
                 apply_override("compress_dim", self.compress_dim)
                 apply_override("compress_init_option", self.compress_init_option)
@@ -1266,6 +1265,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 top_final_norm=self.top_final_norm,
                 utility_temp=self.utility_temp,
                 utility_bias=self.utility_bias,
+                gate_target=self.gate_target,
                 compress_dim=self.compress_dim,
                 compress_init_option=self.compress_init_option,
                 use_cross_attn=self.use_cross_attn,
@@ -1833,6 +1833,7 @@ def mice_v2_scorer(
     top_final_norm: bool = False,
     utility_temp: float = 1.0,
     utility_bias: float = 5.0,
+    gate_target: str = "h",
     compress_dim: float = 1.0,
     compress_init_option: str = "seed",
     use_cross_attn: bool = True,
@@ -1887,6 +1888,7 @@ def mice_v2_scorer(
         top_final_norm=top_final_norm,
         utility_temp=utility_temp,
         utility_bias=utility_bias,
+        gate_target=gate_target,
         compress_dim=compress_dim,
         compress_init_option=compress_init_option,
         use_cross_attn=use_cross_attn,

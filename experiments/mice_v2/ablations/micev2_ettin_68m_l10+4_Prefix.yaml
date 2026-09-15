@@ -23,7 +23,7 @@ normalize_doc_embeds: true # needed for plaid
 evaluation: #all false = Minified tests
     eval_checkpoint: "last"
     all_datasets: false
-    in_domain: false
+    in_domain: true
     beir13: true
 
 

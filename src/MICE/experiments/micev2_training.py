@@ -80,6 +80,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     reg_target: GridSearch[str] = "u"
     """Target for regularization: 'u' for mean utility loss, 'u_wv_h' for gated value norm loss (u * W_V * h)"""
 
+    gate_target: GridSearch[str] = "h"
+    """Target representation for gating: 'h' for full document hidden states (scales K and V), 'v' for cross-attention Value vectors only"""
+
     reg_budget: GridSearch[Optional[float]] = None
     """Optional target retention budget for utility regularizer (e.g. 0.3 for 30% retention). If None, standard linear L1 regularization is used."""
 
@@ -184,6 +187,7 @@ def build_mice_v2(
         top_final_norm=cfg.top_final_norm,
         utility_temp=cfg.temp_start,
         utility_bias=cfg.utility_bias,
+        gate_target=cfg.gate_target,
         compress_dim=cfg.compress_dim,
         compress_init_option=cfg.compress_init_option,
         use_cross_attn=cfg.use_cross_attn,
@@ -235,6 +239,9 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     top_final_norm = model_tags.get("top_final_norm", cfg.top_final_norm)
     topln_suffix = "-topln" if top_final_norm else ""
 
+    gate_target = model_tags.get("gate_target", getattr(cfg, "gate_target", "h"))
+    gate_suffix = "-gatev" if gate_target == "v" else ""
+
     head_type = model_tags.get("head_type", getattr(cfg, "head_type", "linear"))
     head_suffix = f"-{head_type}" if head_type and head_type != "linear" else ""
 
@@ -249,7 +256,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{gate_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(

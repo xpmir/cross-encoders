@@ -4,7 +4,7 @@ description:
     💡 Debug config for ModernBERT Mice V2 training using ettin-encoder-17m
 
 module: MICE.experiments.micev2_training
-parent: ./ablations/_ettin68m_abl.yaml
+parent: ./_ettin68m_abl.yaml
 # export_trained_models: false
 
 nb_repetitions: 2
