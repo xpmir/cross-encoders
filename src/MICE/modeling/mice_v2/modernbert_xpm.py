@@ -301,17 +301,45 @@ class UtilityRegularizer(TrainingHook):
             sparsity = (utilities < self.sparsity_threshold).float().mean()
             valid_utilities = utilities.view(-1)
 
-        if self.budget is not None:
-            diff = F.relu(mean_utility - self.budget)
-        else:
-            diff = mean_utility
+        target_model = hf_model or getattr(info, "model", None)
+        model_to_inspect = getattr(target_model, "hf_model", target_model)
+        p_active = getattr(model_to_inspect, "last_p_active", None)
 
-        reg_loss = diff**2 if self.l2_reg else diff
+        if p_active is not None:
+            # Hard Concrete L0 loss formulation over exact retention probability
+            if (
+                doc_mask is not None
+                and p_active.ndim == 3
+                and p_active.shape[0] == doc_mask.shape[0]
+                and p_active.shape[1] == doc_mask.shape[1]
+            ):
+                mask = doc_mask.unsqueeze(-1).bool()
+                valid_p_active = p_active.masked_select(mask)
+                mean_p_active = (
+                    valid_p_active.mean()
+                    if valid_p_active.numel() > 0
+                    else p_active.mean()
+                )
+            else:
+                mean_p_active = p_active.mean()
+
+            if self.budget is not None:
+                diff = F.relu(mean_p_active - self.budget)
+            else:
+                diff = mean_p_active
+
+            reg_loss = diff**2 if self.l2_reg else diff
+        else:
+            if self.budget is not None:
+                diff = F.relu(mean_utility - self.budget)
+            else:
+                diff = mean_utility
+
+            reg_loss = diff**2 if self.l2_reg else diff
 
         info.add_loss(Loss("utility_reg", reg_loss, self.lambda_reg))
 
         nrecords = doc_mask.shape[0] if doc_mask is not None else 1
-        target_model = hf_model or getattr(info, "model", None)
 
         update_utility_temperature(
             target_model,
@@ -343,6 +371,39 @@ class UtilityRegularizer(TrainingHook):
                 )
                 info.metrics.add(
                     ScalarMetric("utility/over_budget", float(diff.item()), nrecords)
+                )
+
+            if p_active is not None:
+                info.metrics.add(
+                    ScalarMetric(
+                        "l0/p_active_mean", float(mean_p_active.item()), nrecords
+                    )
+                )
+                info.metrics.add(
+                    ScalarMetric(
+                        "l0/exact_zeros",
+                        float((valid_utilities == 0.0).float().mean().item()),
+                        nrecords,
+                    )
+                )
+                info.metrics.add(
+                    ScalarMetric(
+                        "l0/exact_ones",
+                        float((valid_utilities == 1.0).float().mean().item()),
+                        nrecords,
+                    )
+                )
+                info.metrics.add(
+                    ScalarMetric(
+                        "l0/intermediate",
+                        float(
+                            ((valid_utilities > 0.0) & (valid_utilities < 1.0))
+                            .float()
+                            .mean()
+                            .item()
+                        ),
+                        nrecords,
+                    )
                 )
 
             # Monitor Model Matrix Norms (W_V, W_O, Classifier Head)
@@ -1154,6 +1215,15 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     gate_target: Param[str] = field(default="h", ignore_default=True)
     """Target representation for gating: 'h' (default, gate full document hidden states) or 'v' (gate only cross-attention Value vectors)"""
 
+    use_hard_concrete: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to use Hard Concrete L0 distribution sampling for utility prediction"""
+
+    hc_gamma: Param[float] = field(default=-0.1, ignore_default=True)
+    """Hard concrete lower stretch parameter gamma (default -0.1)"""
+
+    hc_zeta: Param[float] = field(default=1.1, ignore_default=True)
+    """Hard concrete upper stretch parameter zeta (default 1.1)"""
+
     compress_dim: Param[float] = field(default=1.0, ignore_default=True)
     """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
 
@@ -1237,6 +1307,10 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 apply_override("utility_bias", self.utility_bias)
             if self.gate_target != "h":
                 apply_override("gate_target", self.gate_target)
+            if self.use_hard_concrete:
+                apply_override("use_hard_concrete", self.use_hard_concrete)
+                apply_override("hc_gamma", self.hc_gamma)
+                apply_override("hc_zeta", self.hc_zeta)
             if self.compress_dim != 1.0:
                 apply_override("compress_dim", self.compress_dim)
                 apply_override("compress_init_option", self.compress_init_option)
@@ -1266,6 +1340,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 utility_temp=self.utility_temp,
                 utility_bias=self.utility_bias,
                 gate_target=self.gate_target,
+                use_hard_concrete=self.use_hard_concrete,
+                hc_gamma=self.hc_gamma,
+                hc_zeta=self.hc_zeta,
                 compress_dim=self.compress_dim,
                 compress_init_option=self.compress_init_option,
                 use_cross_attn=self.use_cross_attn,
@@ -1824,7 +1901,7 @@ def mice_v2_scorer(
     bound_bottom_layers: bool = True,
     attn_implementation: Optional[str] = None,
     utility_pred: bool = False,
-    hard_pruning: bool = False,
+    hard_pruning: Optional[bool] = None,
     hard_prune_threshold: float = 0.5,
     normalize_doc_embeds: bool = False,
     use_upper_rope: bool = True,
@@ -1834,6 +1911,9 @@ def mice_v2_scorer(
     utility_temp: float = 1.0,
     utility_bias: float = 5.0,
     gate_target: str = "h",
+    use_hard_concrete: bool = False,
+    hc_gamma: float = -0.1,
+    hc_zeta: float = 1.1,
     compress_dim: float = 1.0,
     compress_init_option: str = "seed",
     use_cross_attn: bool = True,
@@ -1860,6 +1940,9 @@ def mice_v2_scorer(
     """
     if compress_init_option == "seed" and compress_dim != 1.0:
         compress_init_option = "random"
+
+    if hard_pruning is None:
+        hard_pruning = True if use_hard_concrete else False
 
     tokenizer = MICEQueryDocTokenizer.C(
         model_id=hf_id,
@@ -1889,6 +1972,9 @@ def mice_v2_scorer(
         utility_temp=utility_temp,
         utility_bias=utility_bias,
         gate_target=gate_target,
+        use_hard_concrete=use_hard_concrete,
+        hc_gamma=hc_gamma,
+        hc_zeta=hc_zeta,
         compress_dim=compress_dim,
         compress_init_option=compress_init_option,
         use_cross_attn=use_cross_attn,

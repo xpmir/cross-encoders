@@ -5,10 +5,10 @@ Implements training pipeline for MICE V2 models.
 
 import logging
 from functools import partial
-from typing import Optional, Callable, List, Tuple
+from typing import Optional, Callable
 import numpy as np
 
-from experimaestro import setmeta, stop_tags, LightweightTask, RunMode
+from experimaestro import setmeta, stop_tags, RunMode
 from experimaestro.launcherfinder import find_launcher
 
 from xpm_torch import Random
@@ -19,7 +19,7 @@ from xpm_torch.optim import GradientLogHook, GradientClippingHook
 from xpm_torch.huggingface import prepare_hf_model
 
 from xpmir.papers.results import PaperResults
-from xpmir.rankers import AbstractModuleScorer, scorer_retriever
+from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
 from xpmir.text.huggingface.tokenizers import get_default_max_len
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
@@ -83,6 +83,18 @@ class MiceV2_FineTuning(CE_FineTuning):
     gate_target: GridSearch[str] = "h"
     """Target representation for gating: 'h' for full document hidden states (scales K and V), 'v' for cross-attention Value vectors only"""
 
+    use_hard_concrete: GridSearch[bool] = False
+    """Whether to use Hard Concrete L0 distribution sampling and regularization"""
+
+    hc_gamma: GridSearch[float] = -0.1
+    """Hard concrete lower stretch parameter gamma (default -0.1)"""
+
+    hc_zeta: GridSearch[float] = 1.1
+    """Hard concrete upper stretch parameter zeta (default 1.1)"""
+
+    hard_pruning: GridSearch[Optional[bool]] = None
+    """Whether to physically drop tokens. Defaults to True if use_hard_concrete=True, else False."""
+
     reg_budget: GridSearch[Optional[float]] = None
     """Optional target retention budget for utility regularizer (e.g. 0.3 for 30% retention). If None, standard linear L1 regularization is used."""
 
@@ -119,20 +131,20 @@ class MiceV2_FineTuning(CE_FineTuning):
     top_final_norm: GridSearch[bool] = False
     """Whether to apply LayerNorm at the output of top interaction layers before classifier"""
 
-    temp_start: GridSearch[float] = 1.0
-    """Starting temperature for utility predictor sigmoid"""
-
     utility_bias: GridSearch[float] = 5.0
-    """Initial bias for utility predictor output projection wo.bias (default=5.0, keeping ~99% utility initially)"""
+    """Initial bias scalar for utility predictor output projection wo.bias"""
 
-    temp_end: GridSearch[Optional[float]] = None
-    """Ending temperature for utility predictor linear annealing (e.g. 0.1). If None, temperature remains fixed at temp_start."""
+    temp_start: GridSearch[float] = 1.0
+    """Initial temperature for utility predictor sigmoid (default 1.0)"""
+
+    temp_end: GridSearch[float] = 0.1
+    """Final temperature for utility predictor sigmoid after annealing (default 0.1)"""
+
+    temp_schedule: GridSearch[str] = "cosine"
+    """Schedule type for temperature annealing: 'linear', 'cosine', or 'exp'"""
 
     temp_anneal_steps: GridSearch[Optional[int]] = None
     """Number of training steps to anneal temperature over. If None, anneals over total training steps."""
-
-    temp_schedule: GridSearch[str] = "linear"
-    """Temperature annealing schedule: 'linear' (default), 'cosine', or 'exp'."""
 
     compress_dim: GridSearch[float] = 1.0
     """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
@@ -159,11 +171,8 @@ class MiceV2_FineTuning(CE_FineTuning):
     """Optional document prompt template or prefix (e.g. '[D] ' or 'passage: ')"""
 
 
-def build_mice_v2(
-    cfg: MiceV2_FineTuning,
-    phase_2: bool = False,
-) -> Tuple[AbstractModuleScorer, List[LightweightTask]]:
-    """Build the MICE V2 model using the modernbert_xpm factory."""
+def build_mice_v2(cfg: MiceV2_FineTuning, phase_2: bool = False):
+    """Factory helper to build MICE V2 scorer with all architectural flags."""
     default_max_len = get_default_max_len(cfg.base)
     if cfg.max_length and default_max_len > cfg.max_length:
         max_len = cfg.max_length
@@ -188,15 +197,18 @@ def build_mice_v2(
         utility_temp=cfg.temp_start,
         utility_bias=cfg.utility_bias,
         gate_target=cfg.gate_target,
+        use_hard_concrete=cfg.use_hard_concrete,
+        hc_gamma=cfg.hc_gamma,
+        hc_zeta=cfg.hc_zeta,
         compress_dim=cfg.compress_dim,
         compress_init_option=cfg.compress_init_option,
         use_cross_attn=cfg.use_cross_attn,
         head_type=cfg.head_type,
         max_length=max_len,
-        max_query_length=cfg.max_query_length,
-        max_doc_length=cfg.max_doc_length,
-        query_prompt=cfg.query_prompt,
-        doc_prompt=cfg.doc_prompt,
+        max_query_length=getattr(cfg, "max_query_length", None),
+        max_doc_length=getattr(cfg, "max_doc_length", None),
+        query_prompt=getattr(cfg, "query_prompt", None),
+        doc_prompt=getattr(cfg, "doc_prompt", None),
     )
 
     if phase_2:
@@ -207,6 +219,14 @@ def build_mice_v2(
             utility_pred=True,
             hard_pruning=True,
             hard_prune_threshold=cfg.hard_prune_threshold,
+        )
+    elif cfg.use_hard_concrete:
+        logging.info(
+            "[Single-Phase HC] Building MICE V2 model with Hard Concrete pruning"
+        )
+        kwargs.update(
+            hard_pruning=True if cfg.hard_pruning is None else cfg.hard_pruning,
+            hard_prune_threshold=0.0,
         )
     else:
         logging.info(
@@ -242,6 +262,16 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     gate_target = model_tags.get("gate_target", getattr(cfg, "gate_target", "h"))
     gate_suffix = "-gatev" if gate_target == "v" else ""
 
+    use_hard_concrete = model_tags.get(
+        "use_hard_concrete", getattr(cfg, "use_hard_concrete", False)
+    )
+    hc_suffix = "-hc" if use_hard_concrete else ""
+
+    hard_pruning = model_tags.get("hard_pruning", getattr(cfg, "hard_pruning", None))
+    prune_suffix = (
+        "-nohardprune" if (use_hard_concrete and hard_pruning is False) else ""
+    )
+
     head_type = model_tags.get("head_type", getattr(cfg, "head_type", "linear"))
     head_suffix = f"-{head_type}" if head_type and head_type != "linear" else ""
 
@@ -256,7 +286,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{gate_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{gate_suffix}{hc_suffix}{prune_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(

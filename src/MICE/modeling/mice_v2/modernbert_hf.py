@@ -5,6 +5,7 @@ Custom PreTrainedModel and Modules supporting SDPA, Flash Attention 2, and ST ex
 
 import copy
 import logging
+import math
 from collections import OrderedDict
 from typing import Any, List, Optional, Tuple, Union
 import torch
@@ -109,7 +110,7 @@ def _unpad_input_with_posids(
 
 class UtilityPredictor(nn.Module):
     """Two-layer MLP Utility Predictor using ModernBERT's GeGLU activation
-    and a Sigmoid output to produce per-token utility scores U in (0, 1).
+    and a Sigmoid or Hard Concrete (Louizos et al. 2018) output to produce per-token utility scores U in [0, 1].
     """
 
     def __init__(
@@ -118,12 +119,20 @@ class UtilityPredictor(nn.Module):
         bottleneck_dim: Optional[int] = None,
         utility_temp: float = 1.0,
         utility_bias: float = 5.0,
+        use_hard_concrete: bool = False,
+        hc_gamma: float = -0.1,
+        hc_zeta: float = 1.1,
     ):
         super().__init__()
         if bottleneck_dim is None:
             bottleneck_dim = hidden_dim * 2
 
         self.utility_bias = utility_bias
+        self.use_hard_concrete = use_hard_concrete
+        self.hc_gamma = hc_gamma
+        self.hc_zeta = hc_zeta
+        self.last_p_active: Optional[torch.Tensor] = None
+
         self.wi = nn.Linear(hidden_dim, 2 * bottleneck_dim, bias=False)
         self.wo = nn.Linear(bottleneck_dim, 1, bias=True)
         self.register_buffer(
@@ -182,12 +191,32 @@ class UtilityPredictor(nn.Module):
                or (1, total_tokens, hidden_dim)
 
         Returns:
-            u: Utility scores of shape (batch_size, seq_len, 1) or (1, total_tokens, 1) in (0, 1)
+            u: Utility scores of shape (batch_size, seq_len, 1) or (1, total_tokens, 1) in [0, 1]
         """
         x_val, x_gate = self.wi(h).chunk(2, dim=-1)
         geglu_out = x_val * torch.nn.functional.gelu(x_gate, approximate="none")
         logits = self.wo(geglu_out)
-        return torch.sigmoid(logits / float(self.temperature))
+        beta = max(float(self.temperature.item()), 1e-4)
+
+        if not self.use_hard_concrete:
+            self.last_p_active = None
+            return torch.sigmoid(logits / beta)
+
+        # Hard Concrete L0 formulation:
+        # Closed-form retention probability: P(u > 0) = sigma(z - beta * log(-gamma / zeta))
+        offset = beta * math.log(-self.hc_gamma / self.hc_zeta)
+        self.last_p_active = torch.sigmoid(logits - offset)
+
+        if self.training:
+            # Clamped uniform noise to avoid log(0)
+            u = torch.rand_like(logits).clamp(1e-6, 1.0 - 1e-6)
+            s = torch.sigmoid((logits + torch.log(u) - torch.log(1.0 - u)) / beta)
+        else:
+            # Deterministic median evaluation (noise u = 0.5 -> log(u) - log(1-u) = 0)
+            s = torch.sigmoid(logits / beta)
+
+        s_bar = s * (self.hc_zeta - self.hc_gamma) + self.hc_gamma
+        return torch.clamp(s_bar, min=0.0, max=1.0)
 
 
 def _hard_prune_unpadded_documents(
@@ -196,14 +225,20 @@ def _hard_prune_unpadded_documents(
     cu_seqlens_d: torch.Tensor,
     utilities: torch.Tensor,
     threshold: float = 0.5,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    return_pruned_utilities: bool = False,
+) -> Union[
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int],
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor],
+]:
     """
     Hard-prunes document tokens whose utility score < threshold from 1D unpadded FA2 sequence.
+    When threshold == 0.0 (Hard Concrete pruning), keeps tokens with utility > 0.0.
     Retains original positional indices (d_pos_ids) for RoPE embeddings in top layers.
     Rebuilds cu_seqlens_d and max_seqlen_d for remaining unpruned tokens.
+    If return_pruned_utilities is True, also returns pruned_utilities.
     """
     batch_size = cu_seqlens_d.shape[0] - 1
-    keep_mask = utilities.squeeze(-1).squeeze(0) >= threshold  # [total_tokens]
+    keep_mask = utilities.squeeze(-1).squeeze(0) > threshold  # [total_tokens]
 
     cu = cu_seqlens_d.cpu().tolist()
     kept_per_doc = []
@@ -233,6 +268,16 @@ def _hard_prune_unpadded_documents(
     )
     new_max_seqlen_d = max(kept_per_doc) if len(kept_per_doc) > 0 else 0
 
+    if return_pruned_utilities:
+        pruned_utilities = utilities[:, keep_mask, :]
+        return (
+            pruned_d_hidden,
+            pruned_d_pos_ids,
+            new_cu_seqlens_d,
+            new_max_seqlen_d,
+            pruned_utilities,
+        )
+
     return pruned_d_hidden, pruned_d_pos_ids, new_cu_seqlens_d, new_max_seqlen_d
 
 
@@ -241,14 +286,20 @@ def _hard_prune_padded_documents(
     doc_mask: torch.Tensor,
     utilities: torch.Tensor,
     threshold: float = 0.5,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return_pruned_utilities: bool = False,
+) -> Union[
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+]:
     """
     Hard-prunes document tokens whose utility score < threshold from 3D padded sequence [B, L_d, D].
+    When threshold == 0.0 (Hard Concrete pruning), keeps tokens with utility > 0.0.
     Constructs new 3D padded tensor [B, max_kept_len, D], new mask [B, max_kept_len],
     and retained position_ids [B, max_kept_len] preserving original token positions for RoPE.
+    If return_pruned_utilities is True, also returns new_utilities [B, max_kept_len, 1].
     """
     batch_size, seq_len, hidden_size = d_hidden.shape
-    valid_mask = (utilities.squeeze(-1) >= threshold) & doc_mask.bool()  # [B, L_d]
+    valid_mask = (utilities.squeeze(-1) > threshold) & doc_mask.bool()  # [B, L_d]
 
     for i in range(batch_size):
         if valid_mask[i].sum().item() == 0:
@@ -275,6 +326,12 @@ def _hard_prune_padded_documents(
     new_pos_ids = torch.zeros(
         (batch_size, max_kept_len), dtype=torch.long, device=d_hidden.device
     )
+    if return_pruned_utilities:
+        new_utilities = torch.zeros(
+            (batch_size, max_kept_len, 1),
+            dtype=utilities.dtype,
+            device=utilities.device,
+        )
 
     orig_pos = torch.arange(seq_len, device=d_hidden.device)
 
@@ -285,6 +342,11 @@ def _hard_prune_padded_documents(
             new_d_hidden[i, :k] = d_hidden[i, kept_indices]
             new_doc_mask[i, :k] = 1
             new_pos_ids[i, :k] = orig_pos[kept_indices]
+            if return_pruned_utilities:
+                new_utilities[i, :k] = utilities[i, kept_indices]
+
+    if return_pruned_utilities:
+        return new_d_hidden, new_doc_mask, new_pos_ids, new_utilities
 
     return new_d_hidden, new_doc_mask, new_pos_ids
 
@@ -505,7 +567,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         bound_bottom_layers: bool = True,
         cross_attn_first: bool = True,
         utility_pred: bool = False,
-        hard_pruning: bool = False,
+        hard_pruning: Optional[bool] = None,
         hard_prune_threshold: float = 0.5,
         normalize_doc_embeds: bool = False,
         use_upper_rope: bool = True,
@@ -515,6 +577,9 @@ class ModernBertMiceConfig(ModernBertConfig):
         utility_temp: float = 1.0,
         utility_bias: float = 5.0,
         gate_target: str = "h",
+        use_hard_concrete: bool = False,
+        hc_gamma: float = -0.1,
+        hc_zeta: float = 1.1,
         compress_dim: float = 1.0,
         compress_init_option: str = "seed",
         use_cross_attn: bool = True,
@@ -534,8 +599,6 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.bound_bottom_layers = bound_bottom_layers
         self.cross_attn_first = cross_attn_first
         self.utility_pred = utility_pred
-        self.hard_pruning = hard_pruning
-        self.hard_prune_threshold = hard_prune_threshold
         self.normalize_doc_embeds = normalize_doc_embeds
         self.use_upper_rope = use_upper_rope
         self.top_layers_doc_ln = top_layers_doc_ln
@@ -548,6 +611,18 @@ class ModernBertMiceConfig(ModernBertConfig):
                 f"Unknown gate_target: '{gate_target}'. Expected 'h' or 'v'."
             )
         self.gate_target = gate_target
+        if hc_zeta <= hc_gamma:
+            raise ValueError(
+                f"hc_zeta ({hc_zeta}) must be strictly greater than hc_gamma ({hc_gamma})"
+            )
+        self.use_hard_concrete = use_hard_concrete
+        self.hc_gamma = hc_gamma
+        self.hc_zeta = hc_zeta
+        if hard_pruning is None:
+            self.hard_pruning = True if use_hard_concrete else False
+        else:
+            self.hard_pruning = hard_pruning
+        self.hard_prune_threshold = hard_prune_threshold
         assert compress_dim >= 1.0, f"compress_dim must be >= 1.0, got {compress_dim}"
         self.compress_dim = compress_dim
         self.compress_init_option = compress_init_option
@@ -712,6 +787,10 @@ class ModernBertMiceCrossAttention(nn.Module):
             d_un_qkv = self.Wqkv(d_unpadded).view(-1, 3, self.num_heads, self.head_dim)
             K_un = d_un_qkv[:, 1].unsqueeze(0)
             V_un = d_un_qkv[:, 2].unsqueeze(0)
+
+            if d_utilities is not None:
+                u_unpadded, _, _, _, _ = _unpad_input(d_utilities, d_mask)
+                V_un = V_un * u_unpadded.view(1, -1, 1, 1)
 
             attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
                 attn_impl, eager_attention_forward
@@ -1141,10 +1220,14 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 config.hidden_size,
                 utility_temp=config.utility_temp,
                 utility_bias=getattr(config, "utility_bias", 5.0),
+                use_hard_concrete=getattr(config, "use_hard_concrete", False),
+                hc_gamma=getattr(config, "hc_gamma", -0.1),
+                hc_zeta=getattr(config, "hc_zeta", 1.1),
             )
         else:
             self.utility_predictor = None
         self.last_utilities = None
+        self.last_p_active = None
         self.last_doc_hidden = None
 
         self.post_init()
@@ -1406,9 +1489,15 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
 
         if self.utility_predictor is not None:
             hard_prune = self.config.hard_pruning
-            threshold = self.config.hard_prune_threshold
+            threshold = (
+                0.0
+                if getattr(self.config, "use_hard_concrete", False)
+                else self.config.hard_prune_threshold
+            )
             self.last_utilities = self.utility_predictor(d_hidden)
+            self.last_p_active = getattr(self.utility_predictor, "last_p_active", None)
             self.last_doc_hidden = d_hidden
+            self.pruned_utilities = None
 
             if hard_prune:
                 if use_unpadded and cu_seqlens_d is not None:
@@ -1417,12 +1506,14 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                         d_pos_ids,
                         cu_seqlens_d,
                         max_seqlen_d,
+                        pruned_utils,
                     ) = _hard_prune_unpadded_documents(
                         d_hidden,
                         d_pos_ids,
                         cu_seqlens_d,
                         self.last_utilities,
                         threshold=threshold,
+                        return_pruned_utilities=True,
                     )
                 else:
                     if doc_mask is None:
@@ -1431,9 +1522,24 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                             dtype=torch.bool,
                             device=d_hidden.device,
                         )
-                    d_hidden, doc_mask, d_pos_ids = _hard_prune_padded_documents(
-                        d_hidden, doc_mask, self.last_utilities, threshold=threshold
+                    (
+                        d_hidden,
+                        doc_mask,
+                        d_pos_ids,
+                        pruned_utils,
+                    ) = _hard_prune_padded_documents(
+                        d_hidden,
+                        doc_mask,
+                        self.last_utilities,
+                        threshold=threshold,
+                        return_pruned_utilities=True,
                     )
+                self.pruned_utilities = pruned_utils
+                gate_target = getattr(self.config, "gate_target", "h")
+                if gate_target == "h" and not getattr(
+                    self.config, "top_layers_doc_ln", False
+                ):
+                    d_hidden = d_hidden * self.pruned_utilities
             else:
                 gate_target = getattr(self.config, "gate_target", "h")
                 if gate_target == "h":
@@ -1452,7 +1558,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     )
         else:
             self.last_utilities = None
+            self.last_p_active = None
             self.last_doc_hidden = None
+            self.pruned_utilities = None
 
         if self.adapter is not None:
             d_hidden = self.adapter(d_hidden)
@@ -1602,18 +1710,33 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
         )
 
-        d_utilities = (
-            self.last_utilities
-            if (
-                self.utility_predictor is not None
-                and not getattr(self.config, "hard_pruning", False)
-                and (
-                    getattr(self.config, "top_layers_doc_ln", False)
-                    or getattr(self.config, "gate_target", "h") == "v"
+        if self.utility_predictor is not None:
+            if getattr(self.config, "hard_pruning", False):
+                if getattr(self.config, "use_hard_concrete", False):
+                    # Hard Concrete Value-gated slicing: pass pruned utilities to top layers
+                    d_utilities = (
+                        self.pruned_utilities
+                        if (
+                            getattr(self.config, "top_layers_doc_ln", False)
+                            or getattr(self.config, "gate_target", "h") == "v"
+                        )
+                        else None
+                    )
+                else:
+                    # Legacy Phase 2 hard pruning: utilities discarded in top layers
+                    d_utilities = None
+            else:
+                # Soft gating or unpruned ablation
+                d_utilities = (
+                    self.last_utilities
+                    if (
+                        getattr(self.config, "top_layers_doc_ln", False)
+                        or getattr(self.config, "gate_target", "h") == "v"
+                    )
+                    else None
                 )
-            )
-            else None
-        )
+        else:
+            d_utilities = None
 
         # apply the projection for the query.
         # document are done in the post processing.
