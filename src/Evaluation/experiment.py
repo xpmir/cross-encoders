@@ -35,13 +35,13 @@ from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 from xpmir.papers import configuration
 from xpmir.experiments.helpers import NeuralIRExperiment
 from xpmir.neural.huggingface import hf_cross_scorer
-from xpmir.neural.sentence_transformers import st_cross_scorer
+from xpmir.neural.sentence_transformers import st_cross_scorer, st_multivector_scorer
 from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
 
 from format import dataframe_to_latex, aggregations
 from tests import build_tests
-from configuration import Retrieval, Indexation, Preprocessing, Evaluation
+from configuration import Retrieval, Indexation, Preprocessing, Evaluation, ScorerType
 from retrievers import splade_retriever, bm25_retriever
 from training_utils import add_dataset_aggregations
 
@@ -60,6 +60,7 @@ class BaselinesConfig(NeuralIRExperiment):
 
     scorers_hf_id: List[str] = []
     scorers_st_id: List[str] = []
+    scorers_st_multivector_id: List[str] = []
 
     attn_implementation: Optional[str] = None
     """Preferred attention implementation (e.g. 'flash_attention_2', 'sdpa')"""
@@ -187,20 +188,29 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             f"First stage only evaluation done for {retriever_name} on datasets {list(run_retriever_factory.runs.keys())}"
         )
         logging.info(
-            f"Evaluating model-based retrievers {cfg.scorers_hf_id} {cfg.scorers_st_id}"
+            f"Evaluating model-based retrievers {cfg.scorers_hf_id} {cfg.scorers_st_id} {cfg.scorers_st_multivector_id}"
         )
 
         # Eval With cross-encoder
         if cfg.retrievers_only:
-            if len(cfg.scorers_hf_id) > 0 or len(cfg.scorers_st_id) > 0:
+            if (
+                len(cfg.scorers_hf_id) > 0
+                or len(cfg.scorers_st_id) > 0
+                or len(cfg.scorers_st_multivector_id) > 0
+            ):
                 logging.warning(
                     "Scorers specified in config but retrievers_only is True. Skipping cross-encoder evaluation."
                 )
             continue
 
-        all_scorers = [(id, "hf") for id in cfg.scorers_hf_id] + [
-            (id, "st") for id in cfg.scorers_st_id
-        ]
+        all_scorers = (
+            [(id, "hf") for id in cfg.scorers_hf_id]
+            + [(id, "st") for id in cfg.scorers_st_id]
+            + [
+                (id, ScorerType.stMultiVectorEncoder.value)
+                for id in cfg.scorers_st_multivector_id
+            ]
+        )
 
         for scorer_id, scorer_type in all_scorers:
             # Build the cross encoder
@@ -208,7 +218,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
             # Logic for max_length: use get_default_max_len for model id,
             # and pass it to constructor only if default is higher than the one given
-
+            ce_init_tasks = []
             if scorer_type == "hf":
                 scorer, ce_init_tasks = hf_cross_scorer(
                     hf_id=scorer_id,
@@ -217,7 +227,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                     max_query_length=cfg.max_query_length,
                     pref_attn_implementation=cfg.attn_implementation,
                 )
-            else:
+            elif scorer_type == "st":
                 st_tok = None
                 if cfg.max_query_length is not None or cfg.max_doc_length is not None:
                     from xpmir.neural.huggingface import HFQueryDocTokenizer
@@ -235,7 +245,29 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                     pref_attn_implementation=cfg.attn_implementation,
                     tokenizer=st_tok,
                 )
-                ce_init_tasks = []
+            elif scorer_type == ScorerType.stMultiVectorEncoder.value:
+                query_maxlen = cfg.max_query_length
+                doc_maxlen = cfg.max_doc_length or cfg.max_length
+
+                if query_maxlen is not None and query_maxlen > 512:
+                    logging.warning(
+                        f"MultiVector scorer '{scorer_id}': max_query_length ({query_maxlen}) exceeds 512 tokens. "
+                        "ColBERT queries are typically 32 tokens; consider checking your length config."
+                    )
+                if doc_maxlen is not None and doc_maxlen > 512:
+                    logging.warning(
+                        f"MultiVector scorer '{scorer_id}': max_doc_length ({doc_maxlen}) exceeds 512 tokens. "
+                        "Consider checking your length config."
+                    )
+
+                scorer = st_multivector_scorer(
+                    model_id=scorer_id,
+                    query_maxlen=query_maxlen,
+                    doc_maxlen=doc_maxlen,
+                    pref_attn_implementation=cfg.attn_implementation,
+                )
+            else:
+                raise ValueError(f"Unknown scorer_type: '{scorer_type}'")
 
             scorer.tag("scorer", scorer_id)
             scorer.tag("scorer_type", scorer_type)

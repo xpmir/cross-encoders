@@ -13,6 +13,11 @@ scorers_st_id:
 scorers_hf_id:
   - VictorMorand/MiceV2-l10p4-ettin-68m
   # - VictorMorand/MiceV2-l10-ettin-68m
+scorers_st_multivector_id:
+  - lightonai/LateOn
+
+max_query_length: 32
+max_doc_length: 300
 
 retrievers_hf_id:
   - naver/splade-v3-distilbert
@@ -32,5 +37,6 @@ evaluation:
   in_domain: false
   beir13: false
   datasets:
+    - trec2019
     - nfcorpus
     - scifact
