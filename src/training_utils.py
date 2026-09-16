@@ -48,7 +48,7 @@ from pointwise_distillation import (
 )
 
 from samplers import prepare_collection
-from configuration import Losses, CE_FineTuning
+from configuration import Losses, CE_FineTuning, ScorerType
 from samplers import msmarco_rankdistillm_sampled_colbert50
 from format import (
     aggregations,
@@ -220,9 +220,25 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             download=True,
         )
 
+        scorer_type = getattr(cfg, "scorer_type", ScorerType.stCrossEncoder.value)
+        if isinstance(scorer_type, ScorerType):
+            scorer_type = scorer_type.value
+
+        if scorer_type == ScorerType.stMultiVectorEncoder.value:
+            teacher_scale = 0.02
+            teacher_bias = 0.70
+            logger.info(
+                f"STMultiVectorEncoder detected: scaling teacher scores with scale={teacher_scale}, bias={teacher_bias} to align with MeanMaxSim range."
+            )
+            lossfn = PointwiseMSELoss.C(
+                teacher_scale=teacher_scale, teacher_bias=teacher_bias
+            )
+        else:
+            lossfn = PointwiseMSELoss.C()
+
         return PointwiseDistillationTrainer.C(
             sampler=PointwiseDistillationSampler.C(dataset=shuffled_dataset_config),
-            lossfn=PointwiseMSELoss.C(),
+            lossfn=lossfn,
             batch_size=cfg.learner.optimization.batch_size,
         )
 

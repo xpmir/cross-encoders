@@ -7,11 +7,11 @@ module: Evaluation.experiment
 pre_experiment: pre_experiment
 
 
-scorers_st_id:
-  # - cross-encoder/ettin-reranker-150m-v1
-  - VictorMorand/MiceV2-l10p4-ettin-68m
-scorers_hf_id:
-  - VictorMorand/MiceV2-l10p4-ettin-68m
+# scorers_st_id:
+#   # - cross-encoder/ettin-reranker-150m-v1
+#   - VictorMorand/MiceV2-l10p4-ettin-68m
+# scorers_hf_id:
+#   - VictorMorand/MiceV2-l10p4-ettin-68m
   # - VictorMorand/MiceV2-l10-ettin-68m
 scorers_st_multivector_id:
   - lightonai/LateOn

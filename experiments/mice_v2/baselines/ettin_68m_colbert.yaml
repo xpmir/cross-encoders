@@ -16,7 +16,7 @@ learner:
         batch_size: 256
         lr: 3e-5
         re_no_l2_regularization: [ '\.bias$', '(?i)norm' ]
-    requirements: duration=20h & cpu(mem=10G) & cuda(mem=30G) * 2
+    requirements: duration=20h & cpu(mem=10G) & cuda(mem=50G) * 2
     # requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=30G) * 2 # JZ
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
@@ -26,6 +26,7 @@ base: jhu-clsp/ettin-encoder-68m
 max_length: null
 max_query_length: 32
 max_doc_length: 512
+
 
 evaluation: #default = Minified tests
     all_datasets: false
@@ -39,3 +40,4 @@ grid_search:
     config_dicts:
         - {scorer_type: stCrossEncoder, learner.optimization.lr: 3e-5}
         - {scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-5}
+        - {scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-4}

@@ -164,7 +164,10 @@ def build_STMultiVectorEncoder(cfg) -> tuple[STMultiVectorEncoder, list]:
     loss_val = getattr(cfg.learner, "loss", None) if hasattr(cfg, "learner") else None
     if isinstance(loss_val, Losses):
         loss_val = loss_val.value
-    affine_scaling = loss_val == Losses.MSE_mixedbread_large.value
+
+    similarity_fn = getattr(cfg, "similarity_fn_name", None) or (
+        "meanmaxsim" if loss_val == Losses.MSE_mixedbread_large.value else "maxsim"
+    )
 
     scorer = st_multivector_scorer(
         model_id=cfg.base,
@@ -172,8 +175,7 @@ def build_STMultiVectorEncoder(cfg) -> tuple[STMultiVectorEncoder, list]:
         query_maxlen=query_maxlen,
         doc_maxlen=doc_maxlen,
         pref_attn_implementation=attn_impl,
-        similarity_fn_name="maxsim",
-        affine_scaling=affine_scaling,
+        similarity_fn_name=similarity_fn,
         query_expansion=None,
     )
     return scorer, []

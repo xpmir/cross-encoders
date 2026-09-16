@@ -305,6 +305,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     scorer_type: GridSearch[str] = ScorerType.stCrossEncoder.value
     """Type of scorer model: stCrossEncoder, stMultiVectorEncoder, or hfCrossScorer"""
 
+    similarity_fn_name: Optional[str] = field(default=None)
+    """Similarity function for multi-vector scorer ('maxsim' or 'meanmaxsim'). When None, defaults to 'meanmaxsim' for MSE_mixedbread_large and 'maxsim' otherwise."""
+
     ettin_subset_exclude: List[str] = field(factory=list)
     """The subset config names of cross_encoder.ettin_reranker_v1_data to exclude from training"""
 
