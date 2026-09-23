@@ -7,12 +7,16 @@ description:
 
 module: MICE.experiments.micev2_training
 parent: ../_ettin68m_abl.yaml
-nb_repetitions: 1
+nb_repetitions: 2
 
 top_layers_doc_ln: true
 bottom_final_norm: false
 top_final_norm: false
 normalize_doc_embeds: true
+
+learner:
+    optimization:
+        max_epochs: 5000
 
 grid_search:
     config_dicts:

@@ -113,6 +113,11 @@ CE_MEASURES = [Success @ 5, nDCG @ 10, nDCG @ 20, RR @ 10]
 RETRIEVERS_MEASURES = [R @ 100, R @ 1000]
 
 
+def get_ce_measures(include_recall_100: bool = False) -> list:
+    """CE_MEASURES, optionally with R@100 appended (see Evaluation.include_recall_100)."""
+    return CE_MEASURES + [R @ 100] if include_recall_100 else CE_MEASURES
+
+
 def get_fold(dataset, size, seed=0, launcher=None):
     if size > 0:
         (fold_config,) = RandomFold.folds(
@@ -127,6 +132,7 @@ def minified_tests(
     test_topic_nb: int,
     check_docs: bool = True,
     retrievers_only: bool = False,
+    include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
@@ -157,7 +163,7 @@ def minified_tests(
     )  # 323 queries
     nfcorpus = get_fold(nfcorpus, test_topic_nb, launcher=launcher)
 
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+    measures = get_ce_measures(include_recall_100) if not retrievers_only else RETRIEVERS_MEASURES
     tests = EvaluationsCollection(
         msmarco_dev=Evaluations(v1_devsmall_ds, measures=measures),
         trec2019=Evaluations(dl19, measures=measures),
@@ -179,6 +185,7 @@ def minified_tests(
 def BEIR_13_tests(
     test_topic_nb: int,
     retrievers_only: bool = False,
+    include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
@@ -223,7 +230,7 @@ def BEIR_13_tests(
     trec_covid = prepare_dataset("org.beir.trec.covid", download=blocking)
     trec_covid = get_fold(trec_covid, test_topic_nb, launcher=launcher)
 
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+    measures = get_ce_measures(include_recall_100) if not retrievers_only else RETRIEVERS_MEASURES
     return EvaluationsCollection(
         fever=Evaluations(fever, measures=measures),
         arguana=Evaluations(arguana, measures=measures),
@@ -292,11 +299,12 @@ def get_decontaminated_test(
     key: str,
     test_topic_nb: int,
     retrievers_only: bool = False,
+    include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> Evaluations:
     """Build a single LightOn decontaminated BEIR dataset evaluation."""
-    measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+    measures = get_ce_measures(include_recall_100) if not retrievers_only else RETRIEVERS_MEASURES
     dataset_id = BEIR13_DECONTAMINATED_KEYS[key]
     ds = prepare_dataset(dataset_id, download=blocking)
     # Apply the filter before taking the fold or evaluating
@@ -359,6 +367,7 @@ class FilterUnassessedTopics(Task):
 def BEIR13_decontaminated_tests(
     test_topic_nb: int,
     retrievers_only: bool = False,
+    include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
@@ -369,6 +378,7 @@ def BEIR13_decontaminated_tests(
             key,
             test_topic_nb,
             retrievers_only=retrievers_only,
+            include_recall_100=include_recall_100,
             launcher=launcher,
             blocking=blocking,
         )
@@ -380,6 +390,7 @@ def BEIR13_decontaminated_tests(
 def Robust04_test(
     test_topic_nb: int,
     retrievers_only: bool = False,
+    include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
@@ -392,7 +403,10 @@ def Robust04_test(
 
     return EvaluationsCollection(
         robust04=Evaluations(
-            robust04, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+            robust04,
+            get_ce_measures(include_recall_100)
+            if not retrievers_only
+            else RETRIEVERS_MEASURES,
         ),
     )
 
@@ -401,6 +415,7 @@ def Robust04_test(
 def LoTTE_tests(
     test_topic_nb: int,
     retrievers_only: bool = False,
+    include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
@@ -431,24 +446,13 @@ def LoTTE_tests(
     )
     lotte_lifestyle = get_fold(lotte_lifestyle, test_topic_nb, launcher=launcher)
 
+    measures = get_ce_measures(include_recall_100) if not retrievers_only else RETRIEVERS_MEASURES
     return EvaluationsCollection(
-        lotte_writing=Evaluations(
-            lotte_writing, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-        lotte_recreation=Evaluations(
-            lotte_recreation,
-            CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES,
-        ),
-        lotte_science=Evaluations(
-            lotte_science, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-        lotte_technology=Evaluations(
-            lotte_technology,
-            CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES,
-        ),
-        lotte_lifestyle=Evaluations(
-            lotte_lifestyle, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
+        lotte_writing=Evaluations(lotte_writing, measures),
+        lotte_recreation=Evaluations(lotte_recreation, measures),
+        lotte_science=Evaluations(lotte_science, measures),
+        lotte_technology=Evaluations(lotte_technology, measures),
+        lotte_lifestyle=Evaluations(lotte_lifestyle, measures),
     )
 
 
@@ -499,6 +503,7 @@ def paper_tests(
     test_topic_nb: int,
     check_docs: bool = True,
     retrievers_only: bool = False,
+    include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
@@ -523,32 +528,30 @@ def paper_tests(
     beir = BEIR_13_tests(
         test_topic_nb,
         retrievers_only=retrievers_only,
+        include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
     )
     robust04 = Robust04_test(
         test_topic_nb,
         retrievers_only=retrievers_only,
+        include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
     )
     lotte = LoTTE_tests(
         test_topic_nb,
         retrievers_only=retrievers_only,
+        include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
     )
 
+    measures = get_ce_measures(include_recall_100) if not retrievers_only else RETRIEVERS_MEASURES
     paper_tests_res = EvaluationsCollection(
-        msmarco_dev=Evaluations(
-            v1_dev, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-        trec2019=Evaluations(
-            dl19, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
-        trec2020=Evaluations(
-            dl20, CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
-        ),
+        msmarco_dev=Evaluations(v1_dev, measures),
+        trec2019=Evaluations(dl19, measures),
+        trec2020=Evaluations(dl20, measures),
         **beir.collection,
         **robust04.collection,
         **lotte.collection,
@@ -576,6 +579,10 @@ def build_tests(
     :returns: The evaluations collection to use
     """
     all_evals = {}
+    # Not threaded into nano_beir_tests: nano_beir_tests results feed into
+    # training-time validation, and changing its measures would change the
+    # validation set's identity/hash, invalidating learner checkpoints.
+    include_recall_100 = getattr(cfg, "include_recall_100", False)
 
     # Helper to add evals to the dictionary
     def add_evals(evals_collection: EvaluationsCollection):
@@ -599,7 +606,7 @@ def build_tests(
         dl19 = get_fold(dl19, cfg.test_max_topics, launcher=launcher)
         dl20 = get_fold(dl20, cfg.test_max_topics, launcher=launcher)
 
-        measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+        measures = get_ce_measures(include_recall_100) if not retrievers_only else RETRIEVERS_MEASURES
         add_evals(
             EvaluationsCollection(
                 msmarco_dev=Evaluations(v1_dev, measures),
@@ -614,6 +621,7 @@ def build_tests(
             BEIR_13_tests(
                 cfg.test_max_topics,
                 retrievers_only=retrievers_only,
+                include_recall_100=include_recall_100,
                 launcher=launcher,
                 blocking=blocking,
             )
@@ -625,6 +633,7 @@ def build_tests(
             BEIR13_decontaminated_tests(
                 cfg.test_max_topics,
                 retrievers_only=retrievers_only,
+                include_recall_100=include_recall_100,
                 launcher=launcher,
                 blocking=blocking,
             )
@@ -635,6 +644,7 @@ def build_tests(
             Robust04_test(
                 cfg.test_max_topics,
                 retrievers_only=retrievers_only,
+                include_recall_100=include_recall_100,
                 launcher=launcher,
                 blocking=blocking,
             )
@@ -645,6 +655,7 @@ def build_tests(
             LoTTE_tests(
                 cfg.test_max_topics,
                 retrievers_only=retrievers_only,
+                include_recall_100=include_recall_100,
                 launcher=launcher,
                 blocking=blocking,
             )
@@ -672,6 +683,7 @@ def build_tests(
                     ds_name,
                     cfg.test_max_topics,
                     retrievers_only=retrievers_only,
+                    include_recall_100=include_recall_100,
                     launcher=launcher,
                     blocking=blocking,
                 )
@@ -680,6 +692,7 @@ def build_tests(
                     beir13_all = BEIR_13_tests(
                         cfg.test_max_topics,
                         retrievers_only=retrievers_only,
+                        include_recall_100=include_recall_100,
                         launcher=launcher,
                         blocking=blocking,
                     )
@@ -691,7 +704,7 @@ def build_tests(
                 else:
                     ds = prepare_dataset(ds_id, download=blocking)
                 ds = get_fold(ds, cfg.test_max_topics, launcher=launcher)
-                measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+                measures = get_ce_measures(include_recall_100) if not retrievers_only else RETRIEVERS_MEASURES
                 all_evals[ds_name] = Evaluations(ds, measures=measures)
             elif ds_name in NANO_BEIR_KEYS:
                 nano_all = nano_beir_tests(
@@ -705,6 +718,7 @@ def build_tests(
                 lotte_all = LoTTE_tests(
                     cfg.test_max_topics,
                     retrievers_only=retrievers_only,
+                    include_recall_100=include_recall_100,
                     launcher=launcher,
                     blocking=blocking,
                 )
@@ -713,6 +727,7 @@ def build_tests(
                 rob_all = Robust04_test(
                     cfg.test_max_topics,
                     retrievers_only=retrievers_only,
+                    include_recall_100=include_recall_100,
                     launcher=launcher,
                     blocking=blocking,
                 )
@@ -726,6 +741,7 @@ def build_tests(
             cfg.test_max_topics,
             check_docs=check_docs,
             retrievers_only=retrievers_only,
+            include_recall_100=include_recall_100,
             launcher=launcher,
             blocking=blocking,
         )

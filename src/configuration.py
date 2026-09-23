@@ -158,6 +158,9 @@ class Evaluation:
     datasets: List[str] = Factory(list)
     """List of specific datasets to evaluate on"""
 
+    include_recall_100: bool = False
+    """Whether to additionally report R@100 alongside CE_MEASURES (Success@5, nDCG@10, nDCG@20, RR@10)"""
+
     fabric: Fabric = Factory(Fabric)
     """Configuration for Fabric device management during evaluation"""
 
@@ -244,12 +247,18 @@ class PlaidConfiguration:
     use_plaid: bool = False
     """Whether to use PLAID for retrieval"""
 
+    use_colbert_first_stage: bool = False
+    """Whether to additionally evaluate a genuine ColBERT-style first-stage
+    retriever using MICE's own bottom-layer contextualized embeddings
+    (standalone, and reranked by MICE's top interaction layers), alongside
+    the existing SPLADE/BM25-based baselines. Requires use_plaid=True."""
+
     ### Indexation params ###
     buffer_size: GridSearch[int] = 1000
     """Number of documents to use for creating/updating the PLAID index"""
 
-    batch_size: int = 25_000
-    """Batch size (in tokens) when encoding documents for PLAID"""
+    batch_size: int = 0
+    """Batch size (in tokens) when indexing documents for Fast PLAID"""
 
     dim: int = 128
     """Per-token embedding dimension for PLAID index"""

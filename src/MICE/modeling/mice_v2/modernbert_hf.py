@@ -1113,6 +1113,35 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         )
         return d_hidden, doc_mask
 
+    def _query_embed_post_process(self, q_hidden: torch.Tensor) -> torch.Tensor:
+        """Mirrors `_document_embed_post_process`'s normalization + adapter
+        projection, but never applies pruning/utility-gating -- those only
+        ever make sense for documents, regardless of the pruning strategy."""
+        if getattr(self.config, "normalize_doc_embeds", False):
+            q_hidden = q_hidden - torch.mean(q_hidden, dim=-1, keepdim=True)
+            q_hidden = torch.nn.functional.normalize(q_hidden, p=2, dim=-1)
+
+        if self.adapter is not None:
+            q_hidden = self.adapter(q_hidden)
+
+        return q_hidden
+
+    def encode_queries(
+        self,
+        query_ids: torch.LongTensor,
+        query_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Encode queries through bottom contextualization layers.
+
+        Returns (q_hidden, query_mask): query_mask is simply passed through
+        unchanged (queries are never pruned, unlike documents) -- kept for
+        interface symmetry with `encode_documents`.
+        """
+        q_hidden, _ = self._forward_bottom(query_ids, mask=query_mask, **kwargs)
+        q_hidden = self._query_embed_post_process(q_hidden)
+        return q_hidden, query_mask
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -1198,9 +1227,13 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 )
 
             if use_unpadded:
-                d_hidden, _, cu_seqlens_d, max_seqlen_d, _ = _unpad_input(
-                    doc_hidden, doc_mask
-                )
+                (
+                    d_hidden,
+                    cu_seqlens_d,
+                    max_seqlen_d,
+                    _,
+                    d_pos_ids,
+                ) = _unpad_input_with_posids(doc_hidden, doc_mask)
             else:
                 d_hidden = doc_hidden
                 cu_seqlens_d = max_seqlen_d = None

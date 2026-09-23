@@ -639,6 +639,8 @@ def TrainEvaluateMiceV2(
                         first_stage_factory=test_run_retriever_factory,
                         topk=cfg.retrieval.k,
                         batchsize=cfg.retrieval.batch_size,
+                        n_ivf_probe=cfg.plaid.n_ivf_probe,
+                        n_full_scores=cfg.plaid.n_full_scores,
                     )
                     # 2) Build the plaid indexes for all datasets in the collection
                     mice_plaid_factory.build_indexes(
@@ -660,6 +662,69 @@ def TrainEvaluateMiceV2(
                         with_run=cfg.save_runs,
                         fabric_config=cfg.evaluation.fabric.get_config(),
                     )
+
+                    if cfg.plaid.use_colbert_first_stage:
+                        logging.info(
+                            f"Running genuine ColBERT-style first-stage evaluation for: {label}"
+                        )
+                        colbert_tag = "mice-colbert"
+
+                        # the tags for the first stage plaid retriever
+                        load_model.tag("first_stage", colbert_tag)
+                        load_model.tag("plaid_retriever", "")
+
+                        # Precompute the ColBERT-style first-stage run once (same
+                        # pattern as the SPLADE precompute above) -- no model_id,
+                        # so it isn't registered as its own report row, exactly
+                        # like the SPLADE-alone run isn't either; the measures
+                        # are still computed and stored.
+                        colbert_runs = tests.evaluate_retriever(
+                            mice_plaid_factory.colbert_retriever,
+                            launcher=launcher_evaluate,
+                            init_tasks=eval_init_tasks,
+                            with_run=True,
+                            fabric_config=cfg.evaluation.fabric.get_config(),
+                        )
+                        colbert_run_retriever_factory = (
+                            MultiRunRetrieverFactory.from_results(
+                                colbert_tag, colbert_runs
+                            )
+                        )
+
+                        # for the second stage reranker
+                        load_model.tag("plaid_retriever", True)
+
+                        # Rerank of ColBERT-retrieved candidates via MICE's top
+                        # interaction layers -- reuses the cached run above (no
+                        # first-stage re-retrieval). build_indexes submits an
+                        # identical PlaidIndexBuilder config to the one above, so
+                        # it resolves to the same experimaestro task (no re-indexing).
+                        # We have to create a new factory here as it use different
+                        # first stage factory compare to previous one.
+                        mice_colbert_rerank_factory = MicePlaidRetrieverFactory(
+                            mice_model=eval_model,
+                            first_stage_factory=colbert_run_retriever_factory,
+                            topk=cfg.retrieval.k,
+                            batchsize=cfg.retrieval.batch_size,
+                            n_ivf_probe=cfg.plaid.n_ivf_probe,
+                            n_full_scores=cfg.plaid.n_full_scores,
+                        )
+                        mice_colbert_rerank_factory.build_indexes(
+                            evaluations=tests,
+                            cfg=cfg.plaid,
+                            batch_size=cfg.retrieval.batch_size,
+                            seed=seed,
+                            launcher_index=launcher_index,
+                            init_tasks=[load_model],
+                        )
+                        tests.evaluate_retriever(
+                            retriever=mice_colbert_rerank_factory,
+                            launcher=launcher_evaluate,
+                            model_id=f"{model_id}-ColBERT-Plaid",
+                            init_tasks=eval_init_tasks,
+                            with_run=cfg.save_runs,
+                            fabric_config=cfg.evaluation.fabric.get_config(),
+                        )
 
     all_configs, all_tags = generate_grid(cfg)
 

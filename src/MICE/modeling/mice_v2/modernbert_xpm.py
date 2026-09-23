@@ -1218,6 +1218,36 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         model_cfg = getattr(self, "config", self)
         return MiceV2DocumentEncoder.C(model=model_cfg)
 
+    def encode_queries(
+        self, query_ids: torch.Tensor, query_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Encode queries through bottom contextualization layers.
+
+        Returns (q_hidden, query_mask), see `ModernBertMiceForSequenceClassification.encode_queries`.
+        """
+        return self.hf_model.encode_queries(query_ids=query_ids, query_mask=query_mask)
+
+    def query_token_embeddings(self, records: List[IDTextRecord]) -> torch.Tensor:
+        """Returns a dense (batch, query_maxlen, dim) query embedding tensor
+        for genuine ColBERT-style search via fast-plaid, with padding
+        positions zeroed out so they contribute ~0 to MaxSim regardless of
+        document token (MICE's bottom layers were never trained with
+        ColBERT's [MASK]-token query-augmentation convention, so we don't
+        attempt to replicate it here).
+
+        This makes `ModernBertMiceScorer` itself directly usable as
+        `xpmir.index.plaid.PlaidRetriever.encoder` (it's already an
+        `AbstractModuleScorer`, which is what that Param expects).
+        """
+        options = TokenizerOptions(max_length=self.tokenizer.max_query_length)
+        tokenized = self.batch_tokenize(
+            records, options=options, input_nature=QueryDocInput.QUERY
+        )
+        if tokenized.ids.device != self.device:
+            tokenized = tokenized.to(self.device)
+        q_hidden, q_mask = self.encode_queries(tokenized.ids, tokenized.mask)
+        return q_hidden * q_mask.unsqueeze(-1).to(q_hidden.dtype)
+
     def batch_tokenize(
         self,
         input_records: BaseItems,

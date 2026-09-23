@@ -9,7 +9,8 @@ from xpmir.index.sparse import SparseRetriever
 from xpmir.rankers.standard import BM25, Model
 from xpmir.index.bow import BOWRetriever, BOWSparseRetrieverIndexBuilder
 from xpmir.evaluation import EvaluationsCollection, RetrieverFactory
-from xpmir.index.plaid import PlaidIndexBuilder
+from xpmir.index.plaid import PlaidIndexBuilder, PlaidRetriever
+from xpm_torch.configuration import FabricConfiguration
 
 from MICE.plaid_mice import MicePlaidRetrieverv2
 from configuration import CE_FineTuning, PlaidConfiguration
@@ -102,11 +103,15 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
         first_stage_factory: RetrieverFactory,
         topk: int,
         batchsize: int,
+        n_ivf_probe: int = 8,
+        n_full_scores: int = 0,
     ):
         self.mice_model = mice_model
         self.topk = topk
         self.batchsize = batchsize
         self.first_stage_factory = first_stage_factory
+        self.n_ivf_probe = n_ivf_probe
+        self.n_full_scores = n_full_scores
         self.doc_encoder = mice_model.get_document_encoder()
         self.indexes: Dict[str] = {}
         self.documents: Dict[str, Documents] = {}
@@ -151,6 +156,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
                         seed=seed,
                         compress_only=cfg.compress_only,
                         force_cpu_indexing=cfg.force_cpu_indexing,
+                        fabric_config=FabricConfiguration.C(precision="bf16-true")
                     )
                     .tag("index_documents", documents.id)
                     .submit(
@@ -162,7 +168,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
             else:
                 logging.warning(f"Dataset {documents.id} already indexed with Plaid")
 
-    def __call__(self, dataset: Documents, key: str = None) -> MicePlaidRetrieverv2:
+    def _resolve_index(self, dataset: Documents, key: str = None):
         # Try to find the run by key first, then by dataset ID
         index = self.indexes.get(key) if key else None
         if index is None:
@@ -178,6 +184,10 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
                 f"Available: {','.join(self.runs.keys())}"
             )
 
+        return index
+
+    def __call__(self, dataset: Documents, key: str = None) -> MicePlaidRetrieverv2:
+        index = self._resolve_index(dataset, key)
         return MicePlaidRetrieverv2.C(
             store=dataset,
             index=index,
@@ -186,6 +196,19 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
             top_k=self.topk,
             batchsize=self.batchsize,
         )
+
+    def colbert_retriever(self, dataset: Documents, key: str = None) -> PlaidRetriever:
+        """Genuine ColBERT-style (MaxSim/IVF) first-stage retriever, searching
+        the same PLAID index built by `build_indexes`, using MICE's own
+        bottom-layer contextualized embeddings for both queries and documents."""
+        return PlaidRetriever.C(
+            encoder=self.mice_model,
+            index=self._resolve_index(dataset, key),
+            topk=self.topk,
+            n_ivf_probe=self.n_ivf_probe,
+            n_full_scores=self.n_full_scores,
+            fabric_config=FabricConfiguration.C(precision="16-true"),
+        ).tag("first_stage", "mice-colbert")
 
     # @classmethod
     # def from_results(cls, name: str, results: List) -> "MicePlaidRetrieverFactory":

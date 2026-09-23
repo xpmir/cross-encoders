@@ -1,0 +1,40 @@
+id: train_micev2_ettin68m_l10+4_abl_colbert
+title: "Mice-Ettin-68m ColBERT First-Stage Evaluation"
+description:
+    Evaluate a genuine ColBERT-style (MaxSim/IVF) first-stage retriever built
+    from MICE's own bottom-layer contextualized embeddings, both standalone
+    and reranked by MICE's top interaction layers, alongside the existing
+    SPLADE-v3 baseline. Uncompressed top interaction layers (compress_dim=1.0,
+    compress_init_option="seed", i.e. the default).
+
+module: MICE.experiments.micev2_training
+parent: ../_ettin68m_abl.yaml
+nb_repetitions: 1
+
+top_layers_doc_ln: true
+bottom_final_norm: false
+top_final_norm: false
+normalize_doc_embeds: true
+
+plaid:
+    use_plaid: true
+    use_colbert_first_stage: true
+    buffer_size: 5000
+    n_bits: 4
+    n_samples_kmeans: 200
+
+evaluation:
+    all_datasets: false
+    in_domain: false
+    beir13: false
+    datasets:
+        - fever
+    include_recall_100: true
+    fabric:
+        precision: "16-true"
+
+retrieval:
+    long_requirements: duration=20h & cpu(cores=16) & cuda(mem=60G)
+
+indexation:
+    requirements: duration=20h & cpu(cores=32) & cuda(mem=80G)
