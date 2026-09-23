@@ -8,6 +8,9 @@ pre_experiment: pre_experiment
 parent: ../_common.yaml
 gpu: true
 
+scorers_st_multivector_id:
+  - lightonai/LateOn
+
 scorers_st_id:
   - cross-encoder/ettin-reranker-400m-v1
   - cross-encoder/ettin-reranker-150m-v1

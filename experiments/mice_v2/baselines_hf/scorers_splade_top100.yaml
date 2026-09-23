@@ -1,0 +1,33 @@
+id: eval_scorers_top100_32_512
+title: cross_scorer_evaluation
+description: Evalutation of various HF Scorers
+
+parent: ../_common.yaml
+module: Evaluation.experiment
+pre_experiment: pre_experiment
+
+#First stage: splade-v3
+retrievers_hf_id:
+  - naver/splade-v3-distilbert
+
+
+scorers_st_id:
+  - cross-encoder/ettin-reranker-400m-v1
+  - cross-encoder/ettin-reranker-150m-v1
+  - cross-encoder/ettin-reranker-68m-v1
+  - cross-encoder/ettin-reranker-32m-v1
+  # - VictorMorand/MiceV2-l10p4-ettin-68m
+
+
+scorers_st_multivector_id:
+  - lightonai/LateOn
+
+max_query_length: 32
+max_doc_length: 512
+
+
+evaluation:
+  #just for debugging
+  in_domain: true
+  beir13: true
+  beir13_decontaminated: true

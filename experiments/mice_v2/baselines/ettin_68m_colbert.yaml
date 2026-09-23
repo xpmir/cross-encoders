@@ -31,7 +31,7 @@ max_doc_length: 512
 evaluation: #default = Minified tests
     all_datasets: false
     in_domain: false
-    beir13: false
+    beir13: true
     eval_checkpoint:
         - last
 

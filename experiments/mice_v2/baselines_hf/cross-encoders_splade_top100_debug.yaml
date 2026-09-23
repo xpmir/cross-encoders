@@ -7,17 +7,17 @@ module: Evaluation.experiment
 pre_experiment: pre_experiment
 
 
-# scorers_st_id:
-#   # - cross-encoder/ettin-reranker-150m-v1
-#   - VictorMorand/MiceV2-l10p4-ettin-68m
+scorers_st_id:
+  # - cross-encoder/ettin-reranker-150m-v1
+  - VictorMorand/MiceV2-l10p4-ettin-68m
 # scorers_hf_id:
 #   - VictorMorand/MiceV2-l10p4-ettin-68m
   # - VictorMorand/MiceV2-l10-ettin-68m
-scorers_st_multivector_id:
-  - lightonai/LateOn
+# scorers_st_multivector_id:
+#   - lightonai/LateOn
 
 max_query_length: 32
-max_doc_length: 300
+max_doc_length: 512
 
 retrievers_hf_id:
   - naver/splade-v3-distilbert
@@ -27,10 +27,10 @@ indexation:
   sparse2bmp_requirements: duration=8h & cpu(cores=8)
   batch_size: 128
 
-retrieval:
-  requirements: duration=2h & cpu(cores=4, mem=10G) & cuda(mem=50G)
-  batch_size: 64
-  k: 100
+# retrieval:
+#   requirements: duration=2h & cpu(cores=4, mem=10G) & cuda(mem=50G)
+#   batch_size: 64
+#   k: 100
 
 evaluation:
   #just for debugging
@@ -40,3 +40,4 @@ evaluation:
     - trec2019
     - nfcorpus
     - scifact
+    - arguana
