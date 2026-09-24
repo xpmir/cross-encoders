@@ -329,6 +329,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     precompute_first_stage: bool = True
     """If true, will save the run for the first stage - just reload it for evaluation rather than recomputing"""
 
+    from_experiment: GridSearch[Optional[str]] = None
+    """Optional experiment ID, local model directory path, or HF Hub model ID to instantiate a trained model from results/models"""
+
     ## Cross Encoder Model
     base: GridSearch[str] = ""
     """Identifier for the base model"""

@@ -846,6 +846,9 @@ class InitMICEV2FromCheckpoint(LightweightTask):
     """Path or ModuleLoader to the Phase 1 trained checkpoint (should contain model.safetensors or model/ directory)."""
 
     def execute(self):
+        ckpt_path = Path(self.checkpoint_loader.path)
+        logger.info("[InitMICEV2] Loading Phase 1 checkpoint from: %s", ckpt_path)
+
         # 1. Initialize scorer and freeze parameters on all ranks
         if not self.scorer._initialized:
             self.scorer.initialize()
@@ -855,26 +858,50 @@ class InitMICEV2FromCheckpoint(LightweightTask):
         if self.freeze_bottom_layers:
             self.scorer.freeze_bottom_layers()
 
-        # 2. Checkpoint copying only on rank zero
+        # 2. Checkpoint handling
+        latest_epoch_dir = find_latest_epoch_dir(ckpt_path)
+        if latest_epoch_dir is None:
+            # Exported model (e.g. results/models or HF Hub cache) without epoch-* folder
+            model_dir = ckpt_path.parent if ckpt_path.is_file() else ckpt_path
+            if (
+                (model_dir / "model.safetensors").exists()
+                or (model_dir / "pytorch_model.bin").exists()
+                or (model_dir / "model").exists()
+            ):
+                logger.info(
+                    "[InitMICEV2] latest_epoch_dir is None: loading weights directly from exported model %s (no trainer checkpoint to copy)",
+                    model_dir,
+                )
+                self.scorer.load_model(model_dir)
+            else:
+                logger.info(
+                    "[InitMICEV2] latest_epoch_dir is None and no exported weights file found at %s. "
+                    "Skipping weight loading.",
+                    ckpt_path,
+                )
+
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                torch.distributed.barrier()
+            return
+
+        # 3. Checkpoint copying only on rank zero for epoch directories
         if not is_rank_zero():
             logger.info(
-                "[InitMICEV2] Skipping checkpoint initialization on non-zero rank (RANK=%s, LOCAL_RANK=%s)",
+                "[InitMICEV2] Skipping checkpoint copying on non-zero rank (RANK=%s, LOCAL_RANK=%s)",
                 os.environ.get("RANK", "unknown"),
                 os.environ.get("LOCAL_RANK", "unknown"),
             )
             if torch.distributed.is_available() and torch.distributed.is_initialized():
                 torch.distributed.barrier()
             return
+        else:
+            logger.info(
+                "[InitMICEV2] Found full checkpoint from trainer path at: %s. "
+                "Copying full checkpoint (model weights, optimizer.pth, trainer.pth) to epoch-00000000.",
+                latest_epoch_dir,
+            )
 
-        ckpt_path = Path(self.checkpoint_loader.path)
-        logger.info("[InitMICEV2] Copying Phase 1 checkpoint at: %s", ckpt_path)
-
-        latest_epoch_dir = find_latest_epoch_dir(ckpt_path)
-        assert latest_epoch_dir is not None, (
-            f"[InitMICEV2] No valid epoch directory found in {ckpt_path}"
-        )
-
-        # 1. Read Phase 1 step count from info.json
+        # Read Phase 1 step count from info.json
         phase1_steps = 0
         if (latest_epoch_dir / "info.json").exists():
             try:
@@ -1270,6 +1297,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 attr_name: str, self_val, target_cfg_attr: Optional[str] = None
             ):
                 cfg_attr = target_cfg_attr or attr_name
+                if not hasattr(mice_config, cfg_attr):
+                    return
                 ckpt_val = getattr(mice_config, cfg_attr)
                 if self_val != ckpt_val:
                     logger.warning(
@@ -1280,44 +1309,43 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                     )
                     setattr(mice_config, cfg_attr, self_val)
 
+            # Check all structural and operational attributes systematically
+            check_attrs = [
+                "n_contextualization_layers",
+                "n_docs_ctx_layers",
+                "n_interaction_layers",
+                "bound_bottom_layers",
+                "utility_pred",
+                "hard_pruning",
+                "hard_prune_threshold",
+                "normalize_doc_embeds",
+                "use_upper_rope",
+                "top_layers_doc_ln",
+                "bottom_final_norm",
+                "top_final_norm",
+                "utility_temp",
+                "utility_bias",
+                "gate_target",
+                "use_hard_concrete",
+                "hc_gamma",
+                "hc_zeta",
+                "compress_dim",
+                "compress_init_option",
+                "use_cross_attn",
+                "head_type",
+            ]
+
+            for attr in check_attrs:
+                self_val = getattr(self, attr, None)
+                if self_val is not None:
+                    apply_override(attr, self_val)
+
             if self.attn_implementation is not None:
                 apply_override(
                     "attn_implementation",
                     self.attn_implementation,
                     "_attn_implementation",
                 )
-            if self.utility_pred:
-                apply_override("utility_pred", True)
-            if self.hard_pruning:
-                apply_override("hard_pruning", True)
-                apply_override("hard_prune_threshold", self.hard_prune_threshold)
-            if self.normalize_doc_embeds:
-                apply_override("normalize_doc_embeds", True)
-            if not self.use_upper_rope:
-                apply_override("use_upper_rope", False)
-            if self.top_layers_doc_ln:
-                apply_override("top_layers_doc_ln", True)
-            if not self.bottom_final_norm:
-                apply_override("bottom_final_norm", False)
-            if self.top_final_norm:
-                apply_override("top_final_norm", True)
-            if self.utility_temp != 1.0:
-                apply_override("utility_temp", self.utility_temp)
-            if self.utility_bias != 5.0:
-                apply_override("utility_bias", self.utility_bias)
-            if self.gate_target != "h":
-                apply_override("gate_target", self.gate_target)
-            if self.use_hard_concrete:
-                apply_override("use_hard_concrete", self.use_hard_concrete)
-                apply_override("hc_gamma", self.hc_gamma)
-                apply_override("hc_zeta", self.hc_zeta)
-            if self.compress_dim != 1.0:
-                apply_override("compress_dim", self.compress_dim)
-                apply_override("compress_init_option", self.compress_init_option)
-            if not self.use_cross_attn:
-                apply_override("use_cross_attn", False)
-            if self.head_type != "linear":
-                apply_override("head_type", self.head_type)
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -1797,32 +1825,50 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         ).exists():
             path = path / "model"
 
+        def _load_and_validate(sd, filename):
+            for old_k, new_k in [
+                ("classifier.weight", "output_modules.dense_score.linear.weight"),
+                ("classifier.bias", "output_modules.dense_score.linear.bias"),
+                ("top_final_norm.weight", "output_modules.norm.norm.weight"),
+                ("top_final_norm.bias", "output_modules.norm.norm.bias"),
+            ]:
+                if old_k in sd and new_k not in sd:
+                    sd[new_k] = sd.pop(old_k)
+
+            load_res = self.hf_model.load_state_dict(sd, strict=False)
+            if load_res.unexpected_keys:
+                logger.warning(
+                    "[load_model] Unexpected keys in state_dict from %s: %s",
+                    filename,
+                    load_res.unexpected_keys,
+                )
+            if load_res.missing_keys:
+                critical_missing = [
+                    k
+                    for k in load_res.missing_keys
+                    if not k.startswith("utility_predictor")
+                    and not k.startswith("output_modules")
+                    and not k.startswith("classifier")
+                ]
+                if critical_missing:
+                    raise RuntimeError(
+                        f"Critical backbone weights missing when loading from {filename}: {critical_missing}"
+                    )
+                logger.warning(
+                    "[load_model] Non-critical keys missing when loading from %s (newly initialized): %s",
+                    filename,
+                    load_res.missing_keys,
+                )
+            logger.info("Loaded weights from %s", path / filename)
+
         if (path / "model.safetensors").exists():
             from safetensors.torch import load_file
 
             state_dict = load_file(path / "model.safetensors")
-            for old_k, new_k in [
-                ("classifier.weight", "output_modules.dense_score.linear.weight"),
-                ("classifier.bias", "output_modules.dense_score.linear.bias"),
-                ("top_final_norm.weight", "output_modules.norm.norm.weight"),
-                ("top_final_norm.bias", "output_modules.norm.norm.bias"),
-            ]:
-                if old_k in state_dict and new_k not in state_dict:
-                    state_dict[new_k] = state_dict.pop(old_k)
-            self.hf_model.load_state_dict(state_dict)
-            logger.info(f"Loaded weights from {path / 'model.safetensors'}")
+            _load_and_validate(state_dict, "model.safetensors")
         elif (path / "pytorch_model.bin").exists():
             state_dict = torch.load(path / "pytorch_model.bin", map_location="cpu")
-            for old_k, new_k in [
-                ("classifier.weight", "output_modules.dense_score.linear.weight"),
-                ("classifier.bias", "output_modules.dense_score.linear.bias"),
-                ("top_final_norm.weight", "output_modules.norm.norm.weight"),
-                ("top_final_norm.bias", "output_modules.norm.norm.bias"),
-            ]:
-                if old_k in state_dict and new_k not in state_dict:
-                    state_dict[new_k] = state_dict.pop(old_k)
-            self.hf_model.load_state_dict(state_dict)
-            logger.info(f"Loaded weights from {path / 'pytorch_model.bin'}")
+            _load_and_validate(state_dict, "pytorch_model.bin")
         else:
             super().load_model(path)
 

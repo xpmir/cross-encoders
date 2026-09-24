@@ -4,6 +4,7 @@ Implements training pipeline for MICE V2 models.
 """
 
 import logging
+from pathlib import Path
 from functools import partial
 from typing import Optional, Callable
 import numpy as np
@@ -39,6 +40,8 @@ from training_utils import (
     build_trainer,
     process_experiment_results,
     find_checkpoint,
+    resolve_trained_model_loader,
+    validate_and_align_config,
 )
 
 from MICE.modeling.mice_v2.modernbert_xpm import (
@@ -171,8 +174,20 @@ class MiceV2_FineTuning(CE_FineTuning):
     """Optional document prompt template or prefix (e.g. '[D] ' or 'passage: ')"""
 
 
-def build_mice_v2(cfg: MiceV2_FineTuning, phase_2: bool = False):
+def build_mice_v2(
+    cfg: MiceV2_FineTuning,
+    phase_2: bool = False,
+    cfg_tags: Optional[dict] = None,
+):
     """Factory helper to build MICE V2 scorer with all architectural flags."""
+    from_exp = getattr(cfg, "from_experiment", None)
+    checkpoint_loader = None
+    if from_exp and not phase_2:
+        checkpoint_loader = resolve_trained_model_loader(from_exp)
+        validate_and_align_config(
+            cfg, checkpoint_loader.model, tags=cfg_tags, from_ref=from_exp
+        )
+
     default_max_len = get_default_max_len(cfg.base)
     if cfg.max_length and default_max_len > cfg.max_length:
         max_len = cfg.max_length
@@ -228,12 +243,34 @@ def build_mice_v2(cfg: MiceV2_FineTuning, phase_2: bool = False):
             hard_pruning=True if cfg.hard_pruning is None else cfg.hard_pruning,
             hard_prune_threshold=0.0,
         )
+    elif cfg.hard_pruning:
+        logging.info(
+            f"[Hard Pruning] Building MICE V2 model with hard pruning (threshold={cfg.hard_prune_threshold})"
+        )
+        kwargs.update(
+            utility_pred=True,
+            hard_pruning=True,
+            hard_prune_threshold=cfg.hard_prune_threshold,
+        )
     else:
         logging.info(
             f"[Phase 1] Building MICE V2 model for soft gating training (utility_pred={cfg.utility_pred})"
         )
 
-    return mice_v2_scorer(**kwargs)
+    scorer, init_tasks = mice_v2_scorer(**kwargs)
+
+    if checkpoint_loader is not None:
+        init_tasks = [
+            InitMICEV2FromCheckpoint.C(
+                scorer=scorer,
+                checkpoint_loader=checkpoint_loader,
+                freeze_bottom_layers=cfg.freeze_bottom_layers
+                if (phase_2 or cfg.hard_pruning)
+                else False,
+            )
+        ]
+
+    return scorer, init_tasks
 
 
 def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
@@ -481,7 +518,7 @@ def TrainEvaluateMiceV2(
                 )
 
         # Build the model using the provided factory
-        model, model_init_tasks = build_mice_v2(cfg)
+        model, model_init_tasks = build_mice_v2(cfg, cfg_tags=cfg_tags)
 
         # tag the model with the configuration tags for monitoring and logging
         for k, v in cfg_tags.items():
@@ -771,7 +808,8 @@ def TrainEvaluateMiceV2(
         )
         config_map[frozenset(cfg_tags.items())] = config
 
-        prepare_hf_model(config.base)
+        if config.base and not Path(config.base).exists():
+            prepare_hf_model(config.base)
 
         run_one_config(
             helper=helper, cfg=config, grid_search_id=tagspath, cfg_tags=cfg_tags

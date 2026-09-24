@@ -12,6 +12,9 @@ from experimaestro import RunMode
 from experimaestro.launcherfinder import find_launcher
 from experimaestro.annotations import tags as get_tags
 
+from experimaestro.settings import get_settings
+from xpm_torch import ModuleLoader
+from xpm_torch.huggingface import TorchHFHub
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import LearnerOutput
 
@@ -952,3 +955,267 @@ def find_checkpoint(
         f"Available scheduled checkpoints in learner outputs: {available}.{interval_info} "
         f"Please verify that target_epoch was scheduled by checkpoint_interval or exists on disk."
     )
+
+
+def find_experiment_results_model_dir(experiment_ref: str) -> Path:
+    """Finds the exported model directory inside an experiment's results/models path.
+
+    Args:
+        experiment_ref: Experiment ID (e.g. 'train_mice_ettin32m_l4+4'),
+                       optional run-specific ID ('exp_id/run_id'),
+                       or direct directory path.
+
+    Returns:
+        Path to the exported model directory containing experimaestro.json.
+    """
+    ref_path = Path(experiment_ref).expanduser()
+
+    # 1. Direct path to a model folder (contains experimaestro.json)
+    if ref_path.is_dir() and (ref_path / "experimaestro.json").exists():
+        logger.info(f"Using direct model path: {ref_path}")
+        return ref_path
+
+    # 2. Direct path to run directory or results directory
+    if ref_path.is_dir():
+        models_dir = (
+            ref_path / "results" / "models"
+            if (ref_path / "results").exists()
+            else (ref_path / "models" if ref_path.name == "results" else ref_path)
+        )
+        if models_dir.exists():
+            candidates = [
+                d
+                for d in models_dir.iterdir()
+                if d.is_dir() and (d / "experimaestro.json").exists()
+            ]
+            if candidates:
+                logger.info(f"Found exported model in {candidates[0]}")
+                return candidates[0]
+
+    # 3. Experiment ID lookup across configured Experimaestro workspaces and local experiments
+    parts = experiment_ref.strip("/").split("/")
+    exp_id = parts[0]
+    run_id = parts[1] if len(parts) > 1 else None
+
+    settings = get_settings()
+    candidate_exp_dirs = []
+
+    # Check workspaces in settings
+    for ws in settings.workspaces:
+        if ws.path:
+            p_exp = Path(ws.path) / "experiments" / exp_id
+            if p_exp.exists():
+                candidate_exp_dirs.append(p_exp)
+            p_direct = Path(ws.path) / exp_id
+            if p_direct.exists():
+                candidate_exp_dirs.append(p_direct)
+
+    # Check default experiment roots (~/code/experiments/*)
+    default_experiments_root = Path.home() / "code" / "experiments"
+    if default_experiments_root.exists():
+        for sub in default_experiments_root.iterdir():
+            if sub.is_dir():
+                sub_exp = sub / exp_id
+                if sub_exp.exists() and sub_exp not in candidate_exp_dirs:
+                    candidate_exp_dirs.append(sub_exp)
+                sub_experiments_exp = sub / "experiments" / exp_id
+                if (
+                    sub_experiments_exp.exists()
+                    and sub_experiments_exp not in candidate_exp_dirs
+                ):
+                    candidate_exp_dirs.append(sub_experiments_exp)
+
+    if not candidate_exp_dirs:
+        raise FileNotFoundError(
+            f"Experiment '{exp_id}' not found in any workspace or local experiment paths. "
+            f"Searched workspaces: {[str(ws.path) for ws in settings.workspaces if ws.path]}"
+        )
+
+    exp_base = candidate_exp_dirs[0]
+
+    # Determine run directory
+    if run_id:
+        run_dir = exp_base / run_id
+        if not run_dir.exists():
+            raise FileNotFoundError(f"Run ID '{run_id}' not found under {exp_base}")
+    elif (exp_base / "current").exists():
+        run_dir = (exp_base / "current").resolve()
+    else:
+        run_dirs = sorted(
+            [
+                d
+                for d in exp_base.iterdir()
+                if d.is_dir() and not d.name.startswith(".")
+            ],
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        if not run_dirs:
+            raise FileNotFoundError(f"No run directories found in {exp_base}")
+        run_dir = run_dirs[0]
+
+    models_dir = run_dir / "results" / "models"
+    if not models_dir.exists():
+        raise FileNotFoundError(f"No results/models directory found in {run_dir}")
+
+    exported_models = [
+        d
+        for d in models_dir.iterdir()
+        if d.is_dir() and (d / "experimaestro.json").exists()
+    ]
+    if not exported_models:
+        raise FileNotFoundError(
+            f"No valid exported models with experimaestro.json found in {models_dir}"
+        )
+
+    selected_model_dir = exported_models[0]
+    logger.info(
+        f"Resolved experiment '{experiment_ref}' to model at {selected_model_dir}"
+    )
+    return selected_model_dir
+
+
+def resolve_trained_model_loader(source: str) -> ModuleLoader:
+    """Unified resolution of an experiment ID, local path, or Hugging Face Hub repo into a ModuleLoader config.
+
+    Args:
+        source: Experiment ID ('train_mice_ettin32m_l4+4'), local folder path,
+                or HF Hub repo ('VictorMorand/MiceV2-l10p4-ettin-68m').
+
+    Returns:
+        ModuleLoader Config whose `.model` attribute is the Model Config.
+    """
+    path_candidate = Path(source).expanduser()
+
+    # If it's a direct path or known experiment folder/ID
+    if path_candidate.exists() or (
+        "/" in source
+        and not source.startswith("http")
+        and Path(source.split("/")[0]).exists()
+    ):
+        target = find_experiment_results_model_dir(source)
+    else:
+        # Check if it's an experiment ID in workspaces
+        try:
+            target = find_experiment_results_model_dir(source)
+        except FileNotFoundError:
+            # Fall back to Hugging Face Hub repo ID
+            logger.info(
+                f"'{source}' not found locally as experiment; treating as Hugging Face Hub repo ID."
+            )
+            target = source
+
+    logger.info(f"Loading pretrained ModuleLoader from {target}")
+    return TorchHFHub.pretrained_loader(target, as_instance=False)
+
+
+def validate_and_align_config(
+    xp_config: Any,
+    xpm_model_config: Any,
+    tags: Optional[dict] = None,
+    from_ref: Optional[str] = None,
+) -> None:
+    """Validate user overrides and align default parameters between an experiment config (xp config)
+    and a loaded model Experimaestro Config (xpm Config).
+
+    Args:
+        xp_config: Dataclass experiment config (xp config, e.g. MiceV2_FineTuning).
+        xpm_model_config: Experimaestro Config of the loaded model (xpm Config).
+        tags: Optional dict of tracking tags to synchronize with the resolved model.
+        from_ref: Optional string identifier of the checkpoint source for logging.
+    """
+    source_label = from_ref or getattr(xp_config, "from_experiment", "loaded model")
+    default_cfg = type(xp_config)()
+
+    # 1. Base model alignment / override detection
+    src_base = getattr(xpm_model_config, "hf_id", None)
+    if src_base:
+        if not getattr(xp_config, "base", None) or xp_config.base == default_cfg.base:
+            logger.info(
+                "[Model Alignment] Inherited base '%s' from loaded model '%s' (was default %r)",
+                src_base,
+                source_label,
+                getattr(xp_config, "base", None),
+            )
+            xp_config.base = src_base
+        elif xp_config.base != src_base:
+            logger.warning(
+                "[PARAM OVERRIDE] Config explicitly overrides base model! "
+                "Loaded model (%s) has %r, but config specifies %r.",
+                source_label,
+                src_base,
+                xp_config.base,
+            )
+
+    # 2. Architectural & operational attributes
+    aligned_attrs = [
+        "n_contextualization_layers",
+        "n_docs_ctx_layers",
+        "n_interaction_layers",
+        "bound_bottom_layers",
+        "use_upper_rope",
+        "top_layers_doc_ln",
+        "bottom_final_norm",
+        "top_final_norm",
+        "compress_dim",
+        "compress_init_option",
+        "use_cross_attn",
+        "utility_pred",
+        "gate_target",
+        "head_type",
+        "hard_prune_threshold",
+    ]
+
+    for attr in aligned_attrs:
+        if not hasattr(xp_config, attr):
+            continue
+
+        src_val = getattr(xpm_model_config, attr, None)
+        if src_val is None:
+            continue
+
+        cfg_val = getattr(xp_config, attr)
+        default_val = getattr(default_cfg, attr)
+
+        # Special case: phase2_training explicitly configures hard_prune_threshold
+        if attr == "hard_prune_threshold" and getattr(
+            xp_config, "phase2_training", False
+        ):
+            if cfg_val != src_val:
+                logger.warning(
+                    "[PARAM OVERRIDE] Phase 2 hard_prune_threshold (%r) overrides loaded model value (%r) from '%s'",
+                    cfg_val,
+                    src_val,
+                    source_label,
+                )
+            continue
+
+        if cfg_val == default_val:
+            # Parameter was left at default -> inherit from loaded model
+            if cfg_val != src_val:
+                logger.info(
+                    "[Model Alignment] Inherited '%s' from loaded model '%s': %r (was default %r)",
+                    attr,
+                    source_label,
+                    src_val,
+                    default_val,
+                )
+                setattr(xp_config, attr, src_val)
+        else:
+            # Parameter was explicitly set by user in config
+            if cfg_val != src_val:
+                logger.warning(
+                    "[PARAM OVERRIDE] Config explicitly overrides loaded model parameter '%s'! "
+                    "Loaded model (%s) value: %r -> Config override value: %r.",
+                    attr,
+                    source_label,
+                    src_val,
+                    cfg_val,
+                )
+
+    # 3. Synchronize tags
+    if tags is not None:
+        if "base" not in tags or tags["base"] != getattr(xp_config, "base", None):
+            tags["base"] = getattr(xp_config, "base", None)
+        if "from_experiment" not in tags and source_label:
+            tags["from_experiment"] = str(source_label)
