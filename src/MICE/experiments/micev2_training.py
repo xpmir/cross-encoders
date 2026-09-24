@@ -327,6 +327,11 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     )
     freeze_bottom_suffix = "-freezebottom" if freeze_bottom_phase1 else ""
 
+    compress_dim = model_tags.get("compress_dim", getattr(cfg, "compress_dim", 1.0))
+    compress_suffix = (
+        f"-cdim{round(float(compress_dim), 2)}" if float(compress_dim) > 1.0 else ""
+    )
+
     utility_bias = model_tags.get("utility_bias", getattr(cfg, "utility_bias", 5.0))
     ubias_suffix = f"-ubias{utility_bias}" if utility_bias != 5.0 else ""
 
@@ -338,7 +343,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{gate_suffix}{hc_suffix}{prune_suffix}{freeze_bottom_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{gate_suffix}{hc_suffix}{prune_suffix}{freeze_bottom_suffix}{compress_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(
@@ -709,6 +714,8 @@ def TrainEvaluateMiceV2(
                             .tag("seed", seed)
                             .tag("first_stage", retriever_tag)
                         )
+                        if cfg.phase2_training:
+                            last_model.tag("phase", phase_num)
 
                         for k, v in cfg_tags.items():
                             last_model.tag(k, v)

@@ -435,6 +435,14 @@ def export_model(
     """Exports all artifacts (weights, logs, readme, config) for a best model."""
     models_path = resultspath / "models"
     best_model_path = models_path / model_name
+
+    old_readme = best_model_path / "README.md"
+    if old_readme.exists():
+        logger.warning(
+            f"Pre-existing README.md found in {best_model_path}; removing it to ensure fresh generation."
+        )
+        old_readme.unlink()
+
     best_model_path.mkdir(parents=True, exist_ok=True)
 
     csv_results.to_csv(best_model_path / "results.csv", index=False)
@@ -791,58 +799,98 @@ def process_experiment_results(
     save_raw_results(df_with_aggs, helper.xp.resultspath)
 
     best_models_list = []
-    if not best_models_df.empty and cfg.export_trained_models:
-        # Check if model folder exists before saving models, delete if so
-        models_path = helper.xp.resultspath / "models"
-        if models_path.exists():
-            shutil.rmtree(models_path)
-            logging.info(f"Deleted existing models directory: {models_path}")
-
+    if not best_models_df.empty:
+        # 1. Collect all best candidates per configuration for the raw results summary
         for _, best_row in best_models_df.iterrows():
-            # Extract tags for this best model
-            best_tags = {tag: best_row[tag] for tag in model_id_tags}
-
-            logging.info(f"Best evaluated model is {best_tags}")
-
-            # Reconstruct the grid tags to find the original config
-            grid_keys = set()
-            for tags in all_tags:
-                grid_keys.update(tags.keys())
-            best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
-            best_cfg = config_map.get(frozenset(best_grid_tags.items()))
-
-            # Filter the original dataframe for this specific best model (all datasets)
             mask = pd.Series(True, index=df_with_aggs.index)
             for tag in model_id_tags:
                 mask &= df_with_aggs[tag].astype(str) == str(best_row[tag])
-
             best_model_df = df_with_aggs[mask].copy()
             best_models_list.append(best_model_df)
 
-            # Format and Export artifacts
-            csv_results, md_results = format_model_results(
-                best_model_df, aggregations=aggregation_hf
-            )
-
-            export_model(
-                best_tags=best_tags,
-                model_name=get_name_fn(best_tags),
-                csv_results=csv_results,
-                md_results=md_results,
-                learners=learners,
-                all_weights=all_weights,
-                best_cfg=best_cfg,
-                resultspath=helper.xp.resultspath,
-                save_runs=cfg.save_runs,
-                tests=tests,
-            )
-
         if best_models_list:
-            best_model_df = pd.concat(best_models_list, ignore_index=True)
-            best_model_df.to_csv(
+            all_best_models_df = pd.concat(best_models_list, ignore_index=True)
+            all_best_models_df.to_csv(
                 helper.xp.resultspath / "best_models_per_scorer_raw_results.csv",
                 index=False,
             )
+
+        # 2. Export model artifacts if enabled
+        if cfg.export_trained_models:
+            models_path = helper.xp.resultspath / "models"
+            if models_path.exists():
+                shutil.rmtree(models_path)
+                logging.info(f"Deleted existing models directory: {models_path}")
+
+            export_only_best = getattr(cfg, "export_only_best", True)
+            if export_only_best and len(best_models_df) > 1:
+                metric_col = "nDCG@10"
+                if metric_col in best_models_df.columns:
+                    best_idx = best_models_df[metric_col].astype(float).idxmax()
+                    export_models_df = best_models_df.loc[[best_idx]]
+                    winner_score = export_models_df[metric_col].values[0]
+                    logging.info(
+                        f"export_only_best=True: selected single best model among {len(best_models_df)} candidates "
+                        f"({metric_col}={winner_score:.4f} on {target_dataset})"
+                    )
+                else:
+                    logging.warning(
+                        f"Metric {metric_col} not found in best_models_df; exporting all {len(best_models_df)} candidate models"
+                    )
+                    export_models_df = best_models_df
+            else:
+                export_models_df = best_models_df
+
+            # Check for potential naming collisions among models to be exported
+            candidate_names = [
+                get_name_fn({tag: r[tag] for tag in model_id_tags})
+                for _, r in export_models_df.iterrows()
+            ]
+            has_name_collision = len(candidate_names) != len(set(candidate_names))
+            if has_name_collision:
+                logging.warning(
+                    "Naming collision detected among exported models! Disambiguating names using grid search tags."
+                )
+
+            grid_keys = set()
+            for tags in all_tags:
+                grid_keys.update(tags.keys())
+
+            for _, best_row in export_models_df.iterrows():
+                best_tags = {tag: best_row[tag] for tag in model_id_tags}
+                logging.info(f"Exporting model with tags: {best_tags}")
+
+                best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
+                best_cfg = config_map.get(frozenset(best_grid_tags.items()))
+
+                mask = pd.Series(True, index=df_with_aggs.index)
+                for tag in model_id_tags:
+                    mask &= df_with_aggs[tag].astype(str) == str(best_row[tag])
+                best_model_df = df_with_aggs[mask].copy()
+
+                csv_results, md_results = format_model_results(
+                    best_model_df, aggregations=aggregation_hf
+                )
+
+                model_name = get_name_fn(best_tags)
+                if has_name_collision and best_grid_tags:
+                    tag_suffix = "_".join(
+                        f"{k}-{v}" for k, v in sorted(best_grid_tags.items())
+                    )
+                    model_name = f"{model_name}_{tag_suffix}"
+
+                export_model(
+                    best_tags=best_tags,
+                    model_name=model_name,
+                    csv_results=csv_results,
+                    md_results=md_results,
+                    learners=learners,
+                    all_weights=all_weights,
+                    best_cfg=best_cfg,
+                    resultspath=helper.xp.resultspath,
+                    save_runs=cfg.save_runs,
+                    tests=tests,
+                )
 
     # Final aggregation and LaTeX table generation
     metric_names = [col[1] for col in metric_cols]

@@ -361,6 +361,10 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     export_trained_models: bool = True
     """Whether to export the best models to the models/ folder"""
 
+    export_only_best: bool = True
+    """Whether to export only the single best performing model across all configurations (default: True).
+    If False, exports the best model for each grid search configuration."""
+
     normalize_docs_per_batch: bool = True
     """whether to normalize documents per batch for listwise losses"""
 

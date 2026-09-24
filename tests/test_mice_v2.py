@@ -210,3 +210,217 @@ def test_export_model_learner_tag_matching():
         assert mock_action_inst.loader.model._tb_path == tb_dir
         assert mock_action_inst.loader.model._export_metadata["tb_path"] == str(tb_dir)
         assert mock_action_inst.loader.model._export_metadata["training_strat"] == "MarginMSE"
+
+
+def test_export_model_removes_stale_readme():
+    """Verify that export_model removes an existing README.md before creating a new export."""
+    from training_utils import export_model
+    import pandas as pd
+    from unittest.mock import MagicMock
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        model_dir = tmp_path / "models" / "TestModel"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        stale_readme = model_dir / "README.md"
+        stale_readme.write_text("old stale readme")
+        assert stale_readme.exists()
+
+        mock_loader = MagicMock()
+        mock_loader.model = MagicMock()
+        xpm_loader = MagicMock()
+        xpm_loader.tags.return_value = {"base": "ettin-17m"}
+        setattr(mock_loader, "__xpm__", xpm_loader)
+        mock_action_inst = MagicMock()
+        mock_loader.export_action.return_value.instance.return_value = mock_action_inst
+
+        csv_df = pd.DataFrame({"dataset": ["msmarco"], "nDCG@10": [0.42]})
+        md_df = pd.DataFrame({"dataset": ["msmarco"], "nDCG@10": [0.42]})
+
+        mock_cfg = MagicMock()
+        mock_cfg.learner.loss = "marginMSE"
+        mock_cfg.retrieval.k = 1000
+
+        export_model(
+            best_tags={"base": "ettin-17m"},
+            model_name="TestModel",
+            csv_results=csv_df,
+            md_results=md_df,
+            learners=[],
+            all_weights=[mock_loader],
+            best_cfg=mock_cfg,
+            resultspath=tmp_path,
+        )
+
+        # Stale readme was deleted before export_to_folder was called
+        assert not stale_readme.exists()
+
+
+def test_process_experiment_results_export_only_best():
+    """Verify that export_only_best=True exports only the winning candidate model."""
+    from training_utils import process_experiment_results
+    from experimaestro import RunMode
+    from configuration import CE_FineTuning
+    import pandas as pd
+    from unittest.mock import MagicMock
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+
+        # Mock tests dataframe with 2 LR configs matching experimaestro to_dataframe MultiIndex schema
+        columns = pd.MultiIndex.from_tuples([
+            ("dataset", ""),
+            ("tag", "base"),
+            ("tag", "lr"),
+            ("tag", "checkpoint"),
+            ("tag", "first_stage"),
+            ("tag", "seed"),
+            ("metric", "nDCG@10"),
+        ])
+        eval_df = pd.DataFrame(
+            [
+                ["BEIR13", "ettin-17m", 7e-5, "last", "bm25", 0, 0.5739],
+                ["BEIR13", "ettin-17m", 3e-5, "last", "bm25", 0, 0.5760],
+            ],
+            columns=columns,
+        )
+
+        mock_tests = MagicMock()
+        mock_tests.to_dataframe.return_value = eval_df
+        mock_tests.collection = {}
+
+        mock_helper = MagicMock()
+        mock_helper.xp.run_mode = RunMode.NORMAL
+        mock_helper.xp.resultspath = tmp_path
+
+        mock_cfg = CE_FineTuning(export_trained_models=True, export_only_best=True)
+        all_tags = [{"lr": 7e-5}, {"lr": 3e-5}]
+        config_map = {
+            frozenset([("lr", 7e-5)]): mock_cfg,
+            frozenset([("lr", 3e-5)]): mock_cfg,
+        }
+
+        # Mock loaders for weights
+        def make_loader(lr):
+            loader = MagicMock()
+            loader.model = MagicMock()
+            xpm = MagicMock()
+            xpm.tags.return_value = {
+                "base": "ettin-17m",
+                "lr": lr,
+                "checkpoint": "last",
+                "first_stage": "bm25",
+                "seed": 0,
+            }
+            setattr(loader, "__xpm__", xpm)
+            return loader
+
+        loader_7e5 = make_loader(7e-5)
+        loader_3e5 = make_loader(3e-5)
+
+        exported_names = []
+        def mock_name_fn(tags):
+            return "MiceV2-TestModel"
+
+        process_experiment_results(
+            tests=mock_tests,
+            all_tags=all_tags,
+            config_map=config_map,
+            cfg=mock_cfg,
+            helper=mock_helper,
+            learners=[],
+            all_weights=[loader_7e5, loader_3e5],
+            get_name_fn=mock_name_fn,
+        )
+
+        # models/ folder should have exactly 1 exported model directory
+        models_dir = tmp_path / "models"
+        exported_dirs = list(models_dir.iterdir())
+        assert len(exported_dirs) == 1
+        assert exported_dirs[0].name == "MiceV2-TestModel"
+
+        # The results.csv inside the exported model directory should be from the winning 3e-5 config (0.5760)
+        exported_csv = pd.read_csv(exported_dirs[0] / "results.csv")
+        beir_row = exported_csv[exported_csv["dataset"].str.contains("BEIR13", na=False)]
+        assert not beir_row.empty
+        assert beir_row["nDCG@10"].values[0] == pytest.approx(57.60, abs=0.01)
+
+        # best_models_per_scorer_raw_results.csv should contain both candidates
+        raw_summary = pd.read_csv(tmp_path / "best_models_per_scorer_raw_results.csv")
+        assert len(raw_summary["lr"].unique()) == 2
+
+
+def test_process_experiment_results_export_all_disambiguates_collision():
+    """Verify that export_only_best=False disambiguates colliding model names with grid tags."""
+    from training_utils import process_experiment_results
+    from experimaestro import RunMode
+    from configuration import CE_FineTuning
+    import pandas as pd
+    from unittest.mock import MagicMock
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+
+        columns = pd.MultiIndex.from_tuples([
+            ("dataset", ""),
+            ("tag", "base"),
+            ("tag", "lr"),
+            ("tag", "checkpoint"),
+            ("tag", "first_stage"),
+            ("tag", "seed"),
+            ("metric", "nDCG@10"),
+        ])
+        eval_df = pd.DataFrame(
+            [
+                ["BEIR13", "ettin-17m", 7e-5, "last", "bm25", 0, 0.5739],
+                ["BEIR13", "ettin-17m", 3e-5, "last", "bm25", 0, 0.5760],
+            ],
+            columns=columns,
+        )
+
+        mock_tests = MagicMock()
+        mock_tests.to_dataframe.return_value = eval_df
+        mock_tests.collection = {}
+
+        mock_helper = MagicMock()
+        mock_helper.xp.run_mode = RunMode.NORMAL
+        mock_helper.xp.resultspath = tmp_path
+
+        mock_cfg = CE_FineTuning(export_trained_models=True, export_only_best=False)
+        all_tags = [{"lr": 7e-5}, {"lr": 3e-5}]
+        config_map = {
+            frozenset([("lr", 7e-5)]): mock_cfg,
+            frozenset([("lr", 3e-5)]): mock_cfg,
+        }
+
+        def make_loader(lr):
+            loader = MagicMock()
+            loader.model = MagicMock()
+            xpm = MagicMock()
+            xpm.tags.return_value = {
+                "base": "ettin-17m",
+                "lr": lr,
+                "checkpoint": "last",
+                "first_stage": "bm25",
+                "seed": 0,
+            }
+            setattr(loader, "__xpm__", xpm)
+            return loader
+
+        process_experiment_results(
+            tests=mock_tests,
+            all_tags=all_tags,
+            config_map=config_map,
+            cfg=mock_cfg,
+            helper=mock_helper,
+            learners=[],
+            all_weights=[make_loader(7e-5), make_loader(3e-5)],
+            get_name_fn=lambda tags: "MiceV2-TestModel",
+        )
+
+        models_dir = tmp_path / "models"
+        exported_dirs = sorted([d.name for d in models_dir.iterdir()])
+        assert len(exported_dirs) == 2
+        # Disambiguated with grid tag suffixes
+        assert any("lr-7e-05" in name or "lr-7e-5" in name for name in exported_dirs)
+        assert any("lr-3e-05" in name or "lr-3e-5" in name for name in exported_dirs)
