@@ -119,6 +119,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     freeze_bottom_layers: GridSearch[bool] = True
     """Whether to freeze bottom contextualization layers during Phase 2 training (utility predictor is always frozen)"""
 
+    freeze_bottom_layers_phase1: GridSearch[bool] = False
+    """Whether to freeze bottom contextualization layers during Phase 1 training (embeddings and bottom layers frozen, leaving top layers, utility predictor, and head trainable)"""
+
     eval_phase_1: GridSearch[bool] = False
     """Whether to also evaluate the Phase 1 model (soft gating without hard pruning) when phase2_training is enabled."""
 
@@ -226,6 +229,13 @@ def build_mice_v2(
         doc_prompt=getattr(cfg, "doc_prompt", None),
     )
 
+    freeze_bottom = (
+        cfg.freeze_bottom_layers
+        if (phase_2 or cfg.hard_pruning)
+        else getattr(cfg, "freeze_bottom_layers_phase1", False)
+    )
+    kwargs["freeze_bottom_layers"] = freeze_bottom
+
     if phase_2:
         logging.info(
             f"[Phase 2] Building MICE V2 model for hard pruning fine-tuning (threshold={cfg.hard_prune_threshold})"
@@ -264,9 +274,8 @@ def build_mice_v2(
             InitMICEV2FromCheckpoint.C(
                 scorer=scorer,
                 checkpoint_loader=checkpoint_loader,
-                freeze_bottom_layers=cfg.freeze_bottom_layers
-                if (phase_2 or cfg.hard_pruning)
-                else False,
+                freeze_bottom_layers=freeze_bottom,
+                freeze_utility=phase_2,
             )
         ]
 
@@ -312,6 +321,12 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     head_type = model_tags.get("head_type", getattr(cfg, "head_type", "linear"))
     head_suffix = f"-{head_type}" if head_type and head_type != "linear" else ""
 
+    freeze_bottom_phase1 = model_tags.get(
+        "freeze_bottom_layers_phase1",
+        getattr(cfg, "freeze_bottom_layers_phase1", False),
+    )
+    freeze_bottom_suffix = "-freezebottom" if freeze_bottom_phase1 else ""
+
     utility_bias = model_tags.get("utility_bias", getattr(cfg, "utility_bias", 5.0))
     ubias_suffix = f"-ubias{utility_bias}" if utility_bias != 5.0 else ""
 
@@ -323,7 +338,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{gate_suffix}{hc_suffix}{prune_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{gate_suffix}{hc_suffix}{prune_suffix}{freeze_bottom_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(

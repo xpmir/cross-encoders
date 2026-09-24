@@ -638,6 +638,8 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
     """Task to initialize weights of ModernBertMiceForSequenceClassification from HF checkpoint"""
 
     scorer: Param["ModernBertMiceScorer"]
+    freeze_bottom_layers: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to freeze the bottom contextualization layers and embeddings after initializing from backbone"""
 
     def execute(self):
         scorer = self.scorer
@@ -768,6 +770,9 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                 # Copy head dense weight if classifier layer matches
                 pass
 
+        if self.freeze_bottom_layers:
+            scorer.freeze_bottom_layers()
+
         logger.info("Successfully initialized ModernBertMiceScorer weights.")
 
 
@@ -840,10 +845,13 @@ class InitMICEV2FromCheckpoint(LightweightTask):
     scorer: Param["ModernBertMiceScorer"]
 
     freeze_bottom_layers: Param[bool] = field(default=True, ignore_default=True)
-    """Whether to freeze the bottom contextualization layers and utility predictor after loading Phase 1 checkpoint"""
+    """Whether to freeze the bottom contextualization layers and embeddings after loading checkpoint"""
 
     checkpoint_loader: Param[ModuleLoader]
     """Path or ModuleLoader to the Phase 1 trained checkpoint (should contain model.safetensors or model/ directory)."""
+
+    freeze_utility: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to freeze the utility predictor after loading checkpoint"""
 
     def execute(self):
         ckpt_path = Path(self.checkpoint_loader.path)
@@ -853,7 +861,8 @@ class InitMICEV2FromCheckpoint(LightweightTask):
         if not self.scorer._initialized:
             self.scorer.initialize()
 
-        self.scorer.freeze_utility()
+        if self.freeze_utility:
+            self.scorer.freeze_utility()
 
         if self.freeze_bottom_layers:
             self.scorer.freeze_bottom_layers()
@@ -1969,6 +1978,7 @@ def mice_v2_scorer(
     max_length: int = 512,
     query_prompt: Optional[str] = None,
     doc_prompt: Optional[str] = None,
+    freeze_bottom_layers: bool = False,
 ) -> Tuple[ModernBertMiceScorer, List[LightweightTask]]:
     """
     Factory function for ModernBERT MICE V2 scorer.
@@ -2027,6 +2037,9 @@ def mice_v2_scorer(
         head_type=head_type,
     )
 
-    init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)
+    init_task = InitMICEV2ModernBERTFromHFID.C(
+        scorer=scorer,
+        freeze_bottom_layers=freeze_bottom_layers,
+    )
 
     return scorer, [init_task]
