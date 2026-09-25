@@ -10,6 +10,7 @@ from datamaestro_ir.data.base import IDTextRecord
 from MICE.modeling.mice_v2.modernbert_xpm import mice_v2_scorer, MiceV2DocumentEncoder
 from MICE.modeling.mice import MICETokenizedTexts, QueryDocInput
 from xpmir.letor.records import PointwiseItems
+from xpmir.text.encoders import TokenizerOptions
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -137,3 +138,126 @@ def test_mice_v2_normalize_doc_embeds(model_id):
 
     assert torch.allclose(standard_scores, plaid_scores, atol=1e-4), \
         f"Score mismatch with normalize_doc_embeds=True: {standard_scores} vs {plaid_scores}"
+
+
+@pytest.mark.parametrize("model_id", ["jhu-clsp/ettin-encoder-17m"])
+def test_mice_v2_plaid_doc_length_override(model_id):
+    """Test that max_doc_length on get_document_encoder forces truncating stored vectors."""
+    scorer_cfg, init_tasks = mice_v2_scorer(
+        hf_id=model_id,
+        n_contextualization_layers=2,
+        max_doc_length=512,
+    )
+    scorer = scorer_cfg.instance()
+    for task in init_tasks:
+        task.instance().execute()
+    scorer.initialize()
+    scorer.eval()
+
+    long_doc = [
+        IDTextRecord(
+            id="long_doc",
+            text=" ".join(["word"] * 100),  # 100 words -> ~100 tokens
+        )
+    ]
+
+    # 1. Default encoder: should produce > 50 tokens
+    default_encoder = scorer_cfg.get_document_encoder().instance()
+    default_encoder.model = scorer
+    default_encoder.eval()
+    with torch.no_grad():
+        default_embs = default_encoder.document_token_embeddings(long_doc)
+    assert default_embs[0].shape[0] > 50, f"Expected > 50 tokens, got {default_embs[0].shape[0]}"
+
+    # 2. PLAID encoder with max_doc_length=15: should force at most 15 tokens
+    plaid_doc_encoder = scorer_cfg.get_document_encoder(max_doc_length=15).instance()
+    plaid_doc_encoder.model = scorer
+    plaid_doc_encoder.eval()
+    with torch.no_grad():
+        truncated_embs = plaid_doc_encoder.document_token_embeddings(long_doc)
+
+    assert truncated_embs[0].shape[0] <= 15, (
+        f"Expected <= 15 vectors stored for PLAID, got {truncated_embs[0].shape[0]}"
+    )
+    # 3. Verify base model tokenizer was not mutated in-place
+    assert scorer.tokenizer.max_doc_length == 512, (
+        f"Base model tokenizer was mutated! Expected 512, got {scorer.tokenizer.max_doc_length}"
+    )
+
+
+@pytest.mark.parametrize("model_id", ["jhu-clsp/ettin-encoder-17m"])
+def test_mice_v2_plaid_query_length_override(model_id):
+    """Test that max_query_length on get_query_encoder truncates query vectors for PLAID search."""
+    scorer_cfg, init_tasks = mice_v2_scorer(
+        hf_id=model_id,
+        n_contextualization_layers=2,
+        max_query_length=64,
+    )
+    scorer = scorer_cfg.instance()
+    for task in init_tasks:
+        task.instance().execute()
+    scorer.initialize()
+    scorer.eval()
+
+    long_query = [
+        IDTextRecord(
+            id="long_q",
+            text=" ".join(["query_token"] * 30),
+        )
+    ]
+
+    # 1. Default query token embeddings
+    with torch.no_grad():
+        default_q_embs = scorer.query_token_embeddings(long_query)
+    assert default_q_embs.shape[1] > 10, f"Expected > 10 query tokens, got {default_q_embs.shape[1]}"
+
+    # 2. PLAID query encoder with max_query_length=8
+    plaid_q_encoder = scorer_cfg.get_query_encoder(max_query_length=8).instance()
+    plaid_q_encoder.model = scorer
+    plaid_q_encoder.initialize()
+    plaid_q_encoder.eval()
+
+    with torch.no_grad():
+        truncated_q_embs = plaid_q_encoder.query_token_embeddings(long_query)
+
+    assert truncated_q_embs.shape[1] <= 8, (
+        f"Expected <= 8 query vectors, got {truncated_q_embs.shape[1]}"
+    )
+    # 3. Base model tokenizer should be intact
+    assert scorer.tokenizer.max_query_length == 64, (
+        f"Base model tokenizer was mutated! Expected 64, got {scorer.tokenizer.max_query_length}"
+    )
+
+
+@pytest.mark.parametrize("model_id", ["jhu-clsp/ettin-encoder-17m"])
+def test_mice_query_doc_tokenizer_options(model_id):
+    """Test that MICEQueryDocTokenizer respects options.max_length for queries and docs."""
+    scorer_cfg, init_tasks = mice_v2_scorer(
+        hf_id=model_id,
+        n_contextualization_layers=2,
+        max_doc_length=128,
+        max_query_length=64,
+    )
+    scorer = scorer_cfg.instance()
+    for task in init_tasks:
+        task.instance().execute()
+    scorer.initialize()
+    tokenizer = scorer.tokenizer
+
+    records = [IDTextRecord(id="r1", text=" ".join(["test"] * 50))]
+
+    # Default doc tokenization
+    t_doc_default = tokenizer.tokenize(records, input_nature=QueryDocInput.DOCUMENT)
+    assert t_doc_default.ids.shape[1] > 20
+
+    # Overridden doc tokenization with options
+    t_doc_truncated = tokenizer.tokenize(
+        records, options=TokenizerOptions(max_length=10), input_nature=QueryDocInput.DOCUMENT
+    )
+    assert t_doc_truncated.ids.shape[1] <= 10
+
+    # Overridden query tokenization with options
+    t_q_truncated = tokenizer.tokenize(
+        records, options=TokenizerOptions(max_length=8), input_nature=QueryDocInput.QUERY
+    )
+    assert t_q_truncated.ids.shape[1] <= 8

@@ -265,6 +265,14 @@ class PlaidConfiguration:
     the existing SPLADE/BM25-based baselines. Requires use_plaid=True."""
 
     ### Indexation params ###
+    max_doc_length: GridSearch[Optional[int]] = None
+    """Maximum number of tokens per document stored in the PLAID index.
+    When set, overrides the encoder's default to force storing only up to this many vectors."""
+
+    max_query_length: GridSearch[Optional[int]] = None
+    """Maximum number of tokens for queries in PLAID search and reranking.
+    When set, overrides the encoder's default max_query_length."""
+
     buffer_size: GridSearch[int] = 1000
     """Number of documents to use for creating/updating the PLAID index"""
 

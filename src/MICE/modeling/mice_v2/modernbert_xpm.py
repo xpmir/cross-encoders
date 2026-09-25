@@ -1433,10 +1433,21 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         """
         return self.hf_model.encode_documents(doc_ids=doc_ids, doc_mask=doc_mask)
 
-    def get_document_encoder(self) -> TextEncoderBase:
+    def get_document_encoder(
+        self, max_doc_length: Optional[int] = None
+    ) -> TextEncoderBase:
         """Returns a document encoder for fast-plaid index building."""
         model_cfg = getattr(self, "config", self)
-        return MiceV2DocumentEncoder.C(model=model_cfg)
+        return MiceV2DocumentEncoder.C(model=model_cfg, max_doc_length=max_doc_length)
+
+    def get_query_encoder(
+        self, max_query_length: Optional[int] = None
+    ) -> AbstractModuleScorer:
+        """Returns a query encoder for fast-plaid search, optionally overriding max_query_length."""
+        if max_query_length is None:
+            return self
+        model_cfg = getattr(self, "config", self)
+        return MiceV2QueryEncoder.C(model=model_cfg, max_query_length=max_query_length)
 
     def encode_queries(
         self, query_ids: torch.Tensor, query_mask: Optional[torch.Tensor] = None
@@ -1447,7 +1458,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         """
         return self.hf_model.encode_queries(query_ids=query_ids, query_mask=query_mask)
 
-    def query_token_embeddings(self, records: List[IDTextRecord]) -> torch.Tensor:
+    def query_token_embeddings(
+        self, records: List[IDTextRecord], max_query_length: Optional[int] = None
+    ) -> torch.Tensor:
         """Returns a dense (batch, query_maxlen, dim) query embedding tensor
         for genuine ColBERT-style search via fast-plaid, with padding
         positions zeroed out so they contribute ~0 to MaxSim regardless of
@@ -1459,7 +1472,12 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         `xpmir.index.plaid.PlaidRetriever.encoder` (it's already an
         `AbstractModuleScorer`, which is what that Param expects).
         """
-        options = TokenizerOptions(max_length=self.tokenizer.max_query_length)
+        effective_max_q_len = (
+            max_query_length
+            if max_query_length is not None
+            else self.tokenizer.max_query_length
+        )
+        options = TokenizerOptions(max_length=effective_max_q_len)
         tokenized = self.batch_tokenize(
             records, options=options, input_nature=QueryDocInput.QUERY
         )
@@ -1979,6 +1997,8 @@ class MiceV2DocumentEncoder(TextEncoderBase):
     """Document encoder for ModernBERT MICE v2, interfacing with PlaidIndexBuilder."""
 
     model: Param[ModernBertMiceScorer]
+    max_doc_length: Param[Optional[int]] = field(default=None, ignore_default=True)
+    """Maximum number of tokens to store per document in PLAID index. If None, defaults to model's tokenizer max_doc_length."""
 
     def __initialize__(self) -> None:
         super().__initialize__()
@@ -2012,7 +2032,12 @@ class MiceV2DocumentEncoder(TextEncoderBase):
     def encode_documents(
         self, records: List[IDTextRecord]
     ) -> TokensRepresentationOutput:
-        options = TokenizerOptions(max_length=self.model.tokenizer.max_doc_length)
+        effective_max_doc_len = (
+            self.max_doc_length
+            if self.max_doc_length is not None
+            else self.model.tokenizer.max_doc_length
+        )
+        options = TokenizerOptions(max_length=effective_max_doc_len)
         output = self(records, options=options)
         return output
 
@@ -2036,6 +2061,27 @@ class MiceV2DocumentEncoder(TextEncoderBase):
         # which breaks NamedTuple._make()'s internal `len(result) != num_fields` check.
         tokenized = TokenizedTexts(**{**tokenized._asdict(), "mask": doc_mask})
         return TokensEncoderOutput(tokenized, encoded)
+
+
+class MiceV2QueryEncoder(AbstractModuleScorer):
+    """Query encoder adapter for ModernBertMiceScorer with custom max_query_length for PLAID search."""
+
+    model: Param[ModernBertMiceScorer]
+    max_query_length: Param[Optional[int]] = field(default=None, ignore_default=True)
+    """Maximum number of query tokens for PLAID search. If None, defaults to model's tokenizer max_query_length."""
+
+    def __initialize__(self) -> None:
+        super().__initialize__()
+        self.model.initialize()
+
+    @property
+    def device(self):
+        return self.model.device
+
+    def query_token_embeddings(self, records: List[IDTextRecord]) -> torch.Tensor:
+        return self.model.query_token_embeddings(
+            records, max_query_length=self.max_query_length
+        )
 
 
 def mice_v2_scorer(

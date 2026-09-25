@@ -796,6 +796,17 @@ def TrainEvaluateMiceV2(
                 if cfg.plaid.use_plaid:
                     load_model.tag("plaid_retriever", True)
                     logging.info(f"Running PLAID-style evaluation for: {label}")
+                    if cfg.plaid.max_doc_length is not None:
+                        logging.info(
+                            f"[PLAID] Enforcing max_doc_length={cfg.plaid.max_doc_length} for PLAID indexation "
+                            f"(base model default: {eval_model.tokenizer.max_doc_length})"
+                        )
+                    if cfg.plaid.max_query_length is not None:
+                        logging.info(
+                            f"[PLAID] Enforcing max_query_length={cfg.plaid.max_query_length} for PLAID search/reranking "
+                            f"(base model default: {eval_model.tokenizer.max_query_length})"
+                        )
+
                     # 1) Build the Retriever factory for first stage + model + Plaid
                     mice_plaid_factory = MicePlaidRetrieverFactory(
                         mice_model=eval_model,
@@ -804,6 +815,8 @@ def TrainEvaluateMiceV2(
                         batchsize=cfg.retrieval.batch_size,
                         n_ivf_probe=cfg.plaid.n_ivf_probe,
                         n_full_scores=cfg.plaid.n_full_scores,
+                        max_query_length=cfg.plaid.max_query_length,
+                        max_doc_length=cfg.plaid.max_doc_length,
                     )
                     # 2) Build the plaid indexes for all datasets in the collection
                     mice_plaid_factory.build_indexes(
@@ -871,6 +884,8 @@ def TrainEvaluateMiceV2(
                             batchsize=cfg.retrieval.batch_size,
                             n_ivf_probe=cfg.plaid.n_ivf_probe,
                             n_full_scores=cfg.plaid.n_full_scores,
+                            max_query_length=cfg.plaid.max_query_length,
+                            max_doc_length=cfg.plaid.max_doc_length,
                         )
                         mice_colbert_rerank_factory.build_indexes(
                             evaluations=tests,

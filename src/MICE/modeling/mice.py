@@ -311,8 +311,24 @@ class MICEQueryDocTokenizer(HFTokenizer):
         input_nature: QueryDocInput = QueryDocInput.PAIRS,
     ) -> MICETokenizedTexts:
         # Determine per-side token limits
-        q_max = self.max_query_length
-        d_max = self.max_doc_length
+        q_max = (
+            options.max_length
+            if (
+                options is not None
+                and options.max_length is not None
+                and input_nature == QueryDocInput.QUERY
+            )
+            else self.max_query_length
+        )
+        d_max = (
+            options.max_length
+            if (
+                options is not None
+                and options.max_length is not None
+                and input_nature == QueryDocInput.DOCUMENT
+            )
+            else self.max_doc_length
+        )
 
         def _encode(texts: List[str], max_tokens: int, prompt: Optional[str] = None):
             formatted_texts = [self.format_prompt(prompt, t) for t in texts]
@@ -638,7 +654,9 @@ class MiceCrossEncoder(AbstractModuleScorer):
         attn_mask.masked_fill_(~valid_pairs[:, None, :, :], torch.finfo(dtype).min)
         return attn_mask
 
-    def get_document_encoder(self) -> TextEncoderBase:
+    def get_document_encoder(
+        self, max_doc_length: Optional[int] = None
+    ) -> TextEncoderBase:
         """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
         raise NotImplementedError()
 
@@ -932,10 +950,11 @@ class BertMiceCrossEncoder(MiceCrossEncoder):
                 torch.randn(1, 1, self.head_config.hidden_size) * 0.02
             )
 
-    def get_document_encoder(self) -> TextEncoderBase:
+    def get_document_encoder(
+        self, max_doc_length: Optional[int] = None
+    ) -> TextEncoderBase:
         """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
-
-        return MiceDocumentEncoder.C(model=self)
+        return MiceDocumentEncoder.C(model=self, max_doc_length=max_doc_length)
 
     def query_token_embeddings(self, records: List[IDTextRecord]) -> List[torch.Tensor]:
         """Encode a batch of queries and return the list of per-token
@@ -1460,9 +1479,11 @@ class ModernBertMiceCrossEncoder(MiceCrossEncoder):
                 torch.randn(1, 1, self.config.hidden_size) * 0.02
             )
 
-    def get_document_encoder(self) -> TextEncoderBase:
+    def get_document_encoder(
+        self, max_doc_length: Optional[int] = None
+    ) -> TextEncoderBase:
         """Returns a TokenizedTextEncoder initialized from the bottom layers of MICE"""
-        return MiceDocumentEncoder.C(model=self)
+        return MiceDocumentEncoder.C(model=self, max_doc_length=max_doc_length)
 
     def query_token_embeddings(self, records: List[IDTextRecord]) -> List[torch.Tensor]:
         """Encode a batch of queries and return the list of per-token
@@ -1759,6 +1780,8 @@ class MiceDocumentEncoder(TextEncoderBase):
     instantiate a document encoder from them"""
 
     model: Param[MiceCrossEncoder]
+    max_doc_length: Param[Optional[int]] = field(default=None, ignore_default=True)
+    """Maximum number of tokens to store per document in PLAID index. If None, defaults to model's tokenizer max_doc_len."""
 
     def __initialize__(self) -> None:
         super().__initialize__()
@@ -1792,7 +1815,12 @@ class MiceDocumentEncoder(TextEncoderBase):
     def encode_documents(
         self, records: List[IDTextRecord]
     ) -> TokensRepresentationOutput:
-        options = TokenizerOptions(max_length=self.model.max_doc_len)
+        effective_max_doc_len = (
+            self.max_doc_length
+            if self.max_doc_length is not None
+            else self.model.max_doc_len
+        )
+        options = TokenizerOptions(max_length=effective_max_doc_len)
         output = self(records, options=options)
         return output
 

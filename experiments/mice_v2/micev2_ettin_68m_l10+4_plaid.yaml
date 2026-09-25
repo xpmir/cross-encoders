@@ -1,45 +1,32 @@
 id: train_micev2_ettin68m_l10+4_plaid
 title: "Mice-Ettin-68m Training"
 description:
-    Training a Mice Model with two stage utility_pred. Apply the plaid 
-    indexing with different possible 
+    From an already trained Mice model,
+    add a PLAID indexation and compare the results with and without PLAID
 
 module: MICE.experiments.micev2_training
-parent: ./_ettin68m_abl.yaml
+parent: ./micev2_ettin_68m_l10+4.yaml
 
 
 nb_repetitions: 1
-# broad config
-top_layers_doc_ln: true # default false, best is true
-bottom_final_norm: false # default true, best is false
-top_final_norm: false # default false, best false
-
-# Utility Soft Gating & Phase 2 Hard Token Pruning
-normalize_doc_embeds: true # default false, need true for PLAID
-utility_pred: true
-lambda_reg: 0.1
-hard_prune_threshold: 0.1
-# training
-phase2_training: true
-learner:
-    optimization:
-        max_epochs: 2000 #  x 256 x 100 = ??M Samples < 145M in full dataset
-phase2_max_epochs: 1000
 
 plaid:
     use_plaid: true
     buffer_size: 5000
-    n_bits: 
-        values_list: [2, 4, 8] 
-
-## Evalutation config
-eval_phase_1: false
+    n_bits: 8
 
 evaluation: # Build Plaid index and Evaluate only on 3 small datasets
     eval_checkpoint: "last"
     all_datasets: false
     in_domain: false
-    beir13: true
+    beir13: false
+    datasets:
+        - nfcorpus
+        - scifact
+        - msmarco_dev
 
 indexation:
-    requirements: duration=15h & cpu(cores=16) & cuda(mem=80G) # H100
+    requirements: duration=2h & cpu(cores=16) & cuda(mem=40G)
+
+grid_search:
+    learner.optimization.lr: 7e-5 # best value for Mice-Ettin-68m (v1)

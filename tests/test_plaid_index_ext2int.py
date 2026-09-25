@@ -18,6 +18,10 @@ class MockEncoder(TextEncoderBase):
     def dimension(self) -> int:
         return self.dim
 
+    @property
+    def model(self):
+        return None
+
     def document_token_embeddings(self, documents) -> list[torch.Tensor]:
         outputs = []
         for doc in documents:

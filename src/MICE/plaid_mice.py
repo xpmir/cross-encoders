@@ -16,6 +16,7 @@ from xpmir.rankers.retriever import Retriever
 from xpmir.rankers.scorer import RerankingInputs, TwoStageRetriever, reranking_collate
 from xpmir.letor.records import PointwiseItem
 from xpmir.rankers import AbstractModuleScorer
+from xpmir.text.encoders import TokenizerOptions
 from xpm_torch.utils import to_device
 from torchdata.stateful_dataloader import StatefulDataLoader
 
@@ -137,6 +138,9 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
     index: Param[PlaidIndex]
     """The fast-plaid index to search."""
 
+    max_query_length: Param[Optional[int]] = field(default=None, ignore_default=True)
+    """Maximum query length for reranking. If None, uses scorer's default."""
+
     def build_reranking_dataloader(self, queries: Dict[str, IDTextRecord]):
         """Builds a dataloader for re-ranking all documents for a set of queries
         Allows for efficient two-stage retrieval with cross-query batching on GPU when the scorer supports it (i.e. is an AbstractModuleScorer and batchsize > 0).
@@ -157,8 +161,13 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
                 queries_list.append(record.topic)
 
             if issubclass(type(scorer), AbstractModuleScorer):
+                options = (
+                    TokenizerOptions(max_length=self.max_query_length)
+                    if self.max_query_length is not None
+                    else None
+                )
                 return scorer.batch_tokenize(
-                    queries_list, input_nature=QueryDocInput.QUERY
+                    queries_list, options=options, input_nature=QueryDocInput.QUERY
                 ), doc_list
             return None
 

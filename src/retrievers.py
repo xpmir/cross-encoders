@@ -1,6 +1,6 @@
 """This file contains utilities for building Retrievers that can be used in various experiments"""
 
-from typing import Dict
+from typing import Dict, Optional
 from experimaestro import stop_tags
 from datamaestro_ir.data import Documents
 from xpmir.rankers import Retriever
@@ -105,6 +105,8 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
         batchsize: int,
         n_ivf_probe: int = 8,
         n_full_scores: int = 0,
+        max_query_length: Optional[int] = None,
+        max_doc_length: Optional[int] = None,
     ):
         self.mice_model = mice_model
         self.topk = topk
@@ -112,7 +114,11 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
         self.first_stage_factory = first_stage_factory
         self.n_ivf_probe = n_ivf_probe
         self.n_full_scores = n_full_scores
-        self.doc_encoder = mice_model.get_document_encoder()
+        self.max_query_length = max_query_length
+        self.max_doc_length = max_doc_length
+        self.doc_encoder = mice_model.get_document_encoder(
+            max_doc_length=max_doc_length
+        )
         self.indexes: Dict[str] = {}
         self.documents: Dict[str, Documents] = {}
 
@@ -134,6 +140,12 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
         launcher_index,
         init_tasks,
     ):
+        effective_max_doc = cfg.max_doc_length or self.max_doc_length
+        if effective_max_doc is not None:
+            self.doc_encoder = self.mice_model.get_document_encoder(
+                max_doc_length=effective_max_doc
+            )
+
         # 1) Build the index and retriever for this model
         for (
             dataset_key,
@@ -156,7 +168,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
                         seed=seed,
                         compress_only=cfg.compress_only,
                         force_cpu_indexing=cfg.force_cpu_indexing,
-                        fabric_config=FabricConfiguration.C(precision="bf16-true")
+                        fabric_config=FabricConfiguration.C(precision="bf16-true"),
                     )
                     .tag("index_documents", documents.id)
                     .submit(
@@ -195,14 +207,20 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
             retriever=self.first_stage_factory(dataset=dataset, key=key),
             top_k=self.topk,
             batchsize=self.batchsize,
+            max_query_length=self.max_query_length,
         )
 
     def colbert_retriever(self, dataset: Documents, key: str = None) -> PlaidRetriever:
         """Genuine ColBERT-style (MaxSim/IVF) first-stage retriever, searching
         the same PLAID index built by `build_indexes`, using MICE's own
         bottom-layer contextualized embeddings for both queries and documents."""
+        query_encoder = (
+            self.mice_model.get_query_encoder(max_query_length=self.max_query_length)
+            if hasattr(self.mice_model, "get_query_encoder")
+            else self.mice_model
+        )
         return PlaidRetriever.C(
-            encoder=self.mice_model,
+            encoder=query_encoder,
             index=self._resolve_index(dataset, key),
             topk=self.topk,
             n_ivf_probe=self.n_ivf_probe,
