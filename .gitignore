@@ -64,3 +64,6 @@ tmp/
 .gemini/
 gha-creds-*.json
 GEMINI.md
+
+# Git worktrees
+/.worktrees/

@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from tests import NANO_BEIR_KEYS
+from tests import NANO_BEIR_KEYS, aggregations, aggregation_hf, test_registry  # noqa: F401
 
 ### Some dicts for formatting
 
@@ -66,65 +66,8 @@ backbone_nlayers = {
     "microsoft/deberta-v3-base": 12,
 }
 
-aggregations = {
-    "In Domain": ["msmarco_dev", "trec2019", "trec2020"],
-    "minified": [
-        "msmarco_dev",
-        "trec2019",
-        "trec2020",
-        "scifact",
-        "touche",
-        "fiqa",
-        "nfcorpus",
-    ],
-    "BEIR13": [
-        "arguana",
-        "climate_fever",
-        "dbpedia",
-        "fever",
-        "fiqa",
-        "hotpotqa",
-        "nfcorpus",
-        "nq",
-        "quora",
-        "scidocs",
-        "scifact",
-        "touche",
-        "trec_covid",
-    ],
-    "BEIR13 Decontaminated": [
-        "arguana_decontaminated",
-        "climate_fever_decontaminated",
-        "dbpedia_decontaminated",
-        "fever_decontaminated",
-        "fiqa_decontaminated",
-        "hotpotqa_decontaminated",
-        "nfcorpus_decontaminated",
-        "nq_decontaminated",
-        "quora_decontaminated",
-        "scidocs_decontaminated",
-        "scifact_decontaminated",
-        "touche_decontaminated",
-        "trec_covid_decontaminated",
-    ],
-    "Lotte-S": [
-        "lotte_lifestyle",
-        "lotte_recreation",
-        "lotte_science",
-        "lotte_technology",
-        "lotte_writing",
-    ],
-    "Nano BEIR": list(NANO_BEIR_KEYS.keys()),
-}
+# aggregations and aggregation_hf are imported from tests (centralized registry)
 
-## Aggregations used in the HF Card (keep short)
-aggregation_hf = {
-    "Mean In Domain": aggregations["In Domain"],
-    "BEIR 13": aggregations["BEIR13"],
-    "BEIR 13 (Decontaminated)": aggregations["BEIR13 Decontaminated"],
-    "LoTTE (OOD)": aggregations["Lotte-S"],
-    "Nano BEIR": aggregations["Nano BEIR"],
-}
 
 DATASET_TO_ABB = {
     "fiqa": "Fi",

@@ -107,7 +107,9 @@ def project_vector(v: torch.Tensor, P: torch.Tensor) -> torch.Tensor:
     return scale * (P @ v)
 
 
-def project_fused_qkv_weight(Wqkv_weight: torch.Tensor, P: torch.Tensor) -> torch.Tensor:
+def project_fused_qkv_weight(
+    Wqkv_weight: torch.Tensor, P: torch.Tensor
+) -> torch.Tensor:
     """`(3d, d)` fused Q/K/V matrix -> chunk into 3 square `(d, d)` blocks,
     project each with the same shared `P` on both sides, re-concatenate."""
     chunks = Wqkv_weight.chunk(3, dim=0)
@@ -130,9 +132,7 @@ def project_fused_mlp_wi(
     `(intermediate, d)` blocks, project each with `P_int` on the intermediate
     (output) axis and `P` on the hidden (input) axis, re-concatenate."""
     chunks = Wi_weight.chunk(2, dim=0)
-    return torch.cat(
-        [project_two_sided(c, P_int, P) for c in chunks], dim=0
-    )
+    return torch.cat([project_two_sided(c, P_int, P) for c in chunks], dim=0)
 
 
 def project_mlp_wi_bias(
@@ -182,7 +182,9 @@ def _fit_projections(src_layers, hidden_target_dim, intermediate_target_dim):
         intermediate_mats.append(mlp.Wo.weight.T)
 
     P = compute_shared_projection(hidden_mats, hidden_target_dim)
-    P_int = compute_shared_projection_general(intermediate_mats, intermediate_target_dim)
+    P_int = compute_shared_projection_general(
+        intermediate_mats, intermediate_target_dim
+    )
     return P, P_int
 
 
@@ -279,7 +281,9 @@ def initialize_compressed_top_layers(
             intermediate_target_dim, full_backbone.model.config.intermediate_size
         )
     else:
-        P, P_int = _fit_projections(src_layers, hidden_target_dim, intermediate_target_dim)
+        P, P_int = _fit_projections(
+            src_layers, hidden_target_dim, intermediate_target_dim
+        )
         if hf_model.adapter is not None:
             with torch.no_grad():
                 hf_model.adapter.weight.copy_(P)
@@ -302,15 +306,16 @@ def initialize_compressed_top_layers(
             if isinstance(top_layer.doc_cross_attn_norm, nn.LayerNorm):
                 _copy_norm(top_layer.doc_cross_attn_norm, norm_to_copy, P)
 
-        if hasattr(src_layer, "mlp_norm") and isinstance(src_layer.mlp_norm, nn.LayerNorm):
+        if hasattr(src_layer, "mlp_norm") and isinstance(
+            src_layer.mlp_norm, nn.LayerNorm
+        ):
             _copy_norm(top_layer.mlp_norm, src_layer.mlp_norm, P)
 
         _copy_attention(top_layer.self_attn, src_layer.attn, P)
         _copy_attention(top_layer.cross_attn, src_layer.attn, P)
         _copy_mlp(top_layer.mlp, src_layer.mlp, P, P_int)
 
-    if (
-        getattr(hf_model, "top_final_norm", None) is not None
-        and hasattr(full_backbone.model, "final_norm")
+    if getattr(hf_model, "top_final_norm", None) is not None and hasattr(
+        full_backbone.model, "final_norm"
     ):
         _copy_norm(hf_model.top_final_norm, full_backbone.model.final_norm, P)

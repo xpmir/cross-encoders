@@ -64,6 +64,14 @@ class PoolingMethod(str, Enum):
     """Mean pooling"""
 
 
+class ScorerType(str, Enum):
+    """Supported neural scorer architectures."""
+
+    stCrossEncoder = "stCrossEncoder"
+    stMultiVectorEncoder = "stMultiVectorEncoder"
+    hfCrossScorer = "hfCrossScorer"
+
+
 class Validation(str, Enum):
     """Possible validation subsets"""
 
@@ -150,6 +158,9 @@ class Evaluation:
     nanobeir: bool = False
     """Whether to evaluate on NanoBEIR datasets"""
 
+    limit: bool = False
+    """Whether to evaluate on LIMIT theoretical stress-test benchmarks"""
+
     eval_checkpoint: Union[
         List[Union[CheckpointSelection, int, str]], CheckpointSelection, int, str
     ] = CheckpointSelection.LAST
@@ -228,7 +239,7 @@ class xpm_torch_Learner:
     loss: GridSearch[str] = Losses.marginMSE.value
     """Loss function to use"""
 
-    validation: GridSearch[str] = Validation.NanoBEIR.value
+    validation: str = Validation.NanoBEIR.value
     """ The validation subset to use """
 
     early_stop_epochs: GridSearch[int] = 0
@@ -300,8 +311,11 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     pref_attn_implementation: Optional[str] = field(default=None)
     """Attention implementation for HuggingFace models (e.g. 'flash_attention_2', 'sdpa', 'eager')"""
 
-    use_st_scorer: GridSearch[bool] = field(default=True)
-    """Use sentence-transformers STCrossEncoder instead of HFCrossScorer"""
+    scorer_type: GridSearch[str] = ScorerType.stCrossEncoder.value
+    """Type of scorer model: stCrossEncoder, stMultiVectorEncoder, or hfCrossScorer"""
+
+    similarity_fn_name: Optional[str] = field(default=None)
+    """Similarity function for multi-vector scorer ('maxsim' or 'meanmaxsim'). When None, defaults to 'meanmaxsim' for MSE_mixedbread_large and 'maxsim' otherwise."""
 
     ettin_subset_exclude: List[str] = field(factory=list)
     """The subset config names of cross_encoder.ettin_reranker_v1_data to exclude from training"""
@@ -323,6 +337,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
 
     precompute_first_stage: bool = True
     """If true, will save the run for the first stage - just reload it for evaluation rather than recomputing"""
+
+    from_experiment: GridSearch[Optional[str]] = None
+    """Optional experiment ID, local model directory path, or HF Hub model ID to instantiate a trained model from results/models"""
 
     ## Cross Encoder Model
     base: GridSearch[str] = ""
@@ -352,6 +369,10 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
 
     export_trained_models: bool = True
     """Whether to export the best models to the models/ folder"""
+
+    export_only_best: bool = True
+    """Whether to export only the single best performing model across all configurations (default: True).
+    If False, exports the best model for each grid search configuration."""
 
     normalize_docs_per_batch: bool = True
     """whether to normalize documents per batch for listwise losses"""

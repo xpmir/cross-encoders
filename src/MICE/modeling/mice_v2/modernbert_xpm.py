@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 def compute_model_norm_metrics(
     hf_model: nn.Module,
 ) -> dict:
-    """Compute Frobenius norms of W_V, W_O, and classifier head weights."""
+    """Compute Frobenius norms of W_V and W_O weights."""
     metrics = {}
     if hasattr(hf_model, "get_wv_matrices"):
         wv_list = hf_model.get_wv_matrices()
@@ -66,11 +66,6 @@ def compute_model_norm_metrics(
             norms = [torch.norm(w, p="fro") for w in wo_list]
             metrics["wo_norm/mean"] = torch.stack(norms).mean()
             metrics["wo_norm/layer_0"] = norms[0]
-
-    if hasattr(hf_model, "get_classifier_norm"):
-        cls_norm = hf_model.get_classifier_norm()
-        if cls_norm is not None:
-            metrics["classifier_norm"] = cls_norm
 
     return metrics
 
@@ -306,17 +301,45 @@ class UtilityRegularizer(TrainingHook):
             sparsity = (utilities < self.sparsity_threshold).float().mean()
             valid_utilities = utilities.view(-1)
 
-        if self.budget is not None:
-            diff = F.relu(mean_utility - self.budget)
-        else:
-            diff = mean_utility
+        target_model = hf_model or getattr(info, "model", None)
+        model_to_inspect = getattr(target_model, "hf_model", target_model)
+        p_active = getattr(model_to_inspect, "last_p_active", None)
 
-        reg_loss = diff**2 if self.l2_reg else diff
+        if p_active is not None:
+            # Hard Concrete L0 loss formulation over exact retention probability
+            if (
+                doc_mask is not None
+                and p_active.ndim == 3
+                and p_active.shape[0] == doc_mask.shape[0]
+                and p_active.shape[1] == doc_mask.shape[1]
+            ):
+                mask = doc_mask.unsqueeze(-1).bool()
+                valid_p_active = p_active.masked_select(mask)
+                mean_p_active = (
+                    valid_p_active.mean()
+                    if valid_p_active.numel() > 0
+                    else p_active.mean()
+                )
+            else:
+                mean_p_active = p_active.mean()
+
+            if self.budget is not None:
+                diff = F.relu(mean_p_active - self.budget)
+            else:
+                diff = mean_p_active
+
+            reg_loss = diff**2 if self.l2_reg else diff
+        else:
+            if self.budget is not None:
+                diff = F.relu(mean_utility - self.budget)
+            else:
+                diff = mean_utility
+
+            reg_loss = diff**2 if self.l2_reg else diff
 
         info.add_loss(Loss("utility_reg", reg_loss, self.lambda_reg))
 
         nrecords = doc_mask.shape[0] if doc_mask is not None else 1
-        target_model = hf_model or getattr(info, "model", None)
 
         update_utility_temperature(
             target_model,
@@ -348,6 +371,39 @@ class UtilityRegularizer(TrainingHook):
                 )
                 info.metrics.add(
                     ScalarMetric("utility/over_budget", float(diff.item()), nrecords)
+                )
+
+            if p_active is not None:
+                info.metrics.add(
+                    ScalarMetric(
+                        "l0/p_active_mean", float(mean_p_active.item()), nrecords
+                    )
+                )
+                info.metrics.add(
+                    ScalarMetric(
+                        "l0/exact_zeros",
+                        float((valid_utilities == 0.0).float().mean().item()),
+                        nrecords,
+                    )
+                )
+                info.metrics.add(
+                    ScalarMetric(
+                        "l0/exact_ones",
+                        float((valid_utilities == 1.0).float().mean().item()),
+                        nrecords,
+                    )
+                )
+                info.metrics.add(
+                    ScalarMetric(
+                        "l0/intermediate",
+                        float(
+                            ((valid_utilities > 0.0) & (valid_utilities < 1.0))
+                            .float()
+                            .mean()
+                            .item()
+                        ),
+                        nrecords,
+                    )
                 )
 
             # Monitor Model Matrix Norms (W_V, W_O, Classifier Head)
@@ -582,6 +638,8 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
     """Task to initialize weights of ModernBertMiceForSequenceClassification from HF checkpoint"""
 
     scorer: Param["ModernBertMiceScorer"]
+    freeze_bottom_layers: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to freeze the bottom contextualization layers and embeddings after initializing from backbone"""
 
     def execute(self):
         scorer = self.scorer
@@ -641,18 +699,11 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                                 else None
                             )
                         )
+                        # 1. Unconditionally seed self-attention and MLP modules
                         if norm_to_copy is not None:
-                            top_layer.cross_attn_norm.load_state_dict(
-                                norm_to_copy.state_dict()
-                            )
                             top_layer.self_attn_norm.load_state_dict(
                                 norm_to_copy.state_dict()
                             )
-                            if isinstance(top_layer.doc_cross_attn_norm, nn.LayerNorm):
-                                top_layer.doc_cross_attn_norm.load_state_dict(
-                                    norm_to_copy.state_dict()
-                                )
-
                         if hasattr(src_layer, "mlp_norm") and isinstance(
                             src_layer.mlp_norm, nn.LayerNorm
                         ):
@@ -661,13 +712,27 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                             )
 
                         top_layer.self_attn.load_state_dict(src_layer.attn.state_dict())
-                        top_layer.cross_attn.Wqkv.load_state_dict(
-                            src_layer.attn.Wqkv.state_dict()
-                        )
-                        top_layer.cross_attn.Wo.load_state_dict(
-                            src_layer.attn.Wo.state_dict()
-                        )
                         top_layer.mlp.load_state_dict(src_layer.mlp.state_dict())
+
+                        # 2. Conditionally seed cross-attention modules if enabled
+                        if top_layer.cross_attn is not None:
+                            if norm_to_copy is not None:
+                                top_layer.cross_attn_norm.load_state_dict(
+                                    norm_to_copy.state_dict()
+                                )
+                                if isinstance(
+                                    top_layer.doc_cross_attn_norm, nn.LayerNorm
+                                ):
+                                    top_layer.doc_cross_attn_norm.load_state_dict(
+                                        norm_to_copy.state_dict()
+                                    )
+
+                            top_layer.cross_attn.Wqkv.load_state_dict(
+                                src_layer.attn.Wqkv.state_dict()
+                            )
+                            top_layer.cross_attn.Wo.load_state_dict(
+                                src_layer.attn.Wo.state_dict()
+                            )
         else:
             logger.info(
                 f"Projection-derived init (compress_dim={compress_dim}): "
@@ -694,16 +759,6 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
                 full_backbone.model.final_norm.state_dict()
             )
 
-        if (
-            compress_init_option == "seed"
-            and hasattr(scorer.hf_model, "top_final_norm")
-            and scorer.hf_model.top_final_norm is not None
-        ):
-            logger.info("Seeding top_final_norm from backbone")
-            scorer.hf_model.top_final_norm.load_state_dict(
-                full_backbone.model.final_norm.state_dict()
-            )
-
         # 6. Classifier / Head
         if hasattr(full_backbone, "head"):
             logger.info("Seeding head from backbone")
@@ -714,6 +769,9 @@ class InitMICEV2ModernBERTFromHFID(LightweightTask):
             ):
                 # Copy head dense weight if classifier layer matches
                 pass
+
+        if self.freeze_bottom_layers:
+            scorer.freeze_bottom_layers()
 
         logger.info("Successfully initialized ModernBertMiceScorer weights.")
 
@@ -765,34 +823,94 @@ def is_rank_zero() -> bool:
     return True
 
 
+def get_rank(fabric=None) -> int:
+    """Returns global rank integer (0 if single-process or uninitialized)."""
+    if fabric is not None and getattr(fabric, "global_rank", None) is not None:
+        return int(fabric.global_rank)
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        return int(torch.distributed.get_rank())
+    for env_var in ("RANK", "LOCAL_RANK", "SLURM_PROCID"):
+        val = os.environ.get(env_var)
+        if val is not None:
+            try:
+                return int(val)
+            except ValueError:
+                pass
+    return 0
+
+
 class InitMICEV2FromCheckpoint(LightweightTask):
     """Initializes a Phase 2 MICE V2 model from a Phase 1 trained checkpoint path/loader and freezes bottom layers & utility predictor."""
 
     scorer: Param["ModernBertMiceScorer"]
 
+    freeze_bottom_layers: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to freeze the bottom contextualization layers and embeddings after loading checkpoint"""
+
     checkpoint_loader: Param[ModuleLoader]
     """Path or ModuleLoader to the Phase 1 trained checkpoint (should contain model.safetensors or model/ directory)."""
 
+    freeze_utility: Param[bool] = field(default=True, ignore_default=True)
+    """Whether to freeze the utility predictor after loading checkpoint"""
+
     def execute(self):
+        ckpt_path = Path(self.checkpoint_loader.path)
+        logger.info("[InitMICEV2] Loading Phase 1 checkpoint from: %s", ckpt_path)
+
+        # 1. Initialize scorer and freeze parameters on all ranks
+        if not self.scorer._initialized:
+            self.scorer.initialize()
+
+        if self.freeze_utility:
+            self.scorer.freeze_utility()
+
+        if self.freeze_bottom_layers:
+            self.scorer.freeze_bottom_layers()
+
+        # 2. Checkpoint handling
+        latest_epoch_dir = find_latest_epoch_dir(ckpt_path)
+        if latest_epoch_dir is None:
+            # Exported model (e.g. results/models or HF Hub cache) without epoch-* folder
+            model_dir = ckpt_path.parent if ckpt_path.is_file() else ckpt_path
+            if (
+                (model_dir / "model.safetensors").exists()
+                or (model_dir / "pytorch_model.bin").exists()
+                or (model_dir / "model").exists()
+            ):
+                logger.info(
+                    "[InitMICEV2] latest_epoch_dir is None: loading weights directly from exported model %s (no trainer checkpoint to copy)",
+                    model_dir,
+                )
+                self.scorer.load_model(model_dir)
+            else:
+                logger.info(
+                    "[InitMICEV2] latest_epoch_dir is None and no exported weights file found at %s. "
+                    "Skipping weight loading.",
+                    ckpt_path,
+                )
+
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                torch.distributed.barrier()
+            return
+
+        # 3. Checkpoint copying only on rank zero for epoch directories
         if not is_rank_zero():
             logger.info(
-                "[InitMICEV2] Skipping checkpoint initialization on non-zero rank (RANK=%s, LOCAL_RANK=%s)",
+                "[InitMICEV2] Skipping checkpoint copying on non-zero rank (RANK=%s, LOCAL_RANK=%s)",
                 os.environ.get("RANK", "unknown"),
                 os.environ.get("LOCAL_RANK", "unknown"),
             )
             if torch.distributed.is_available() and torch.distributed.is_initialized():
                 torch.distributed.barrier()
             return
+        else:
+            logger.info(
+                "[InitMICEV2] Found full checkpoint from trainer path at: %s. "
+                "Copying full checkpoint (model weights, optimizer.pth, trainer.pth) to epoch-00000000.",
+                latest_epoch_dir,
+            )
 
-        ckpt_path = Path(self.checkpoint_loader.path)
-        logger.info("[InitMICEV2] Copying Phase 1 checkpoint at: %s", ckpt_path)
-
-        latest_epoch_dir = find_latest_epoch_dir(ckpt_path)
-        assert latest_epoch_dir is not None, (
-            f"[InitMICEV2] No valid epoch directory found in {ckpt_path}"
-        )
-
-        # 1. Read Phase 1 step count from info.json
+        # Read Phase 1 step count from info.json
         phase1_steps = 0
         if (latest_epoch_dir / "info.json").exists():
             try:
@@ -833,6 +951,9 @@ class InitMICEV2FromCheckpoint(LightweightTask):
 
         # Populate process cwd checkpoints/epoch-00000000
         copy_to_epoch_zero(Path.cwd() / "checkpoints")
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.barrier()
 
 
 class EvalSparsityAccumulator:
@@ -879,36 +1000,73 @@ class EvalSparsityAccumulator:
         self.pruned_tokens += n_pruned
         self.sum_utilities += sum_u
 
-    def compute(self, fabric=None) -> Dict[str, float]:
-        """Aggregate stats across Fabric ranks or torch.distributed (if multi-GPU) and return metrics."""
+    def compute(self, fabric=None) -> Tuple[Dict[str, float], bool]:
+        """Aggregate stats across Fabric ranks or torch.distributed (if multi-GPU) and return metrics.
+
+        Returns:
+            (stats, gather_succeeded): Tuple of metric dictionary and a boolean
+            indicating whether multi-rank gathering succeeded.
+        """
         total = self.total_tokens
         pruned = self.pruned_tokens
         sum_u = self.sum_utilities
 
-        if fabric is not None and getattr(fabric, "world_size", 1) > 1:
-            t = torch.tensor(
-                [total, pruned, sum_u], device=fabric.device, dtype=torch.float64
-            )
-            t = fabric.all_reduce(t, reduce_op="sum")
-            total = int(t[0].item())
-            pruned = int(t[1].item())
-            sum_u = float(t[2].item())
-            logger.info(
-                f"[EvalSparsityAccumulator] Fabric all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
-            )
-        elif torch.distributed.is_available() and torch.distributed.is_initialized():
-            t = torch.tensor(
-                [total, pruned, sum_u],
-                dtype=torch.float64,
-                device=torch.cuda.current_device(),
-            )
-            torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
-            total = int(t[0].item())
-            pruned = int(t[1].item())
-            sum_u = float(t[2].item())
-            logger.info(
-                f"[EvalSparsityAccumulator] torch.distributed all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
-            )
+        is_multi_rank = (
+            fabric is not None and getattr(fabric, "world_size", 1) > 1
+        ) or (
+            torch.distributed.is_available()
+            and torch.distributed.is_initialized()
+            and torch.distributed.get_world_size() > 1
+        )
+        gather_succeeded = not is_multi_rank
+
+        if is_multi_rank:
+            try:
+                if not (
+                    torch.distributed.is_available()
+                    and torch.distributed.is_initialized()
+                ):
+                    raise RuntimeError(
+                        "torch.distributed is uninitialized or already destroyed at exit"
+                    )
+
+                if fabric is not None and getattr(fabric, "world_size", 1) > 1:
+                    t = torch.tensor(
+                        [total, pruned, sum_u],
+                        device=fabric.device,
+                        dtype=torch.float64,
+                    )
+                    t = fabric.all_reduce(t, reduce_op="sum")
+                    total = int(t[0].item())
+                    pruned = int(t[1].item())
+                    sum_u = float(t[2].item())
+                    gather_succeeded = True
+                    logger.info(
+                        f"[EvalSparsityAccumulator] Fabric all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
+                    )
+                elif (
+                    torch.distributed.is_available()
+                    and torch.distributed.is_initialized()
+                ):
+                    t = torch.tensor(
+                        [total, pruned, sum_u],
+                        dtype=torch.float64,
+                        device=torch.cuda.current_device(),
+                    )
+                    torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.SUM)
+                    total = int(t[0].item())
+                    pruned = int(t[1].item())
+                    sum_u = float(t[2].item())
+                    gather_succeeded = True
+                    logger.info(
+                        f"[EvalSparsityAccumulator] torch.distributed all-reduced stats: total={total}, pruned={pruned}, sum={sum_u:.4f}"
+                    )
+            except Exception as e:
+                gather_succeeded = False
+                logger.warning(
+                    f"[EvalSparsityAccumulator] Multi-rank gather failed ({e}). "
+                    f"Falling back to local rank metrics (total_tokens={total})."
+                )
 
         denom = max(total, 1)
         stats = {
@@ -916,33 +1074,56 @@ class EvalSparsityAccumulator:
             "mean_utility": sum_u / denom,
             "kept_ratio": (total - pruned) / denom,
             "total_tokens": total,
+            "pruned_tokens": pruned,
+            "sum_utilities": sum_u,
         }
-        logger.info(f"[EvalSparsityAccumulator] Computed metrics: {stats}")
-        return stats
+        logger.info(
+            f"[EvalSparsityAccumulator] Computed metrics (gather_succeeded={gather_succeeded}): {stats}"
+        )
+        return stats, gather_succeeded
 
     def flush_to_file(self, fabric=None, output_filename: str = "eval_sparsity.json"):
-        """Flush computed metrics to JSON file in current working directory (rank 0 only)."""
+        """Flush computed metrics to JSON file.
+
+        - Rank 0: Always writes output_filename (default: eval_sparsity.json).
+        - Rank != 0: Only writes eval_sparsity_{rank}.json if multi-rank gather failed.
+        """
+        rank = get_rank(fabric=fabric)
         logger.info(
-            f"[EvalSparsityAccumulator] Triggering flush_to_file at CWD={Path.cwd()} (total_tokens={self.total_tokens})"
+            f"[EvalSparsityAccumulator] Triggering flush_to_file at CWD={Path.cwd()} (rank={rank}, total_tokens={self.total_tokens})"
         )
         if self.total_tokens == 0:
             logger.warning(
-                "[EvalSparsityAccumulator] total_tokens is 0 during flush_to_file; skipping write."
+                f"[EvalSparsityAccumulator] Rank {rank}: total_tokens is 0 during flush_to_file; skipping write."
             )
             return
 
-        stats = self.compute(fabric=fabric)
-        if is_rank_zero():
+        stats, gather_succeeded = self.compute(fabric=fabric)
+
+        if rank == 0:
             out_path = Path.cwd() / output_filename
             try:
                 with out_path.open("w") as fp:
                     json.dump(stats, fp, indent=2)
                 logger.info(
-                    f"[EvalSparsityAccumulator] Successfully wrote evaluation sparsity metrics to {out_path}: {stats}"
+                    f"[EvalSparsityAccumulator] (Rank 0) Successfully wrote evaluation sparsity metrics to {out_path}: {stats}"
                 )
             except Exception as e:
                 logger.error(
                     f"[EvalSparsityAccumulator] Failed to write {output_filename}: {e}"
+                )
+        elif not gather_succeeded:
+            out_filename = f"eval_sparsity_{rank}.json"
+            out_path = Path.cwd() / out_filename
+            try:
+                with out_path.open("w") as fp:
+                    json.dump(stats, fp, indent=2)
+                logger.warning(
+                    f"[EvalSparsityAccumulator] (Rank {rank}) Wrote fallback per-rank sparsity metrics to {out_path}: {stats}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[EvalSparsityAccumulator] Failed to write {out_filename}: {e}"
                 )
 
 
@@ -1064,6 +1245,21 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     utility_temp: Param[float] = field(default=1.0, ignore_default=True)
     """Initial temperature for utility predictor sigmoid"""
 
+    utility_bias: Param[float] = field(default=5.0, ignore_default=True)
+    """Initial bias scalar for utility predictor output projection wo.bias"""
+
+    gate_target: Param[str] = field(default="h", ignore_default=True)
+    """Target representation for gating: 'h' (default, gate full document hidden states) or 'v' (gate only cross-attention Value vectors)"""
+
+    use_hard_concrete: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to use Hard Concrete L0 distribution sampling for utility prediction"""
+
+    hc_gamma: Param[float] = field(default=-0.1, ignore_default=True)
+    """Hard concrete lower stretch parameter gamma (default -0.1)"""
+
+    hc_zeta: Param[float] = field(default=1.1, ignore_default=True)
+    """Hard concrete upper stretch parameter zeta (default 1.1)"""
+
     compress_dim: Param[float] = field(default=1.0, ignore_default=True)
     """Compression ratio (>=1.0) applied to hidden_size/intermediate_size/num_attention_heads of the top interaction layers only"""
 
@@ -1073,16 +1269,23 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     skip seeding, keep each layer's own default init), 'random_projection', or
     'svd_projection' (both only meaningful when compress_dim > 1.0)"""
 
+    use_cross_attn: Param[bool] = field(default=True, ignore_default=True)
+    """Whether top layers use Cross+Self attention (True) or Concatenated Self-Attention only (False)"""
+
+    head_type: Param[str] = field(default="linear", ignore_default=True)
+    """Type of classification head pipeline: 'linear' (default, legacy single linear layer) or 'st_reranker' (ST pooling + dense + LayerNorm + dense)"""
+
     _version: Constant[str] = "2.0.2"
 
     hf_model: nn.Module
 
-    def freeze_bottom_and_utility(self):
-        """Freezes bottom layers, embeddings, and utility predictor."""
-        if hasattr(self, "hf_model") and hasattr(
-            self.hf_model, "freeze_bottom_and_utility"
-        ):
-            self.hf_model.freeze_bottom_and_utility()
+    def freeze_utility(self):
+        """Freezes utility predictor."""
+        self.hf_model.freeze_utility()
+
+    def freeze_bottom_layers(self):
+        """Freezes bottom layers and embeddings."""
+        self.hf_model.freeze_bottom_layers()
 
     def __initialize__(self):
         super().__initialize__()
@@ -1103,6 +1306,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 attr_name: str, self_val, target_cfg_attr: Optional[str] = None
             ):
                 cfg_attr = target_cfg_attr or attr_name
+                if not hasattr(mice_config, cfg_attr):
+                    return
                 ckpt_val = getattr(mice_config, cfg_attr)
                 if self_val != ckpt_val:
                     logger.warning(
@@ -1113,32 +1318,43 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                     )
                     setattr(mice_config, cfg_attr, self_val)
 
+            # Check all structural and operational attributes systematically
+            check_attrs = [
+                "n_contextualization_layers",
+                "n_docs_ctx_layers",
+                "n_interaction_layers",
+                "bound_bottom_layers",
+                "utility_pred",
+                "hard_pruning",
+                "hard_prune_threshold",
+                "normalize_doc_embeds",
+                "use_upper_rope",
+                "top_layers_doc_ln",
+                "bottom_final_norm",
+                "top_final_norm",
+                "utility_temp",
+                "utility_bias",
+                "gate_target",
+                "use_hard_concrete",
+                "hc_gamma",
+                "hc_zeta",
+                "compress_dim",
+                "compress_init_option",
+                "use_cross_attn",
+                "head_type",
+            ]
+
+            for attr in check_attrs:
+                self_val = getattr(self, attr, None)
+                if self_val is not None:
+                    apply_override(attr, self_val)
+
             if self.attn_implementation is not None:
                 apply_override(
                     "attn_implementation",
                     self.attn_implementation,
                     "_attn_implementation",
                 )
-            if self.utility_pred:
-                apply_override("utility_pred", True)
-            if self.hard_pruning:
-                apply_override("hard_pruning", True)
-                apply_override("hard_prune_threshold", self.hard_prune_threshold)
-            if self.normalize_doc_embeds:
-                apply_override("normalize_doc_embeds", True)
-            if not self.use_upper_rope:
-                apply_override("use_upper_rope", False)
-            if self.top_layers_doc_ln:
-                apply_override("top_layers_doc_ln", True)
-            if not self.bottom_final_norm:
-                apply_override("bottom_final_norm", False)
-            if self.top_final_norm:
-                apply_override("top_final_norm", True)
-            if self.utility_temp != 1.0:
-                apply_override("utility_temp", self.utility_temp)
-            if self.compress_dim != 1.0:
-                apply_override("compress_dim", self.compress_dim)
-                apply_override("compress_init_option", self.compress_init_option)
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -1159,8 +1375,15 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 bottom_final_norm=self.bottom_final_norm,
                 top_final_norm=self.top_final_norm,
                 utility_temp=self.utility_temp,
+                utility_bias=self.utility_bias,
+                gate_target=self.gate_target,
+                use_hard_concrete=self.use_hard_concrete,
+                hc_gamma=self.hc_gamma,
+                hc_zeta=self.hc_zeta,
                 compress_dim=self.compress_dim,
                 compress_init_option=self.compress_init_option,
+                use_cross_attn=self.use_cross_attn,
+                head_type=self.head_type,
                 **config_kwargs,
             )
 
@@ -1173,9 +1396,6 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             hf_model = ModernBertMiceForSequenceClassification(mice_config)
 
         self.add_module("hf_model", hf_model)
-
-        if self.hard_pruning:
-            self.freeze_bottom_and_utility()
 
         attn_impl = getattr(hf_model.config, "_attn_implementation", "sdpa")
         if "flash" in str(attn_impl).lower():
@@ -1600,17 +1820,17 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         logger.info(f"Saved ModernBERT MICE model configuration and weights to {path}")
 
         # 2. Save tokenizer
-        if (
+        if hasattr(self.tokenizer, "save_pretrained"):
+            if hasattr(self.tokenizer, "name_or_path"):
+                self.tokenizer.name_or_path = str(path)
+            self.tokenizer.save_pretrained(path)
+            logger.info(f"Saved tokenizer to {path}")
+        elif (
             hasattr(self.tokenizer, "tokenizer")
             and self.tokenizer.tokenizer is not None
         ):
             self.tokenizer.tokenizer.name_or_path = str(path)
             self.tokenizer.tokenizer.save_pretrained(path)
-            logger.info(f"Saved tokenizer to {path}")
-        elif hasattr(self.tokenizer, "save_pretrained"):
-            if hasattr(self.tokenizer, "name_or_path"):
-                self.tokenizer.name_or_path = str(path)
-            self.tokenizer.save_pretrained(path)
             logger.info(f"Saved tokenizer to {path}")
         else:
             logger.warning(
@@ -1644,16 +1864,50 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         ).exists():
             path = path / "model"
 
+        def _load_and_validate(sd, filename):
+            for old_k, new_k in [
+                ("classifier.weight", "output_modules.dense_score.linear.weight"),
+                ("classifier.bias", "output_modules.dense_score.linear.bias"),
+                ("top_final_norm.weight", "output_modules.norm.norm.weight"),
+                ("top_final_norm.bias", "output_modules.norm.norm.bias"),
+            ]:
+                if old_k in sd and new_k not in sd:
+                    sd[new_k] = sd.pop(old_k)
+
+            load_res = self.hf_model.load_state_dict(sd, strict=False)
+            if load_res.unexpected_keys:
+                logger.warning(
+                    "[load_model] Unexpected keys in state_dict from %s: %s",
+                    filename,
+                    load_res.unexpected_keys,
+                )
+            if load_res.missing_keys:
+                critical_missing = [
+                    k
+                    for k in load_res.missing_keys
+                    if not k.startswith("utility_predictor")
+                    and not k.startswith("output_modules")
+                    and not k.startswith("classifier")
+                ]
+                if critical_missing:
+                    raise RuntimeError(
+                        f"Critical backbone weights missing when loading from {filename}: {critical_missing}"
+                    )
+                logger.warning(
+                    "[load_model] Non-critical keys missing when loading from %s (newly initialized): %s",
+                    filename,
+                    load_res.missing_keys,
+                )
+            logger.info("Loaded weights from %s", path / filename)
+
         if (path / "model.safetensors").exists():
             from safetensors.torch import load_file
 
             state_dict = load_file(path / "model.safetensors")
-            self.hf_model.load_state_dict(state_dict)
-            logger.info(f"Loaded weights from {path / 'model.safetensors'}")
+            _load_and_validate(state_dict, "model.safetensors")
         elif (path / "pytorch_model.bin").exists():
             state_dict = torch.load(path / "pytorch_model.bin", map_location="cpu")
-            self.hf_model.load_state_dict(state_dict)
-            logger.info(f"Loaded weights from {path / 'pytorch_model.bin'}")
+            _load_and_validate(state_dict, "pytorch_model.bin")
         else:
             super().load_model(path)
 
@@ -1732,7 +1986,7 @@ def mice_v2_scorer(
     bound_bottom_layers: bool = True,
     attn_implementation: Optional[str] = None,
     utility_pred: bool = False,
-    hard_pruning: bool = False,
+    hard_pruning: Optional[bool] = None,
     hard_prune_threshold: float = 0.5,
     normalize_doc_embeds: bool = False,
     use_upper_rope: bool = True,
@@ -1740,11 +1994,21 @@ def mice_v2_scorer(
     bottom_final_norm: bool = True,
     top_final_norm: bool = False,
     utility_temp: float = 1.0,
+    utility_bias: float = 5.0,
+    gate_target: str = "h",
+    use_hard_concrete: bool = False,
+    hc_gamma: float = -0.1,
+    hc_zeta: float = 1.1,
     compress_dim: float = 1.0,
     compress_init_option: str = "seed",
+    use_cross_attn: bool = True,
+    head_type: str = "linear",
     max_query_length: Optional[int] = None,
     max_doc_length: Optional[int] = None,
     max_length: int = 512,
+    query_prompt: Optional[str] = None,
+    doc_prompt: Optional[str] = None,
+    freeze_bottom_layers: bool = False,
 ) -> Tuple[ModernBertMiceScorer, List[LightweightTask]]:
     """
     Factory function for ModernBERT MICE V2 scorer.
@@ -1763,11 +2027,16 @@ def mice_v2_scorer(
     if compress_init_option == "seed" and compress_dim != 1.0:
         compress_init_option = "random"
 
+    if hard_pruning is None:
+        hard_pruning = True if use_hard_concrete else False
+
     tokenizer = MICEQueryDocTokenizer.C(
         model_id=hf_id,
         max_query_length=max_query_length,
         max_doc_length=max_doc_length,
         max_length=max_length,
+        query_prompt=query_prompt,
+        doc_prompt=doc_prompt,
     )
 
     scorer = ModernBertMiceScorer.C(
@@ -1787,10 +2056,20 @@ def mice_v2_scorer(
         bottom_final_norm=bottom_final_norm,
         top_final_norm=top_final_norm,
         utility_temp=utility_temp,
+        utility_bias=utility_bias,
+        gate_target=gate_target,
+        use_hard_concrete=use_hard_concrete,
+        hc_gamma=hc_gamma,
+        hc_zeta=hc_zeta,
         compress_dim=compress_dim,
         compress_init_option=compress_init_option,
+        use_cross_attn=use_cross_attn,
+        head_type=head_type,
     )
 
-    init_task = InitMICEV2ModernBERTFromHFID.C(scorer=scorer)
+    init_task = InitMICEV2ModernBERTFromHFID.C(
+        scorer=scorer,
+        freeze_bottom_layers=freeze_bottom_layers,
+    )
 
     return scorer, [init_task]

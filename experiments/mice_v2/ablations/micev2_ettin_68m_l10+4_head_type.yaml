@@ -1,0 +1,26 @@
+id: train_micev2_ettin68m_l10+4_abl_head_type
+title: "Mice-Ettin-68m Head Type Ablation"
+description:
+    Ablating classification head type (linear vs st_reranker) with varying contextualization layers (X) in the bottom encoder
+
+module: MICE.experiments.micev2_training
+parent: ../_ettin68m_abl.yaml
+nb_repetitions: 2
+
+
+top_layers_doc_ln: true # default false, best is true
+bottom_final_norm: false # default true, best is false
+top_final_norm: false # default false, best false
+normalize_doc_embeds: true # needed for plaid
+n_contextualization_layers: 10
+
+head_type:
+    - linear
+    - st_reranker
+
+# Eval only on BEIR
+evaluation: #default = Minified tests
+    eval_checkpoint: "last"
+    all_datasets: false
+    in_domain: true
+    beir13: true

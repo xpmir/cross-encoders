@@ -3,7 +3,7 @@
 import logging
 import shutil
 import json
-from typing import Callable, Optional, Any
+from typing import Callable, Optional, Any, Dict
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -12,6 +12,9 @@ from experimaestro import RunMode
 from experimaestro.launcherfinder import find_launcher
 from experimaestro.annotations import tags as get_tags
 
+from experimaestro.settings import get_settings
+from xpm_torch import ModuleLoader
+from xpm_torch.huggingface import TorchHFHub
 from xpm_torch.trainers import LossTrainer
 from xpm_torch.learner import LearnerOutput
 
@@ -48,7 +51,7 @@ from pointwise_distillation import (
 )
 
 from samplers import prepare_collection
-from configuration import Losses, CE_FineTuning
+from configuration import Losses, CE_FineTuning, ScorerType
 from samplers import msmarco_rankdistillm_sampled_colbert50
 from format import (
     aggregations,
@@ -220,9 +223,25 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             download=True,
         )
 
+        scorer_type = getattr(cfg, "scorer_type", ScorerType.stCrossEncoder.value)
+        if isinstance(scorer_type, ScorerType):
+            scorer_type = scorer_type.value
+
+        if scorer_type == ScorerType.stMultiVectorEncoder.value:
+            teacher_scale = 0.02
+            teacher_bias = 0.70
+            logger.info(
+                f"STMultiVectorEncoder detected: scaling teacher scores with scale={teacher_scale}, bias={teacher_bias} to align with MeanMaxSim range."
+            )
+            lossfn = PointwiseMSELoss.C(
+                teacher_scale=teacher_scale, teacher_bias=teacher_bias
+            )
+        else:
+            lossfn = PointwiseMSELoss.C()
+
         return PointwiseDistillationTrainer.C(
             sampler=PointwiseDistillationSampler.C(dataset=shuffled_dataset_config),
-            lossfn=PointwiseMSELoss.C(),
+            lossfn=lossfn,
             batch_size=cfg.learner.optimization.batch_size,
         )
 
@@ -416,6 +435,14 @@ def export_model(
     """Exports all artifacts (weights, logs, readme, config) for a best model."""
     models_path = resultspath / "models"
     best_model_path = models_path / model_name
+
+    old_readme = best_model_path / "README.md"
+    if old_readme.exists():
+        logger.warning(
+            f"Pre-existing README.md found in {best_model_path}; removing it to ensure fresh generation."
+        )
+        old_readme.unlink()
+
     best_model_path.mkdir(parents=True, exist_ok=True)
 
     csv_results.to_csv(best_model_path / "results.csv", index=False)
@@ -541,6 +568,73 @@ def export_model(
         logger.info(f"Copied {len(list(runs.keys()))} runs to {runs_dir}")
 
 
+def merge_eval_sparsity_files(task_dir: Path) -> Optional[Dict[str, float]]:
+    """Loads eval_sparsity.json and merges any eval_sparsity_{rank}.json (rank > 0) files if present."""
+    sparsity_file = task_dir / "eval_sparsity.json"
+    rank_files = sorted(task_dir.glob("eval_sparsity_*.json"))
+
+    if not sparsity_file.exists() and not rank_files:
+        return None
+
+    # If only eval_sparsity.json exists and no separate rank files exist, return directly
+    if sparsity_file.exists() and not rank_files:
+        try:
+            with sparsity_file.open("r") as fp:
+                return json.load(fp)
+        except Exception as e:
+            logger.warning(f"Failed to read {sparsity_file}: {e}")
+            return None
+
+    # Gather rank 0 (eval_sparsity.json) and other ranks
+    all_files = []
+    if sparsity_file.exists():
+        all_files.append(sparsity_file)
+    for rf in rank_files:
+        if rf != sparsity_file:
+            all_files.append(rf)
+
+    total_tokens = 0
+    pruned_tokens = 0
+    sum_utilities = 0.0
+
+    for f in all_files:
+        try:
+            with f.open("r") as fp:
+                data = json.load(fp)
+            t = data.get("total_tokens", 0)
+            p = data.get("pruned_tokens", int(round(t * data.get("sparsity", 0.0))))
+            s = data.get("sum_utilities", float(t * data.get("mean_utility", 0.0)))
+            total_tokens += t
+            pruned_tokens += p
+            sum_utilities += s
+        except Exception as e:
+            logger.warning(f"Error reading {f}: {e}")
+
+    if total_tokens == 0:
+        return None
+
+    denom = max(total_tokens, 1)
+    merged_stats = {
+        "sparsity": pruned_tokens / denom,
+        "mean_utility": sum_utilities / denom,
+        "kept_ratio": (total_tokens - pruned_tokens) / denom,
+        "total_tokens": total_tokens,
+        "pruned_tokens": pruned_tokens,
+        "sum_utilities": sum_utilities,
+    }
+
+    try:
+        with sparsity_file.open("w") as fp:
+            json.dump(merged_stats, fp, indent=2)
+        logger.info(
+            f"[merge_eval_sparsity_files] Merged {len(all_files)} sparsity files into {sparsity_file}: {merged_stats}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to write merged {sparsity_file}: {e}")
+
+    return merged_stats
+
+
 def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
     """Synchronize eval_sparsity.json into aggregated.txt so to_dataframe() parses it natively."""
     if not hasattr(tests, "collection"):
@@ -559,11 +653,9 @@ def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
             if results_path is not None:
                 results_path = Path(results_path)
                 if results_path.exists():
-                    sparsity_file = results_path.parent / "eval_sparsity.json"
-                    if sparsity_file.exists():
+                    stats = merge_eval_sparsity_files(results_path.parent)
+                    if stats is not None:
                         try:
-                            with sparsity_file.open("r") as fp:
-                                stats = json.load(fp)
                             existing_text = results_path.read_text()
                             lines_to_append = []
                             for metric_name in ["sparsity"]:
@@ -581,7 +673,7 @@ def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
                             if lines_to_append:
                                 with results_path.open("a") as fp:
                                     fp.writelines(lines_to_append)
-                                logger.info(
+                                logger.debug(
                                     f"[sync_eval_sparsity_metrics] Synced eval sparsity metrics ({list(stats.keys())}) into {results_path}"
                                 )
                             else:
@@ -594,7 +686,7 @@ def sync_eval_sparsity_metrics(tests: EvaluationsCollection):
                             )
                     else:
                         logger.debug(
-                            f"[sync_eval_sparsity_metrics] No eval_sparsity.json found at {sparsity_file}"
+                            f"[sync_eval_sparsity_metrics] No eval sparsity data found in {results_path.parent}"
                         )
 
 
@@ -707,58 +799,98 @@ def process_experiment_results(
     save_raw_results(df_with_aggs, helper.xp.resultspath)
 
     best_models_list = []
-    if not best_models_df.empty and cfg.export_trained_models:
-        # Check if model folder exists before saving models, delete if so
-        models_path = helper.xp.resultspath / "models"
-        if models_path.exists():
-            shutil.rmtree(models_path)
-            logging.info(f"Deleted existing models directory: {models_path}")
-
+    if not best_models_df.empty:
+        # 1. Collect all best candidates per configuration for the raw results summary
         for _, best_row in best_models_df.iterrows():
-            # Extract tags for this best model
-            best_tags = {tag: best_row[tag] for tag in model_id_tags}
-
-            logging.info(f"Best evaluated model is {best_tags}")
-
-            # Reconstruct the grid tags to find the original config
-            grid_keys = set()
-            for tags in all_tags:
-                grid_keys.update(tags.keys())
-            best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
-            best_cfg = config_map.get(frozenset(best_grid_tags.items()))
-
-            # Filter the original dataframe for this specific best model (all datasets)
             mask = pd.Series(True, index=df_with_aggs.index)
             for tag in model_id_tags:
                 mask &= df_with_aggs[tag].astype(str) == str(best_row[tag])
-
             best_model_df = df_with_aggs[mask].copy()
             best_models_list.append(best_model_df)
 
-            # Format and Export artifacts
-            csv_results, md_results = format_model_results(
-                best_model_df, aggregations=aggregation_hf
-            )
-
-            export_model(
-                best_tags=best_tags,
-                model_name=get_name_fn(best_tags),
-                csv_results=csv_results,
-                md_results=md_results,
-                learners=learners,
-                all_weights=all_weights,
-                best_cfg=best_cfg,
-                resultspath=helper.xp.resultspath,
-                save_runs=cfg.save_runs,
-                tests=tests,
-            )
-
         if best_models_list:
-            best_model_df = pd.concat(best_models_list, ignore_index=True)
-            best_model_df.to_csv(
+            all_best_models_df = pd.concat(best_models_list, ignore_index=True)
+            all_best_models_df.to_csv(
                 helper.xp.resultspath / "best_models_per_scorer_raw_results.csv",
                 index=False,
             )
+
+        # 2. Export model artifacts if enabled
+        if cfg.export_trained_models:
+            models_path = helper.xp.resultspath / "models"
+            if models_path.exists():
+                shutil.rmtree(models_path)
+                logging.info(f"Deleted existing models directory: {models_path}")
+
+            export_only_best = getattr(cfg, "export_only_best", True)
+            if export_only_best and len(best_models_df) > 1:
+                metric_col = "nDCG@10"
+                if metric_col in best_models_df.columns:
+                    best_idx = best_models_df[metric_col].astype(float).idxmax()
+                    export_models_df = best_models_df.loc[[best_idx]]
+                    winner_score = export_models_df[metric_col].values[0]
+                    logging.info(
+                        f"export_only_best=True: selected single best model among {len(best_models_df)} candidates "
+                        f"({metric_col}={winner_score:.4f} on {target_dataset})"
+                    )
+                else:
+                    logging.warning(
+                        f"Metric {metric_col} not found in best_models_df; exporting all {len(best_models_df)} candidate models"
+                    )
+                    export_models_df = best_models_df
+            else:
+                export_models_df = best_models_df
+
+            # Check for potential naming collisions among models to be exported
+            candidate_names = [
+                get_name_fn({tag: r[tag] for tag in model_id_tags})
+                for _, r in export_models_df.iterrows()
+            ]
+            has_name_collision = len(candidate_names) != len(set(candidate_names))
+            if has_name_collision:
+                logging.warning(
+                    "Naming collision detected among exported models! Disambiguating names using grid search tags."
+                )
+
+            grid_keys = set()
+            for tags in all_tags:
+                grid_keys.update(tags.keys())
+
+            for _, best_row in export_models_df.iterrows():
+                best_tags = {tag: best_row[tag] for tag in model_id_tags}
+                logging.info(f"Exporting model with tags: {best_tags}")
+
+                best_grid_tags = {k: best_tags[k] for k in grid_keys if k in best_tags}
+                best_cfg = config_map.get(frozenset(best_grid_tags.items()))
+
+                mask = pd.Series(True, index=df_with_aggs.index)
+                for tag in model_id_tags:
+                    mask &= df_with_aggs[tag].astype(str) == str(best_row[tag])
+                best_model_df = df_with_aggs[mask].copy()
+
+                csv_results, md_results = format_model_results(
+                    best_model_df, aggregations=aggregation_hf
+                )
+
+                model_name = get_name_fn(best_tags)
+                if has_name_collision and best_grid_tags:
+                    tag_suffix = "_".join(
+                        f"{k}-{v}" for k, v in sorted(best_grid_tags.items())
+                    )
+                    model_name = f"{model_name}_{tag_suffix}"
+
+                export_model(
+                    best_tags=best_tags,
+                    model_name=model_name,
+                    csv_results=csv_results,
+                    md_results=md_results,
+                    learners=learners,
+                    all_weights=all_weights,
+                    best_cfg=best_cfg,
+                    resultspath=helper.xp.resultspath,
+                    save_runs=cfg.save_runs,
+                    tests=tests,
+                )
 
     # Final aggregation and LaTeX table generation
     metric_names = [col[1] for col in metric_cols]
@@ -871,3 +1003,267 @@ def find_checkpoint(
         f"Available scheduled checkpoints in learner outputs: {available}.{interval_info} "
         f"Please verify that target_epoch was scheduled by checkpoint_interval or exists on disk."
     )
+
+
+def find_experiment_results_model_dir(experiment_ref: str) -> Path:
+    """Finds the exported model directory inside an experiment's results/models path.
+
+    Args:
+        experiment_ref: Experiment ID (e.g. 'train_mice_ettin32m_l4+4'),
+                       optional run-specific ID ('exp_id/run_id'),
+                       or direct directory path.
+
+    Returns:
+        Path to the exported model directory containing experimaestro.json.
+    """
+    ref_path = Path(experiment_ref).expanduser()
+
+    # 1. Direct path to a model folder (contains experimaestro.json)
+    if ref_path.is_dir() and (ref_path / "experimaestro.json").exists():
+        logger.info(f"Using direct model path: {ref_path}")
+        return ref_path
+
+    # 2. Direct path to run directory or results directory
+    if ref_path.is_dir():
+        models_dir = (
+            ref_path / "results" / "models"
+            if (ref_path / "results").exists()
+            else (ref_path / "models" if ref_path.name == "results" else ref_path)
+        )
+        if models_dir.exists():
+            candidates = [
+                d
+                for d in models_dir.iterdir()
+                if d.is_dir() and (d / "experimaestro.json").exists()
+            ]
+            if candidates:
+                logger.info(f"Found exported model in {candidates[0]}")
+                return candidates[0]
+
+    # 3. Experiment ID lookup across configured Experimaestro workspaces and local experiments
+    parts = experiment_ref.strip("/").split("/")
+    exp_id = parts[0]
+    run_id = parts[1] if len(parts) > 1 else None
+
+    settings = get_settings()
+    candidate_exp_dirs = []
+
+    # Check workspaces in settings
+    for ws in settings.workspaces:
+        if ws.path:
+            p_exp = Path(ws.path) / "experiments" / exp_id
+            if p_exp.exists():
+                candidate_exp_dirs.append(p_exp)
+            p_direct = Path(ws.path) / exp_id
+            if p_direct.exists():
+                candidate_exp_dirs.append(p_direct)
+
+    # Check default experiment roots (~/code/experiments/*)
+    default_experiments_root = Path.home() / "code" / "experiments"
+    if default_experiments_root.exists():
+        for sub in default_experiments_root.iterdir():
+            if sub.is_dir():
+                sub_exp = sub / exp_id
+                if sub_exp.exists() and sub_exp not in candidate_exp_dirs:
+                    candidate_exp_dirs.append(sub_exp)
+                sub_experiments_exp = sub / "experiments" / exp_id
+                if (
+                    sub_experiments_exp.exists()
+                    and sub_experiments_exp not in candidate_exp_dirs
+                ):
+                    candidate_exp_dirs.append(sub_experiments_exp)
+
+    if not candidate_exp_dirs:
+        raise FileNotFoundError(
+            f"Experiment '{exp_id}' not found in any workspace or local experiment paths. "
+            f"Searched workspaces: {[str(ws.path) for ws in settings.workspaces if ws.path]}"
+        )
+
+    exp_base = candidate_exp_dirs[0]
+
+    # Determine run directory
+    if run_id:
+        run_dir = exp_base / run_id
+        if not run_dir.exists():
+            raise FileNotFoundError(f"Run ID '{run_id}' not found under {exp_base}")
+    elif (exp_base / "current").exists():
+        run_dir = (exp_base / "current").resolve()
+    else:
+        run_dirs = sorted(
+            [
+                d
+                for d in exp_base.iterdir()
+                if d.is_dir() and not d.name.startswith(".")
+            ],
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        if not run_dirs:
+            raise FileNotFoundError(f"No run directories found in {exp_base}")
+        run_dir = run_dirs[0]
+
+    models_dir = run_dir / "results" / "models"
+    if not models_dir.exists():
+        raise FileNotFoundError(f"No results/models directory found in {run_dir}")
+
+    exported_models = [
+        d
+        for d in models_dir.iterdir()
+        if d.is_dir() and (d / "experimaestro.json").exists()
+    ]
+    if not exported_models:
+        raise FileNotFoundError(
+            f"No valid exported models with experimaestro.json found in {models_dir}"
+        )
+
+    selected_model_dir = exported_models[0]
+    logger.info(
+        f"Resolved experiment '{experiment_ref}' to model at {selected_model_dir}"
+    )
+    return selected_model_dir
+
+
+def resolve_trained_model_loader(source: str) -> ModuleLoader:
+    """Unified resolution of an experiment ID, local path, or Hugging Face Hub repo into a ModuleLoader config.
+
+    Args:
+        source: Experiment ID ('train_mice_ettin32m_l4+4'), local folder path,
+                or HF Hub repo ('VictorMorand/MiceV2-l10p4-ettin-68m').
+
+    Returns:
+        ModuleLoader Config whose `.model` attribute is the Model Config.
+    """
+    path_candidate = Path(source).expanduser()
+
+    # If it's a direct path or known experiment folder/ID
+    if path_candidate.exists() or (
+        "/" in source
+        and not source.startswith("http")
+        and Path(source.split("/")[0]).exists()
+    ):
+        target = find_experiment_results_model_dir(source)
+    else:
+        # Check if it's an experiment ID in workspaces
+        try:
+            target = find_experiment_results_model_dir(source)
+        except FileNotFoundError:
+            # Fall back to Hugging Face Hub repo ID
+            logger.info(
+                f"'{source}' not found locally as experiment; treating as Hugging Face Hub repo ID."
+            )
+            target = source
+
+    logger.info(f"Loading pretrained ModuleLoader from {target}")
+    return TorchHFHub.pretrained_loader(target, as_instance=False)
+
+
+def validate_and_align_config(
+    xp_config: Any,
+    xpm_model_config: Any,
+    tags: Optional[dict] = None,
+    from_ref: Optional[str] = None,
+) -> None:
+    """Validate user overrides and align default parameters between an experiment config (xp config)
+    and a loaded model Experimaestro Config (xpm Config).
+
+    Args:
+        xp_config: Dataclass experiment config (xp config, e.g. MiceV2_FineTuning).
+        xpm_model_config: Experimaestro Config of the loaded model (xpm Config).
+        tags: Optional dict of tracking tags to synchronize with the resolved model.
+        from_ref: Optional string identifier of the checkpoint source for logging.
+    """
+    source_label = from_ref or getattr(xp_config, "from_experiment", "loaded model")
+    default_cfg = type(xp_config)()
+
+    # 1. Base model alignment / override detection
+    src_base = getattr(xpm_model_config, "hf_id", None)
+    if src_base:
+        if not getattr(xp_config, "base", None) or xp_config.base == default_cfg.base:
+            logger.info(
+                "[Model Alignment] Inherited base '%s' from loaded model '%s' (was default %r)",
+                src_base,
+                source_label,
+                getattr(xp_config, "base", None),
+            )
+            xp_config.base = src_base
+        elif xp_config.base != src_base:
+            logger.warning(
+                "[PARAM OVERRIDE] Config explicitly overrides base model! "
+                "Loaded model (%s) has %r, but config specifies %r.",
+                source_label,
+                src_base,
+                xp_config.base,
+            )
+
+    # 2. Architectural & operational attributes
+    aligned_attrs = [
+        "n_contextualization_layers",
+        "n_docs_ctx_layers",
+        "n_interaction_layers",
+        "bound_bottom_layers",
+        "use_upper_rope",
+        "top_layers_doc_ln",
+        "bottom_final_norm",
+        "top_final_norm",
+        "compress_dim",
+        "compress_init_option",
+        "use_cross_attn",
+        "utility_pred",
+        "gate_target",
+        "head_type",
+        "hard_prune_threshold",
+    ]
+
+    for attr in aligned_attrs:
+        if not hasattr(xp_config, attr):
+            continue
+
+        src_val = getattr(xpm_model_config, attr, None)
+        if src_val is None:
+            continue
+
+        cfg_val = getattr(xp_config, attr)
+        default_val = getattr(default_cfg, attr)
+
+        # Special case: phase2_training explicitly configures hard_prune_threshold
+        if attr == "hard_prune_threshold" and getattr(
+            xp_config, "phase2_training", False
+        ):
+            if cfg_val != src_val:
+                logger.warning(
+                    "[PARAM OVERRIDE] Phase 2 hard_prune_threshold (%r) overrides loaded model value (%r) from '%s'",
+                    cfg_val,
+                    src_val,
+                    source_label,
+                )
+            continue
+
+        if cfg_val == default_val:
+            # Parameter was left at default -> inherit from loaded model
+            if cfg_val != src_val:
+                logger.info(
+                    "[Model Alignment] Inherited '%s' from loaded model '%s': %r (was default %r)",
+                    attr,
+                    source_label,
+                    src_val,
+                    default_val,
+                )
+                setattr(xp_config, attr, src_val)
+        else:
+            # Parameter was explicitly set by user in config
+            if cfg_val != src_val:
+                logger.warning(
+                    "[PARAM OVERRIDE] Config explicitly overrides loaded model parameter '%s'! "
+                    "Loaded model (%s) value: %r -> Config override value: %r.",
+                    attr,
+                    source_label,
+                    src_val,
+                    cfg_val,
+                )
+
+    # 3. Synchronize tags
+    if tags is not None:
+        if "base" not in tags or tags["base"] != getattr(xp_config, "base", None):
+            tags["base"] = getattr(xp_config, "base", None)
+        if "from_experiment" not in tags and source_label:
+            tags["from_experiment"] = str(source_label)
