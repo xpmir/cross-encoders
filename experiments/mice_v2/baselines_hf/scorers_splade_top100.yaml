@@ -21,6 +21,7 @@ scorers_st_id:
 
 scorers_st_multivector_id:
   - lightonai/LateOn
+  - lightonai/LateOn-unsupervised
 
 max_query_length: 32
 max_doc_length: 512

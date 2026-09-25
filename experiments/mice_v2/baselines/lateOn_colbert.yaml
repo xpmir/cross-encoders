@@ -34,6 +34,7 @@ evaluation: #default = Minified tests
     beir13: true
     eval_checkpoint:
         - last
+        - best
 
 
 grid_search:

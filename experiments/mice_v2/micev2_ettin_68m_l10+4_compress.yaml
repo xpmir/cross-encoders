@@ -5,16 +5,19 @@ description:
     training for 5000 epochs with compression ratios 1.0 and 1.3333.
 
 module: MICE.experiments.micev2_training
-parent: ./micev2_ettin_68m_l10+4.yaml
-nb_repetitions: 1
+parent: ./_ettin68m.yaml
+nb_repetitions: 2
 
+base: cross-encoder/ettin-reranker-68m-v1
 from_experiment: train_micev2_ettin68m_l10+4_v3
+query_prompt: "[Q] "
+doc_prompt: "[D] "
 
 learner:
     optimization:
         max_epochs: 5000 # 5k x 256 x 100 = 128M < 143M in dataset
         lr: 7e-5
-
+        re_no_l2_regularization: ['\.bias$', '(?i)norm' ]
 
 evaluation: #default = Minified tests
     eval_checkpoint: "last"
@@ -23,10 +26,9 @@ evaluation: #default = Minified tests
     beir13: false
 
 
-
 grid_search:
-    learner.optimization.lr:
-        - 7e-5
-    compress_dim:
-        # - 1.0
-        - 1.333333333
+    config_dicts:
+        - {compress_dim: 1.0, compress_init_option: "seed", freeze_bottom_layers_phase1: false}
+        - {compress_dim: 1.0, compress_init_option: "random", freeze_bottom_layers_phase1: true}
+        - {compress_dim: 1.333333333, compress_init_option: "random", freeze_bottom_layers_phase1: true}
+        - {compress_dim: 1.333333333, compress_init_option: "seed", freeze_bottom_layers_phase1: false}
