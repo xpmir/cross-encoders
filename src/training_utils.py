@@ -7,10 +7,12 @@ from typing import Callable, Optional, Any, Dict
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import re
 from functools import lru_cache
-from experimaestro import RunMode
+from experimaestro import RunMode, Param, field
 from experimaestro.launcherfinder import find_launcher
 from experimaestro.annotations import tags as get_tags
+from xpm_torch.context import InitializationHook, Context
 
 from experimaestro.settings import get_settings
 from xpm_torch import ModuleLoader
@@ -60,7 +62,50 @@ from format import (
     loss_names,
 )
 
+from xpm_torch.utils.utils import Initializable
+
 logger = logging.getLogger(__name__)
+
+
+class FreezeParameterHook(InitializationHook):
+    """Freezes model parameters matching a regex pattern prior to optimizer initialization."""
+
+    pattern: Param[str] = field(default=r"(?i)norm", ignore_default=True)
+    """Regex pattern for parameters to freeze."""
+
+    def before(self, context: Context):
+        if hasattr(context, "model"):
+            model = context.model
+        elif hasattr(context, "state") and hasattr(context.state, "model"):
+            model = context.state.model
+        else:
+            raise AttributeError(
+                f"[FreezeParameterHook] Cannot resolve model from context of type {type(context).__name__}. "
+                "Expected 'context.model' or 'context.state.model'."
+            )
+
+        if isinstance(model, Initializable):
+            model.initialize()
+
+        regex = re.compile(self.pattern)
+        frozen_names = []
+        total_elements = 0
+
+        for name, param in model.named_parameters():
+            if regex.search(name):
+                param.requires_grad = False
+                frozen_names.append(name)
+                total_elements += param.numel()
+
+        if frozen_names:
+            logger.info(
+                f"[FreezeParameterHook] Successfully frozen {len(frozen_names)} parameter tensors "
+                f"({total_elements:,} elements) matching pattern '{self.pattern}' (e.g '{frozen_names[-1]}')"
+            )
+        else:
+            logger.warning(
+                f"[FreezeParameterHook] WARNING: Pattern '{self.pattern}' matched 0 parameters in model {type(model).__name__}!"
+            )
 
 
 def get_task_by_tags(tasks: list, tags: dict):

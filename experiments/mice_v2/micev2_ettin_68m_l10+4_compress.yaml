@@ -28,7 +28,9 @@ evaluation: #default = Minified tests
 
 grid_search:
     config_dicts:
-        - {compress_dim: 1.0, compress_init_option: "seed", freeze_bottom_layers_phase1: false}
-        - {compress_dim: 1.0, compress_init_option: "random", freeze_bottom_layers_phase1: true}
+        - {compress_dim: 4, compress_init_option: "random", freeze_bottom_layers_phase1: true}
+        - {compress_dim: 2, compress_init_option: "random", freeze_bottom_layers_phase1: true}
         - {compress_dim: 1.333333333, compress_init_option: "random", freeze_bottom_layers_phase1: true}
         - {compress_dim: 1.333333333, compress_init_option: "seed", freeze_bottom_layers_phase1: false}
+        - {compress_dim: 1.0, compress_init_option: "random", freeze_bottom_layers_phase1: true}
+        - {compress_dim: 1.0, compress_init_option: "seed", freeze_bottom_layers_phase1: false}

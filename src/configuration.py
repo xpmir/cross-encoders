@@ -317,6 +317,12 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     similarity_fn_name: Optional[str] = field(default=None)
     """Similarity function for multi-vector scorer ('maxsim' or 'meanmaxsim'). When None, defaults to 'meanmaxsim' for MSE_mixedbread_large and 'maxsim' otherwise."""
 
+    freeze_LN: GridSearch[bool] = False
+    """Whether to freeze LayerNorm / normalization parameters during training."""
+
+    freeze_LN_pattern: str = r"(?i)norm"
+    """Regex pattern used to match parameters to freeze when freeze_LN is True (defaults to '(?i)norm')."""
+
     ettin_subset_exclude: List[str] = field(factory=list)
     """The subset config names of cross_encoder.ettin_reranker_v1_data to exclude from training"""
 

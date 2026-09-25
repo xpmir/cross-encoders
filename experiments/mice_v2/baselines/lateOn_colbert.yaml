@@ -21,6 +21,7 @@ learner:
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 base: lightonai/LateOn-unsupervised
 scorer_type: stMultiVectorEncoder
+freeze_LN: true
 
 
 #override _common.yaml

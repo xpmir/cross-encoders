@@ -39,6 +39,7 @@ from training_utils import (
     build_trainer,
     process_experiment_results,
     find_checkpoint,
+    FreezeParameterHook,
 )
 
 from typing import Optional
@@ -191,6 +192,8 @@ def get_ce_name(model_tags: dict) -> str:
     base = backbone_names_lower.get(base, base).replace("/", "-")
 
     extra_parts = []
+    if model_tags.get("freeze_LN"):
+        extra_parts.append("freezeLN")
     if "batch_size" in model_tags:
         extra_parts.append(f"bs{model_tags['batch_size']}")
     if "checkpoint" in model_tags and str(model_tags["checkpoint"]) != "last":
@@ -328,6 +331,12 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 max_norm=cfg.learner.max_grad_norm
             )
             hooks.append(gradient_clipping_hook)
+
+        if cfg.freeze_LN:
+            freeze_hook = FreezeParameterHook.C(pattern=cfg.freeze_LN_pattern)
+            hooks.append(freeze_hook)
+            if "freeze_LN" not in cfg_tags:
+                cfg_tags["freeze_LN"] = True
 
         # Build the model
         scorer_type = ScorerType(cfg.scorer_type)

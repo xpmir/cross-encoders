@@ -42,6 +42,7 @@ from training_utils import (
     find_checkpoint,
     resolve_trained_model_loader,
     validate_and_align_config,
+    FreezeParameterHook,
 )
 
 from MICE.modeling.mice_v2.modernbert_xpm import (
@@ -496,6 +497,12 @@ def TrainEvaluateMiceV2(
                 max_norm=cfg.learner.max_grad_norm
             )
             learner_hooks.append(gradient_clipping_hook)
+
+        if cfg.freeze_LN:
+            freeze_hook = FreezeParameterHook.C(pattern=cfg.freeze_LN_pattern)
+            learner_hooks.append(freeze_hook)
+            if "freeze_LN" not in cfg_tags:
+                cfg_tags["freeze_LN"] = True
 
         # Phase 1 hooks: base hooks + UtilityRegularizer (if soft gating utility prediction is active)
 
