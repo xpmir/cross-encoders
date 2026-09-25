@@ -217,3 +217,88 @@ def test_modernbert_mice_scorer_structural_mismatch_raises(caplog):
 
     assert "[MICE Config Override] Overriding checkpoint parameter" in caplog.text
     assert "compress_dim" in caplog.text
+
+
+def test_checkpoint_loader_taskstub_job_serialization():
+    """Test that an init task with a loaded checkpoint_loader (containing a TaskStub)
+    can be serialized for job execution via state_dict/outputjson without error."""
+    from experimaestro import state_dict
+    from experimaestro.core.context import SerializationContext
+    from experimaestro.core.objects.config import TaskStub
+    from MICE.experiments.micev2_training import MiceV2_FineTuning, build_mice_v2
+
+    cfg = MiceV2_FineTuning(from_experiment="VictorMorand/MiceV2-l10p4-ettin-68m")
+    scorer, init_tasks = build_mice_v2(cfg, cfg_tags={})
+
+    assert len(init_tasks) == 1
+    init_task = init_tasks[0]
+    checkpoint_loader = init_task.checkpoint_loader
+
+    # Verify checkpoint_loader.task is a TaskStub
+    assert isinstance(checkpoint_loader.__xpm__.task, TaskStub)
+
+    # Test serialization of init_task (as happens when scheduler writes params.json)
+    context = SerializationContext(save_directory=None)
+    init_task.__xpm__.seal(context)
+    data = state_dict(context, [init_task])
+    assert data is not None
+
+    # Verify TaskStub was serialized with stub=True
+    stub_objects = [obj for obj in data["objects"] if obj.get("stub")]
+    assert len(stub_objects) == 1
+    assert stub_objects[0]["id"] == id(checkpoint_loader.__xpm__.task)
+
+
+def test_init_micev2_from_checkpoint_with_compression():
+    """Test that InitMICEV2FromCheckpoint discards top layer seeding when compress_dim > 1.0,
+    loading bottom layers from the uncompressed checkpoint and keeping compressed top layers
+    at fresh random initialization without PyTorch shape mismatch errors."""
+    import torch
+    from MICE.modeling.mice_v2.modernbert_xpm import (
+        mice_v2_scorer,
+        InitMICEV2FromCheckpoint,
+    )
+
+    # 1. Resolve uncompressed checkpoint (VictorMorand/MiceV2-l10p4-ettin-68m has 512-dim layers)
+    loader = resolve_trained_model_loader("VictorMorand/MiceV2-l10p4-ettin-68m")
+    source_model = loader.model
+
+    # 2. Build target model with compress_dim = 1.333333333 (top layers hidden_size = 384)
+    scorer_cfg, _ = mice_v2_scorer(
+        hf_id=source_model.hf_id,
+        n_contextualization_layers=source_model.n_contextualization_layers,
+        n_interaction_layers=source_model.n_interaction_layers,
+        bound_bottom_layers=source_model.bound_bottom_layers,
+        compress_dim=1.333333333,
+        utility_pred=True,
+    )
+
+    # 3. Create InitMICEV2FromCheckpoint task
+    init_task = InitMICEV2FromCheckpoint.C(
+        scorer=scorer_cfg,
+        checkpoint_loader=loader,
+        freeze_bottom_layers=True,
+    ).instance()
+
+    # 4. Execute: must succeed without size mismatch exception
+    init_task.execute()
+
+    scorer = init_task.scorer
+    assert scorer._initialized
+    hf_model = scorer.hf_model
+
+    # Bottom layers: 512-dim, frozen
+    assert hf_model.model.layers[0].attn.Wqkv.weight.shape == torch.Size([1536, 512])
+    for param in hf_model.model.layers.parameters():
+        assert not param.requires_grad
+    for param in hf_model.model.embeddings.parameters():
+        assert not param.requires_grad
+
+    # Top interaction layers: 384-dim, trainable
+    assert hf_model.top_layers[0].self_attn.Wqkv.weight.shape == torch.Size([1152, 384])
+    assert hf_model.adapter.weight.shape == torch.Size([384, 512])
+    assert hf_model.output_modules.dense_score.linear.weight.shape == torch.Size([1, 384])
+    for param in hf_model.top_layers.parameters():
+        assert param.requires_grad
+    assert hf_model.adapter.weight.requires_grad
+    assert hf_model.output_modules.dense_score.linear.weight.requires_grad

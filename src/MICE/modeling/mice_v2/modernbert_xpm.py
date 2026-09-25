@@ -1844,6 +1844,60 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 if old_k in sd and new_k not in sd:
                     sd[new_k] = sd.pop(old_k)
 
+            # Check for shape mismatches, particularly in top interaction layers, adapter, and head
+            model_state = self.hf_model.state_dict()
+            shape_mismatches = [
+                k
+                for k, v in sd.items()
+                if k in model_state and model_state[k].shape != v.shape
+            ]
+
+            discard_top = False
+            if shape_mismatches:
+                top_mismatches = [
+                    k
+                    for k in shape_mismatches
+                    if k.startswith("top_layers.")
+                    or k.startswith("output_modules.")
+                    or k.startswith("adapter.")
+                ]
+                backbone_mismatches = [
+                    k
+                    for k in shape_mismatches
+                    if not (
+                        k.startswith("top_layers.")
+                        or k.startswith("output_modules.")
+                        or k.startswith("adapter.")
+                    )
+                ]
+                if backbone_mismatches:
+                    raise RuntimeError(
+                        f"Backbone weights shape mismatch when loading from {filename}: "
+                        f"{[(k, sd[k].shape, model_state[k].shape) for k in backbone_mismatches]}"
+                    )
+
+                if top_mismatches:
+                    discard_top = True
+                    logger.info(
+                        "[load_model] Discarding checkpoint top interaction layers and "
+                        "classification head seeding due to shape mismatch "
+                        "(compress_dim=%s vs checkpoint; %d keys skipped: %s...). "
+                        "Top interaction layers, adapter, and head will use fresh random initialization.",
+                        getattr(self, "compress_dim", 1.0),
+                        len(top_mismatches),
+                        top_mismatches[:3],
+                    )
+                    # Discard all top interaction layers, adapter, and output_modules
+                    keys_to_discard = [
+                        k
+                        for k in list(sd.keys())
+                        if k.startswith("top_layers.")
+                        or k.startswith("output_modules.")
+                        or k.startswith("adapter.")
+                    ]
+                    for k in keys_to_discard:
+                        sd.pop(k)
+
             load_res = self.hf_model.load_state_dict(sd, strict=False)
             if load_res.unexpected_keys:
                 logger.warning(
@@ -1852,18 +1906,24 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                     load_res.unexpected_keys,
                 )
             if load_res.missing_keys:
+                ignored_prefixes = [
+                    "utility_predictor",
+                    "output_modules",
+                    "classifier",
+                ]
+                if discard_top or getattr(self, "compress_dim", 1.0) > 1.0:
+                    ignored_prefixes.extend(["top_layers", "adapter"])
+
                 critical_missing = [
                     k
                     for k in load_res.missing_keys
-                    if not k.startswith("utility_predictor")
-                    and not k.startswith("output_modules")
-                    and not k.startswith("classifier")
+                    if not any(k.startswith(prefix) for prefix in ignored_prefixes)
                 ]
                 if critical_missing:
                     raise RuntimeError(
                         f"Critical backbone weights missing when loading from {filename}: {critical_missing}"
                     )
-                logger.warning(
+                logger.debug(
                     "[load_model] Non-critical keys missing when loading from %s (newly initialized): %s",
                     filename,
                     load_res.missing_keys,

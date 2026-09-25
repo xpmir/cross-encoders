@@ -232,7 +232,7 @@ def build_mice_v2(
     freeze_bottom = (
         cfg.freeze_bottom_layers
         if (phase_2 or cfg.hard_pruning)
-        else getattr(cfg, "freeze_bottom_layers_phase1", False)
+        else cfg.freeze_bottom_layers_phase1
     )
     kwargs["freeze_bottom_layers"] = freeze_bottom
 
@@ -273,7 +273,7 @@ def build_mice_v2(
         init_tasks = [
             InitMICEV2FromCheckpoint.C(
                 scorer=scorer,
-                checkpoint_loader=checkpoint_loader,
+                checkpoint_loader=stop_tags(checkpoint_loader),
                 freeze_bottom_layers=freeze_bottom,
                 freeze_utility=phase_2,
             )
