@@ -14,6 +14,7 @@ loss_names = {
     "distillRankNET": "DistillRankNET",
     "ADR_MSE": "ADR-MSE",
     "MSE_mixedbread_large": "MSE (mixedbread-large)",
+    "pearson_mixedbread_large": "Pearson (mixedbread-large)",
 }
 
 backbone_names = {

@@ -167,7 +167,10 @@ def build_STMultiVectorEncoder(cfg) -> tuple[STMultiVectorEncoder, list]:
         loss_val = loss_val.value
 
     similarity_fn = getattr(cfg, "similarity_fn_name", None) or (
-        "meanmaxsim" if loss_val == Losses.MSE_mixedbread_large.value else "maxsim"
+        "meanmaxsim"
+        if loss_val
+        in (Losses.MSE_mixedbread_large.value, Losses.pearson_mixedbread_large.value)
+        else "maxsim"
     )
 
     scorer = st_multivector_scorer(

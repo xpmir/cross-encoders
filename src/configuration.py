@@ -53,6 +53,9 @@ class Losses(str, Enum):
     MSE_mixedbread_large = "MSE_mixedbread_large"
     """Plain pointwise MSE loss on cross-encoder/ettin-reranker-v1-data teacher scores"""
 
+    pearson_mixedbread_large = "pearson_mixedbread_large"
+    """Pearson correlation loss (1 - r) across batch pairs on cross-encoder/ettin-reranker-v1-data teacher scores"""
+
 
 class PoolingMethod(str, Enum):
     """Possible pooling methods"""
@@ -323,7 +326,10 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     """Type of scorer model: stCrossEncoder, stMultiVectorEncoder, or hfCrossScorer"""
 
     similarity_fn_name: Optional[str] = field(default=None)
-    """Similarity function for multi-vector scorer ('maxsim' or 'meanmaxsim'). When None, defaults to 'meanmaxsim' for MSE_mixedbread_large and 'maxsim' otherwise."""
+    """Similarity function for multi-vector scorer ('maxsim' or 'meanmaxsim'). When None, defaults to 'meanmaxsim' for MSE_mixedbread_large / pearson_mixedbread_large and 'maxsim' otherwise."""
+
+    pearson_eps: float = field(default=1e-6)
+    """Numerical stability epsilon for Pearson correlation loss to prevent zero-variance collapse."""
 
     freeze_LN: GridSearch[bool] = False
     """Whether to freeze LayerNorm / normalization parameters during training."""

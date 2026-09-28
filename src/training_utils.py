@@ -9,10 +9,14 @@ import numpy as np
 import pandas as pd
 import re
 from functools import lru_cache
+import torch
+from torch import Tensor
 from experimaestro import RunMode, Param, field
 from experimaestro.launcherfinder import find_launcher
 from experimaestro.annotations import tags as get_tags
 from xpm_torch.context import InitializationHook, Context
+from xpm_torch.trainers import TrainerContext
+from xpmir.rankers import AbstractModuleScorer
 
 from experimaestro.settings import get_settings
 from xpm_torch import ModuleLoader
@@ -46,6 +50,7 @@ from xpmir.letor.distillation.pairwise import (
     MSEDifferenceLoss,
 )
 from pointwise_distillation import (
+    DistillationPointwiseLoss,
     PointwiseDistillationSampler,
     PointwiseDistillationTrainer,
     PointwiseMSELoss,
@@ -119,6 +124,60 @@ def get_task_by_tags(tasks: list, tags: dict):
         if all(str(task_tags.get(tag)) == str(value) for tag, value in tags.items()):
             return task
     return None
+
+
+class PearsonLoss(DistillationPointwiseLoss):
+    """Pearson correlation loss: L = 1 - r(student, teacher).
+
+    Computes the sample Pearson correlation coefficient across the batch and
+    returns 1 - r as the loss. Scale and shift invariant.
+
+    Attributes:
+        eps: Numerical stability epsilon added to variance to prevent division by zero
+             and gradient explosion when student variance collapses (default: 1e-6).
+    """
+
+    NAME = "Pearson"
+
+    eps: Param[float] = field(default=1e-6, ignore_default=True)
+    """Small epsilon added to variance to prevent division by zero or NaN gradients."""
+
+    def initialize(self, ranker: AbstractModuleScorer):
+        super().initialize(ranker)
+
+    def compute(
+        self,
+        student_scores: Tensor,
+        teacher_scores: Tensor,
+        context: Optional[TrainerContext] = None,
+    ) -> Tensor:
+        """Compute the Pearson correlation loss (1 - r) between student and teacher scores.
+
+        Arguments:
+            student_scores: A batch tensor of student predictions (B,) or (B, 1)
+            teacher_scores: A batch tensor of teacher scores (B,) or (B, 1)
+        """
+        s = student_scores.view(-1)
+        y = teacher_scores.view(-1)
+
+        # Center both scores
+        s_centered = s - s.mean()
+        y_centered = y - y.mean()
+
+        # Compute sample variances with epsilon to prevent division by zero or NaN gradients
+        s_var = torch.mean(s_centered**2)
+        y_var = torch.mean(y_centered**2)
+
+        s_std = torch.sqrt(s_var + self.eps)
+        y_std = torch.sqrt(y_var + self.eps)
+
+        cov = torch.mean(s_centered * y_centered)
+        r = cov / (s_std * y_std)
+
+        # Clamp r to [-1.0, 1.0] for numerical stability against floating point inaccuracies
+        r = torch.clamp(r, -1.0, 1.0)
+
+        return 1.0 - r
 
 
 def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
@@ -250,7 +309,7 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
             hooks=[],
         )
 
-    elif loss_member is Losses.MSE_mixedbread_large:
+    elif loss_member in (Losses.MSE_mixedbread_large, Losses.pearson_mixedbread_large):
         # Load the Ettin v1 training configurations
         from datamaestro_ir.config.cross_encoder.ettin_reranker_v1_data import CONFIGS
 
@@ -272,7 +331,13 @@ def build_trainer(cfg: CE_FineTuning) -> LossTrainer:
         if isinstance(scorer_type, ScorerType):
             scorer_type = scorer_type.value
 
-        if scorer_type == ScorerType.stMultiVectorEncoder.value:
+        if loss_member is Losses.pearson_mixedbread_large:
+            eps = getattr(cfg, "pearson_eps", 1e-6)
+            logger.info(
+                f"Using PearsonLoss (1 - r) with eps={eps} for {scorer_type} distillation on Ettin dataset."
+            )
+            lossfn = PearsonLoss.C(eps=eps)
+        elif scorer_type == ScorerType.stMultiVectorEncoder.value:
             teacher_scale = 0.02
             teacher_bias = 0.70
             logger.info(

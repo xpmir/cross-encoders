@@ -39,6 +39,7 @@ grid_search:
 
     config_dicts:
         - {learner.loss: "pearson_mixedbread_large", base: "cross-encoder/ettin-reranker-68m-v1", scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-4}
+        - {learner.loss: "pearson_mixedbread_large", base: "cross-encoder/ettin-reranker-68m-v1", scorer_type: stMultiVectorEncoder, learner.optimization.lr: 3e-5}
         - {learner.loss: "MSE_mixedbread_large", base: "cross-encoder/ettin-reranker-68m-v1", scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-4}
         - {learner.loss: "MSE_mixedbread_large", base: "jhu-clsp/ettin-encoder-68m", scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-4}
         - {learner.loss: "MSE_mixedbread_large", base: "jhu-clsp/ettin-encoder-68m", scorer_type: stCrossEncoder, learner.optimization.lr: 3e-5}

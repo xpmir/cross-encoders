@@ -523,9 +523,12 @@ def main():
     rho_cen, _ = stats.spearmanr(teachers_centered_sig, meanmaxsim)
     rmse_raw_sig = float(np.sqrt(np.mean((teachers_raw_sig - meanmaxsim) ** 2)))
     rmse_cen_sig = float(np.sqrt(np.mean((teachers_centered_sig - meanmaxsim) ** 2)))
+    r_raw_teacher, _ = stats.pearsonr(teachers, meanmaxsim)
+    pearson_loss = 1.0 - r_raw_teacher
     print(f"1. Teacher Raw Sigmoid:         μ={teachers_raw_sig.mean():.4f}, σ={teachers_raw_sig.std():.4f} | Pearson r={r_raw:.4f}, RMSE={rmse_raw_sig:.4f}")
     print(f"2. Teacher Centered+Temp Sig:   μ={teachers_centered_sig.mean():.4f}, σ={teachers_centered_sig.std():.4f} | Pearson r={r_cen:.4f}, Spearman ρ={rho_cen:.4f}, RMSE={rmse_cen_sig:.4f}")
     print(f"3. Student MeanMaxSim (Target): μ={meanmaxsim.mean():.4f}, σ={meanmaxsim.std():.4f}")
+    print(f"4. Pearson Loss (1 - r):        L = {pearson_loss:.4f} (raw r = {r_raw_teacher:.4f})")
     print("=" * 90)
 
     print("\n" + "=" * 90)
