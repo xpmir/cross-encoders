@@ -2,7 +2,7 @@ id: train_micev2_ettin150m_l12+4_v3
 title: "Mice-Ettin-150m Training"
 description:
     Long Training for Mice-l12+4
-parent: ./_common_mice.yaml
+parent: ./_common_mice_v3.yaml
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:
@@ -16,7 +16,7 @@ learner:
 
 nb_repetitions: 2
 
-base: jhu-clsp/ettin-encoder-150m
+base: cross-encoder/ettin-reranker-150m-v1
 n_contextualization_layers: 12
 n_interaction_layers: 4
 
@@ -25,3 +25,8 @@ evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
     beir13: true
+
+grid_search:
+    learner.optimization.lr:
+                        - 1.5e-5 # best value for Mice-Ettin-68m (v1)
+                        - 5e-5 # value for ettin rerankers

@@ -1110,32 +1110,8 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     : config.num_hidden_layers
                 ]
 
-        # 1b. Build a (possibly compressed) config for the top interaction layers.
-        # top_config is `config` itself (same object) when compress_dim==1.0, so every
-        # downstream `is top_config is config` check / `top_config.hidden_size` read
-        # is a no-op and behavior is byte-identical to before this feature existed.
-        top_config = config
-        if getattr(config, "compress_dim", 1.0) > 1.0:
-            top_config = copy.deepcopy(config)
-            top_config.hidden_size = int(config.hidden_size / config.compress_dim)
-            top_config.intermediate_size = int(
-                config.intermediate_size / config.compress_dim
-            )
-            top_config.num_attention_heads = int(
-                config.num_attention_heads / config.compress_dim
-            )
-            assert top_config.hidden_size % top_config.num_attention_heads == 0, (
-                f"compress_dim={config.compress_dim} produces top hidden_size="
-                f"{top_config.hidden_size} not divisible by num_attention_heads="
-                f"{top_config.num_attention_heads} (native hidden_size="
-                f"{config.hidden_size}, native num_attention_heads="
-                f"{config.num_attention_heads}). Choose a compress_dim that divides "
-                f"evenly."
-            )
-
         super().__init__(config)
         self.config = config
-        self.top_config = top_config
 
         # 2. Build bottom ModernBertModel backbone with exactly n_contextualization_layers directly
         bottom_config = copy.deepcopy(config)
@@ -1147,7 +1123,69 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
 
         self.model = ModernBertModel(bottom_config)
 
-        # 3. Top interaction layers
+        # 3. Top interaction layers, adapter, and classification head
+        self.build_top_layers()
+
+        if getattr(config, "utility_pred", False):
+            self.utility_predictor = UtilityPredictor(
+                config.hidden_size,
+                utility_temp=config.utility_temp,
+                utility_bias=getattr(config, "utility_bias", 5.0),
+                use_hard_concrete=getattr(config, "use_hard_concrete", False),
+                hc_gamma=getattr(config, "hc_gamma", -0.1),
+                hc_zeta=getattr(config, "hc_zeta", 1.1),
+            )
+        else:
+            self.utility_predictor = None
+        self.last_utilities = None
+        self.last_p_active = None
+        self.last_doc_hidden = None
+
+        self.post_init()
+
+    def build_top_layers(
+        self,
+        compress_dim: Optional[float] = None,
+        compress_init_option: Optional[str] = None,
+        n_interaction_layers: Optional[int] = None,
+        head_type: Optional[str] = None,
+    ):
+        """Builds (or rebuilds) the top interaction layers, adapter, top rotary embedding,
+        and classification head matching the specified or configured compression ratio."""
+        if compress_dim is not None:
+            self.config.compress_dim = compress_dim
+        if compress_init_option is not None:
+            self.config.compress_init_option = compress_init_option
+        if n_interaction_layers is not None:
+            self.config.n_interaction_layers = n_interaction_layers
+        if head_type is not None:
+            self.config.head_type = head_type
+
+        c_dim = getattr(self.config, "compress_dim", 1.0)
+        if c_dim > 1.0:
+            top_config = copy.deepcopy(self.config)
+            top_config.hidden_size = int(self.config.hidden_size / c_dim)
+            top_config.intermediate_size = int(self.config.intermediate_size / c_dim)
+            top_config.num_attention_heads = int(
+                self.config.num_attention_heads / c_dim
+            )
+            assert top_config.hidden_size % top_config.num_attention_heads == 0, (
+                f"compress_dim={c_dim} produces top hidden_size="
+                f"{top_config.hidden_size} not divisible by num_attention_heads="
+                f"{top_config.num_attention_heads} (native hidden_size="
+                f"{self.config.hidden_size}, native num_attention_heads="
+                f"{self.config.num_attention_heads}). Choose a compress_dim that divides "
+                f"evenly."
+            )
+        else:
+            top_config = self.config
+        self.top_config = top_config
+
+        n_context = self.config.n_contextualization_layers
+        num_top = self.config.n_interaction_layers
+        if num_top is None:
+            num_top = self.config.num_hidden_layers - n_context
+
         layer_offset = n_context
         self.top_layers = nn.ModuleList(
             [
@@ -1156,18 +1194,18 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             ]
         )
 
-        if top_config is not config:
+        if top_config is not self.config:
             self.top_rotary_emb = ModernBertRotaryEmbedding(top_config)
-            self.adapter = nn.Linear(config.hidden_size, top_config.hidden_size)
+            self.adapter = nn.Linear(self.config.hidden_size, top_config.hidden_size)
         else:
             self.top_rotary_emb = None
             self.adapter = None
 
         head_dim = top_config.hidden_size
-        num_labels = config.num_labels if hasattr(config, "num_labels") else 1
-        head_type = getattr(config, "head_type", "linear")
+        num_labels = self.config.num_labels if hasattr(self.config, "num_labels") else 1
+        head_type_val = getattr(self.config, "head_type", "linear")
 
-        if head_type == "st_reranker":
+        if head_type_val == "st_reranker":
             dense_inner = Dense(
                 in_features=head_dim,
                 out_features=head_dim,
@@ -1196,12 +1234,12 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
         else:
             modules = []
-            if getattr(config, "top_final_norm", False):
+            if getattr(self.config, "top_final_norm", False):
                 norm = LayerNorm(dimension=head_dim)
                 norm.norm = nn.LayerNorm(
                     head_dim,
-                    eps=getattr(config, "norm_eps", 1e-5),
-                    bias=getattr(config, "norm_bias", False),
+                    eps=getattr(self.config, "norm_eps", 1e-5),
+                    bias=getattr(self.config, "norm_bias", False),
                 )
                 modules.append(("norm", norm))
             dense_score = Dense(
@@ -1215,22 +1253,27 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             modules.append(("dense_score", dense_score))
             self.output_modules = nn.Sequential(OrderedDict(modules))
 
-        if getattr(config, "utility_pred", False):
-            self.utility_predictor = UtilityPredictor(
-                config.hidden_size,
-                utility_temp=config.utility_temp,
-                utility_bias=getattr(config, "utility_bias", 5.0),
-                use_hard_concrete=getattr(config, "use_hard_concrete", False),
-                hc_gamma=getattr(config, "hc_gamma", -0.1),
-                hc_zeta=getattr(config, "hc_zeta", 1.1),
-            )
-        else:
-            self.utility_predictor = None
-        self.last_utilities = None
-        self.last_p_active = None
-        self.last_doc_hidden = None
+        # Align device & dtype with bottom model if it exists
+        if hasattr(self, "model") and hasattr(self.model, "parameters"):
+            try:
+                p = next(self.model.parameters())
+                self.top_layers.to(device=p.device, dtype=p.dtype)
+                if self.top_rotary_emb is not None:
+                    self.top_rotary_emb.to(device=p.device, dtype=p.dtype)
+                if self.adapter is not None:
+                    self.adapter.to(device=p.device, dtype=p.dtype)
+                self.output_modules.to(device=p.device, dtype=p.dtype)
+            except StopIteration:
+                pass
 
-        self.post_init()
+        # Initialize weights
+        for layer in self.top_layers:
+            self._init_weights(layer)
+        if self.adapter is not None:
+            self._init_weights(self.adapter)
+        for m in self.output_modules.modules():
+            if isinstance(m, nn.Linear):
+                self._init_weights(m)
 
     def get_wv_matrices(self) -> List[torch.Tensor]:
         """Extract W_V weight matrices from top cross-attention (or self-attention) layers."""

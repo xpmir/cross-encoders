@@ -840,7 +840,7 @@ def get_rank(fabric=None) -> int:
 
 
 class InitMICEV2FromCheckpoint(LightweightTask):
-    """Initializes a Phase 2 MICE V2 model from a Phase 1 trained checkpoint path/loader and freezes bottom layers & utility predictor."""
+    """Initializes MICE V2 model from a trained Mice checkpoint path/loader, offers various other options e.g freezing bottom layers & utility predictor."""
 
     scorer: Param["ModernBertMiceScorer"]
 
@@ -855,102 +855,172 @@ class InitMICEV2FromCheckpoint(LightweightTask):
 
     def execute(self):
         ckpt_path = Path(self.checkpoint_loader.path)
-        logger.info("[InitMICEV2] Loading Phase 1 checkpoint from: %s", ckpt_path)
+        logger.info("[InitMICEV2] Loading checkpoint from: %s", ckpt_path)
 
-        # 1. Initialize scorer and freeze parameters on all ranks
-        if not self.scorer._initialized:
-            self.scorer.initialize()
-
-        if self.freeze_utility:
-            self.scorer.freeze_utility()
-
-        if self.freeze_bottom_layers:
-            self.scorer.freeze_bottom_layers()
-
-        # 2. Checkpoint handling
         latest_epoch_dir = find_latest_epoch_dir(ckpt_path)
-        if latest_epoch_dir is None:
-            # Exported model (e.g. results/models or HF Hub cache) without epoch-* folder
-            model_dir = ckpt_path.parent if ckpt_path.is_file() else ckpt_path
-            if (
-                (model_dir / "model.safetensors").exists()
-                or (model_dir / "pytorch_model.bin").exists()
-                or (model_dir / "model").exists()
-            ):
+        is_phase2_continuation = latest_epoch_dir is not None
+
+        if (
+            is_phase2_continuation
+            and getattr(self.scorer, "compress_init_option", "seed") == "random"
+        ):
+            raise ValueError(
+                "Cannot continue trainer checkpoint (epoch directory) with compress_init_option='random'. "
+                "Either start a new training run from an exported model or use compress_init_option='seed'."
+            )
+
+        if is_phase2_continuation:
+            # 1. Initialize scorer and freeze parameters on all ranks
+            if not self.scorer._initialized:
+                self.scorer.initialize()
+
+            if self.freeze_utility:
+                self.scorer.freeze_utility()
+
+            if self.freeze_bottom_layers:
+                self.scorer.freeze_bottom_layers()
+
+            # 2. Checkpoint copying only on rank zero for epoch directories
+            if not is_rank_zero():
                 logger.info(
-                    "[InitMICEV2] latest_epoch_dir is None: loading weights directly from exported model %s (no trainer checkpoint to copy)",
-                    model_dir,
+                    "[InitMICEV2] Skipping checkpoint copying on non-zero rank (RANK=%s, LOCAL_RANK=%s)",
+                    os.environ.get("RANK", "unknown"),
+                    os.environ.get("LOCAL_RANK", "unknown"),
                 )
-                self.scorer.load_model(model_dir)
+                if (
+                    torch.distributed.is_available()
+                    and torch.distributed.is_initialized()
+                ):
+                    torch.distributed.barrier()
+                return
             else:
                 logger.info(
-                    "[InitMICEV2] latest_epoch_dir is None and no exported weights file found at %s. "
-                    "Skipping weight loading.",
-                    ckpt_path,
+                    "[InitMICEV2] Found full checkpoint from trainer path at: %s. "
+                    "Copying full checkpoint (model weights, optimizer.pth, trainer.pth) to epoch-00000000.",
+                    latest_epoch_dir,
                 )
 
+            # Read Phase 1 step count from info.json
+            phase1_steps = 0
+            if (latest_epoch_dir / "info.json").exists():
+                try:
+                    with (latest_epoch_dir / "info.json").open("rt") as fp:
+                        p1_info = json.load(fp)
+                        phase1_steps = p1_info.get("steps", 0)
+                    logger.info(
+                        "[InitMICEV2] Preserving Phase 1 step count (%d) for TensorBoard continuity at epoch 0",
+                        phase1_steps,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[InitMICEV2] Could not read steps from Phase 1 info.json: %s",
+                        e,
+                    )
+
+            # Helper function to populate epoch-00000000 directory
+            def copy_to_epoch_zero(target_base_dir: Path):
+                epoch_zero = target_base_dir / "epoch-00000000"
+                if epoch_zero.exists():
+                    logging.warning(
+                        "[InitMICEV2] Removing existing epoch-00000000 directory at %s",
+                        epoch_zero,
+                    )
+                    shutil.rmtree(epoch_zero)
+
+                shutil.copytree(latest_epoch_dir, epoch_zero)
+
+                # Copy trainer & optimizer state dicts if present
+                if (latest_epoch_dir / "trainer.pth").exists():
+                    shutil.copy2(
+                        latest_epoch_dir / "trainer.pth", epoch_zero / "trainer.pth"
+                    )
+                # Write info.json resetting epoch to 0 but preserving total steps
+                with (epoch_zero / "info.json").open("wt") as fp:
+                    json.dump({"epoch": 0, "steps": phase1_steps}, fp)
+
+                logger.info("[InitMICEV2] Populated epoch-00000000 at %s", epoch_zero)
+
+            # Populate process cwd checkpoints/epoch-00000000
+            copy_to_epoch_zero(Path.cwd() / "checkpoints")
+
             if torch.distributed.is_available() and torch.distributed.is_initialized():
                 torch.distributed.barrier()
             return
 
-        # 3. Checkpoint copying only on rank zero for epoch directories
-        if not is_rank_zero():
-            logger.info(
-                "[InitMICEV2] Skipping checkpoint copying on non-zero rank (RANK=%s, LOCAL_RANK=%s)",
-                os.environ.get("RANK", "unknown"),
-                os.environ.get("LOCAL_RANK", "unknown"),
+        # latest_epoch_dir is None: exported model or HF Hub checkpoint
+        model_dir = ckpt_path.parent if ckpt_path.is_file() else ckpt_path
+        if (
+            (model_dir / "model.safetensors").exists()
+            or (model_dir / "pytorch_model.bin").exists()
+            or (model_dir / "model").exists()
+        ):
+            target_compress_dim = getattr(self.scorer, "compress_dim", 1.0)
+            target_compress_init = getattr(self.scorer, "compress_init_option", "seed")
+
+            ckpt_compress_dim = 1.0
+            cfg_path = model_dir / "config.json"
+            if not cfg_path.exists() and (model_dir / "model" / "config.json").exists():
+                cfg_path = model_dir / "model" / "config.json"
+            if cfg_path.exists():
+                try:
+                    with cfg_path.open("rt") as f:
+                        ckpt_cfg = json.load(f)
+                        ckpt_compress_dim = ckpt_cfg.get("compress_dim", 1.0)
+                except Exception as e:
+                    logger.warning(
+                        "[InitMICEV2] Failed to read config.json at %s: %s", cfg_path, e
+                    )
+
+            ignore_top = (
+                target_compress_dim != ckpt_compress_dim
+                or target_compress_init == "random"
             )
-            if torch.distributed.is_available() and torch.distributed.is_initialized():
-                torch.distributed.barrier()
-            return
+
+            logger.info(
+                "[InitMICEV2] latest_epoch_dir is None: loading weights directly from exported model %s (ignore_top=%s)",
+                model_dir,
+                ignore_top,
+            )
+            self.scorer.load_model(model_dir, ignore_top=ignore_top)
+
+            target_compress_dim = getattr(self.scorer, "compress_dim", 1.0)
+            target_compress_init = getattr(self.scorer, "compress_init_option", "seed")
+            current_compress_dim = getattr(
+                self.scorer.hf_model.config, "compress_dim", 1.0
+            )
+
+            if (
+                target_compress_dim != current_compress_dim
+                or target_compress_init == "random"
+            ):
+                logger.info(
+                    "[InitMICEV2] Calling build_top_layers: "
+                    "compress_dim=%s (was %s), compress_init_option=%r",
+                    target_compress_dim,
+                    current_compress_dim,
+                    target_compress_init,
+                )
+                self.scorer.build_top_layers(
+                    compress_dim=target_compress_dim,
+                    compress_init_option=target_compress_init,
+                )
+
+            if self.freeze_utility:
+                self.scorer.freeze_utility()
+            if self.freeze_bottom_layers:
+                self.scorer.freeze_bottom_layers()
         else:
             logger.info(
-                "[InitMICEV2] Found full checkpoint from trainer path at: %s. "
-                "Copying full checkpoint (model weights, optimizer.pth, trainer.pth) to epoch-00000000.",
-                latest_epoch_dir,
+                "[InitMICEV2] latest_epoch_dir is None and no exported weights file found at %s. "
+                "Skipping weight loading.",
+                ckpt_path,
             )
-
-        # Read Phase 1 step count from info.json
-        phase1_steps = 0
-        if (latest_epoch_dir / "info.json").exists():
-            try:
-                with (latest_epoch_dir / "info.json").open("rt") as fp:
-                    p1_info = json.load(fp)
-                    phase1_steps = p1_info.get("steps", 0)
-                logger.info(
-                    "[InitMICEV2] Preserving Phase 1 step count (%d) for TensorBoard continuity at epoch 0",
-                    phase1_steps,
-                )
-            except Exception as e:
-                logger.warning(
-                    "[InitMICEV2] Could not read steps from Phase 1 info.json: %s", e
-                )
-
-        # Helper function to populate epoch-00000000 directory
-        def copy_to_epoch_zero(target_base_dir: Path):
-            epoch_zero = target_base_dir / "epoch-00000000"
-            if epoch_zero.exists():
-                logging.warning(
-                    "[InitMICEV2] Removing existing epoch-00000000 directory at %s",
-                    epoch_zero,
-                )
-                shutil.rmtree(epoch_zero)
-
-            shutil.copytree(latest_epoch_dir, epoch_zero)
-
-            # Copy trainer & optimizer state dicts if present
-            if (latest_epoch_dir / "trainer.pth").exists():
-                shutil.copy2(
-                    latest_epoch_dir / "trainer.pth", epoch_zero / "trainer.pth"
-                )
-            # Write info.json resetting epoch to 0 but preserving total steps
-            with (epoch_zero / "info.json").open("wt") as fp:
-                json.dump({"epoch": 0, "steps": phase1_steps}, fp)
-
-            logger.info("[InitMICEV2] Populated epoch-00000000 at %s", epoch_zero)
-
-        # Populate process cwd checkpoints/epoch-00000000
-        copy_to_epoch_zero(Path.cwd() / "checkpoints")
+            if not self.scorer._initialized:
+                self.scorer.initialize()
+            if self.freeze_utility:
+                self.scorer.freeze_utility()
+            if self.freeze_bottom_layers:
+                self.scorer.freeze_bottom_layers()
 
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             torch.distributed.barrier()
@@ -1287,38 +1357,40 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         """Freezes bottom layers and embeddings."""
         self.hf_model.freeze_bottom_layers()
 
-    def __initialize__(self):
-        super().__initialize__()
-        logger.info("Initializing ModernBertMiceCrossEncoder")
-        self.eval_sparsity_tracker: Optional[EvalSparsityAccumulator] = None
-        self.tokenizer.initialize()
-
-        loaded_config = AutoConfig.from_pretrained(self.hf_id)
-        is_mice_model = (
-            isinstance(loaded_config, ModernBertMiceConfig)
-            or getattr(loaded_config, "model_type", None) == "modernbert_mice"
+    def build_top_layers(
+        self,
+        compress_dim: Optional[float] = None,
+        compress_init_option: Optional[str] = None,
+        n_interaction_layers: Optional[int] = None,
+        head_type: Optional[str] = None,
+    ):
+        """Rebuilds top interaction layers on self.hf_model and synchronizes scorer parameters."""
+        if not self._initialized:
+            self.initialize()
+        self.hf_model.build_top_layers(
+            compress_dim=compress_dim,
+            compress_init_option=compress_init_option,
+            n_interaction_layers=n_interaction_layers,
+            head_type=head_type,
         )
-        if is_mice_model:
-            logger.info(f"Loaded existing MICE config from {self.hf_id}")
-            mice_config = loaded_config
+        if compress_dim is not None:
+            self.compress_dim = compress_dim
+        if compress_init_option is not None:
+            self.compress_init_option = compress_init_option
+        if n_interaction_layers is not None:
+            self.n_interaction_layers = n_interaction_layers
+        if head_type is not None:
+            self.head_type = head_type
 
-            def apply_override(
-                attr_name: str, self_val, target_cfg_attr: Optional[str] = None
-            ):
-                cfg_attr = target_cfg_attr or attr_name
-                if not hasattr(mice_config, cfg_attr):
-                    return
-                ckpt_val = getattr(mice_config, cfg_attr)
-                if self_val != ckpt_val:
-                    logger.warning(
-                        f"[MICE Config Override] Overriding checkpoint parameter '{cfg_attr}' "
-                        f"from '{ckpt_val}' (saved in {self.hf_id}/config.json) to '{self_val}' "
-                        f"(specified on {self.__class__.__name__}). "
-                        "This creates an architectural discrepancy with pre-trained weights and may require retraining!"
-                    )
-                    setattr(mice_config, cfg_attr, self_val)
-
-            # Check all structural and operational attributes systematically
+    def apply_config_overrides(
+        self,
+        mice_config: ModernBertMiceConfig,
+        source_path_or_id: Union[str, Path],
+        check_attrs: Optional[List[str]] = None,
+    ):
+        """Applies parameters from self (the xpm Config source of truth) to mice_config,
+        logging loud [MICE Config Override] warnings whenever a parameter differs from the checkpoint."""
+        if check_attrs is None:
             check_attrs = [
                 "n_contextualization_layers",
                 "n_docs_ctx_layers",
@@ -1344,17 +1416,50 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 "head_type",
             ]
 
-            for attr in check_attrs:
-                self_val = getattr(self, attr, None)
-                if self_val is not None:
-                    apply_override(attr, self_val)
-
-            if self.attn_implementation is not None:
-                apply_override(
-                    "attn_implementation",
-                    self.attn_implementation,
-                    "_attn_implementation",
+        for attr in check_attrs:
+            if not hasattr(mice_config, attr):
+                continue
+            self_val = getattr(self, attr, None)
+            if self_val is None:
+                continue
+            ckpt_val = getattr(mice_config, attr)
+            if self_val != ckpt_val:
+                logger.warning(
+                    f"[MICE Config Override] Overriding checkpoint parameter '{attr}' "
+                    f"from '{ckpt_val}' (saved in {source_path_or_id}/config.json) to '{self_val}' "
+                    f"(specified on {self.__class__.__name__}). "
+                    "This creates an architectural discrepancy with pre-trained weights and may require retraining!"
                 )
+                setattr(mice_config, attr, self_val)
+
+        if self.attn_implementation is not None:
+            ckpt_attn = getattr(mice_config, "_attn_implementation", None)
+            if self.attn_implementation != ckpt_attn:
+                logger.info(
+                    f"[MICE Config] Setting _attn_implementation to {self.attn_implementation!r} "
+                    f"(was {ckpt_attn!r} in {source_path_or_id})"
+                )
+                mice_config._attn_implementation = self.attn_implementation
+
+    def __initialize__(self):
+        super().__initialize__()
+        logger.info("Initializing ModernBertMiceCrossEncoder")
+        self.eval_sparsity_tracker: Optional[EvalSparsityAccumulator] = None
+        self.tokenizer.initialize()
+
+        loaded_config = AutoConfig.from_pretrained(self.hf_id)
+        is_mice_model = (
+            isinstance(loaded_config, ModernBertMiceConfig)
+            or getattr(loaded_config, "model_type", None) == "modernbert_mice"
+        )
+        if is_mice_model:
+            logger.info(f"Loaded existing MICE config from {self.hf_id}")
+            mice_config = loaded_config
+
+            self.apply_config_overrides(
+                mice_config,
+                source_path_or_id=self.hf_id,
+            )
         else:
             logger.info(f"Building ModernBertMiceConfig from backbone {self.hf_id}")
             config_kwargs = loaded_config.to_dict()
@@ -1855,7 +1960,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 f"Could not save tokenizer to {path}: no `save_pretrained` method found on tokenizer {type(self.tokenizer)}"
             )
 
-    def load_model(self, path: Path):
+    def load_model(self, path: Path, ignore_top: bool = False):
         """Load model architecture config, state dict weights, and tokenizer from directory."""
         path = Path(path)
         if path.is_file():
@@ -1865,17 +1970,25 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         if not path.exists():
             raise FileNotFoundError(f"Model directory '{path}' does not exist.")
 
-        if not self._initialized:
-            if (path / "config.json").exists():
-                logger.info(f"Loading MICE config from {path / 'config.json'}")
-                mice_config = AutoConfig.from_pretrained(path)
-                if self.attn_implementation is not None:
-                    mice_config._attn_implementation = self.attn_implementation
-                hf_model = ModernBertMiceForSequenceClassification(mice_config)
-                self.add_module("hf_model", hf_model)
-                self._initialized = True
-            else:
-                self.initialize()
+        if (path / "config.json").exists():
+            logger.info(f"Loading MICE config from {path / 'config.json'}")
+            mice_config = AutoConfig.from_pretrained(path)
+            self.apply_config_overrides(mice_config, source_path_or_id=path)
+
+            hf_model = ModernBertMiceForSequenceClassification(mice_config)
+            self.add_module("hf_model", hf_model)
+            self.eval_sparsity_tracker = None
+            self._initialized = True
+        elif not self._initialized:
+            self.initialize()
+
+        # Ensure tokenizer is initialized in the main process before DataLoader workers fork
+        if (path / "tokenizer_config.json").exists() or (
+            path / "tokenizer.json"
+        ).exists():
+            self.tokenizer.model_id = str(path)
+        if not self.tokenizer._initialized:
+            self.tokenizer.initialize()
 
         if (path / "model" / "model.safetensors").exists() or (
             path / "model" / "pytorch_model.bin"
@@ -1892,60 +2005,21 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 if old_k in sd and new_k not in sd:
                     sd[new_k] = sd.pop(old_k)
 
-            # Check for shape mismatches, particularly in top interaction layers, adapter, and head
-            model_state = self.hf_model.state_dict()
-            shape_mismatches = [
-                k
-                for k, v in sd.items()
-                if k in model_state and model_state[k].shape != v.shape
-            ]
-
-            discard_top = False
-            if shape_mismatches:
-                top_mismatches = [
-                    k
-                    for k in shape_mismatches
-                    if k.startswith("top_layers.")
-                    or k.startswith("output_modules.")
-                    or k.startswith("adapter.")
-                ]
-                backbone_mismatches = [
-                    k
-                    for k in shape_mismatches
-                    if not (
-                        k.startswith("top_layers.")
-                        or k.startswith("output_modules.")
-                        or k.startswith("adapter.")
-                    )
-                ]
-                if backbone_mismatches:
-                    raise RuntimeError(
-                        f"Backbone weights shape mismatch when loading from {filename}: "
-                        f"{[(k, sd[k].shape, model_state[k].shape) for k in backbone_mismatches]}"
-                    )
-
-                if top_mismatches:
-                    discard_top = True
-                    logger.info(
-                        "[load_model] Discarding checkpoint top interaction layers and "
-                        "classification head seeding due to shape mismatch "
-                        "(compress_dim=%s vs checkpoint; %d keys skipped: %s...). "
-                        "Top interaction layers, adapter, and head will use fresh random initialization.",
-                        getattr(self, "compress_dim", 1.0),
-                        len(top_mismatches),
-                        top_mismatches[:3],
-                    )
-                    # Discard all top interaction layers, adapter, and output_modules
-                    keys_to_discard = [
-                        k
-                        for k in list(sd.keys())
-                        if k.startswith("top_layers.")
-                        or k.startswith("output_modules.")
-                        or k.startswith("adapter.")
-                    ]
-                    for k in keys_to_discard:
+            top_prefixes = (
+                "top_layers.",
+                "output_modules.",
+                "classifier.",
+                "adapter.",
+            )
+            if ignore_top:
+                logger.info(
+                    "[load_model] ignore_top=True: Discarding checkpoint top interaction layers and head weights."
+                )
+                for k in list(sd.keys()):
+                    if k.startswith(top_prefixes):
                         sd.pop(k)
 
+            # PyTorch load_state_dict will natively raise RuntimeError on any size mismatch
             load_res = self.hf_model.load_state_dict(sd, strict=False)
             if load_res.unexpected_keys:
                 logger.warning(
@@ -1956,11 +2030,11 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             if load_res.missing_keys:
                 ignored_prefixes = [
                     "utility_predictor",
-                    "output_modules",
-                    "classifier",
                 ]
-                if discard_top or getattr(self, "compress_dim", 1.0) > 1.0:
-                    ignored_prefixes.extend(["top_layers", "adapter"])
+                if ignore_top:
+                    ignored_prefixes.extend(
+                        ["top_layers", "output_modules", "classifier", "adapter"]
+                    )
 
                 critical_missing = [
                     k
@@ -1969,7 +2043,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 ]
                 if critical_missing:
                     raise RuntimeError(
-                        f"Critical backbone weights missing when loading from {filename}: {critical_missing}"
+                        f"Critical weights missing when loading from {filename}: {critical_missing}"
                     )
                 logger.debug(
                     "[load_model] Non-critical keys missing when loading from %s (newly initialized): %s",

@@ -15,13 +15,13 @@ pref_attn_implementation: flash_attention_2
 
 # Shared Training hyperparameters for all the Mini Mice Models
 learner:
+    loss: MSE_mixedbread_large
     optimization:
         steps_per_epoch: 100
         max_epochs: 3000 # 3k x 256 x 100 = 77M < 143M in dataset
         num_warmup_steps: 10000 # Follows the original setup
         weight_decay: 0.00
         eps: 1.0e-8
-    loss: MSE_mixedbread_large
     fabric:
         precision: bf16-mixed
     # sample_max: 2_000_000

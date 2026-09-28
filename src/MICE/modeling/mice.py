@@ -310,6 +310,9 @@ class MICEQueryDocTokenizer(HFTokenizer):
         options: Optional[TokenizerOptions] = None,
         input_nature: QueryDocInput = QueryDocInput.PAIRS,
     ) -> MICETokenizedTexts:
+        if not self._initialized:
+            self.initialize()
+
         # Determine per-side token limits
         q_max = (
             options.max_length

@@ -26,7 +26,7 @@ learner:
 max_length: null
 max_query_length: 32
 max_doc_length: 512
-
+freeze_LN: true
 
 evaluation: #default = Minified tests
     all_datasets: false
@@ -35,11 +35,10 @@ evaluation: #default = Minified tests
     eval_checkpoint:
         - last
 
-
 grid_search:
-    freeze_LN: [true, false]
 
     config_dicts:
-        - {base: "jhu-clsp/ettin-encoder-68m", scorer_type: stCrossEncoder, learner.optimization.lr: 3e-5}
-        - {base: "jhu-clsp/ettin-encoder-68m", scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-4}
-        - {base: "cross-encoder/ettin-reranker-68m-v1", scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-4}
+        - {learner.loss: "pearson_mixedbread_large", base: "cross-encoder/ettin-reranker-68m-v1", scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-4}
+        - {learner.loss: "MSE_mixedbread_large", base: "cross-encoder/ettin-reranker-68m-v1", scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-4}
+        - {learner.loss: "MSE_mixedbread_large", base: "jhu-clsp/ettin-encoder-68m", scorer_type: stMultiVectorEncoder, learner.optimization.lr: 1e-4}
+        - {learner.loss: "MSE_mixedbread_large", base: "jhu-clsp/ettin-encoder-68m", scorer_type: stCrossEncoder, learner.optimization.lr: 3e-5}

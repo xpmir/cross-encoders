@@ -269,6 +269,10 @@ def test_init_micev2_from_checkpoint_with_compression():
         n_contextualization_layers=source_model.n_contextualization_layers,
         n_interaction_layers=source_model.n_interaction_layers,
         bound_bottom_layers=source_model.bound_bottom_layers,
+        use_upper_rope=source_model.use_upper_rope,
+        top_layers_doc_ln=source_model.top_layers_doc_ln,
+        bottom_final_norm=source_model.bottom_final_norm,
+        top_final_norm=source_model.top_final_norm,
         compress_dim=1.333333333,
         utility_pred=True,
     )
@@ -302,3 +306,178 @@ def test_init_micev2_from_checkpoint_with_compression():
         assert param.requires_grad
     assert hf_model.adapter.weight.requires_grad
     assert hf_model.output_modules.dense_score.linear.weight.requires_grad
+
+
+def test_init_micev2_from_checkpoint_with_compress_init_random_uncompressed():
+    """Test that compress_dim=1.0 with compress_init_option='random' re-initializes top layers
+    and head with fresh random weights while preserving checkpoint bottom layers."""
+    import torch
+    from safetensors.torch import load_file
+    from MICE.modeling.mice_v2.modernbert_xpm import (
+        mice_v2_scorer,
+        InitMICEV2FromCheckpoint,
+    )
+
+    loader = resolve_trained_model_loader("VictorMorand/MiceV2-l10p4-ettin-68m")
+    source_model = loader.model
+
+    scorer_cfg, _ = mice_v2_scorer(
+        hf_id=source_model.hf_id,
+        n_contextualization_layers=source_model.n_contextualization_layers,
+        n_interaction_layers=source_model.n_interaction_layers,
+        bound_bottom_layers=source_model.bound_bottom_layers,
+        use_upper_rope=source_model.use_upper_rope,
+        top_layers_doc_ln=source_model.top_layers_doc_ln,
+        bottom_final_norm=source_model.bottom_final_norm,
+        top_final_norm=source_model.top_final_norm,
+        compress_dim=1.0,
+        compress_init_option="random",
+        utility_pred=True,
+    )
+
+    init_task = InitMICEV2FromCheckpoint.C(
+        scorer=scorer_cfg,
+        checkpoint_loader=loader,
+        freeze_bottom_layers=True,
+    ).instance()
+
+    init_task.execute()
+
+    scorer = init_task.scorer
+    assert scorer._initialized
+    hf_model = scorer.hf_model
+
+    sd = load_file(loader.path)
+
+    # 1. Bottom layers: MUST match checkpoint and be frozen
+    assert torch.equal(hf_model.model.layers[0].attn.Wqkv.weight, sd["model.layers.0.attn.Wqkv.weight"])
+    for param in hf_model.model.layers.parameters():
+        assert not param.requires_grad
+
+    # 2. Top interaction layers and classification head: MUST NOT match checkpoint (fresh random weights) and be trainable
+    assert not torch.equal(hf_model.top_layers[0].self_attn.Wqkv.weight, sd["top_layers.0.self_attn.Wqkv.weight"])
+    for param in hf_model.top_layers.parameters():
+        assert param.requires_grad
+    assert hf_model.output_modules.dense_score.linear.weight.requires_grad
+
+    # 3. Tokenizer: MUST be initialized in main process and functional
+    assert scorer.tokenizer._initialized
+    assert hasattr(scorer.tokenizer, "tokenizer") and scorer.tokenizer.tokenizer is not None
+
+    from xpmir.letor.records import PairwiseItems, PairwiseItem
+    from types import SimpleNamespace
+    p_item = PairwiseItem(
+        query={"id": "q1", "text_item": SimpleNamespace(text="test query")},
+        positive={"id": "d1", "text_item": SimpleNamespace(text="test doc 1")},
+        negative={"id": "d2", "text_item": SimpleNamespace(text="test doc 2")},
+    )
+    tokenized = scorer.batch_tokenize(PairwiseItems([p_item]))
+    assert tokenized.tokenized_q.ids.shape[0] == 2
+    assert tokenized.tokenized_docs.ids.shape[0] == 2
+
+
+def test_init_micev2_from_checkpoint_with_compress_init_seed_uncompressed():
+    """Test that compress_dim=1.0 with compress_init_option='seed' preserves all checkpoint weights (top and bottom)."""
+    import torch
+    from safetensors.torch import load_file
+    from MICE.modeling.mice_v2.modernbert_xpm import (
+        mice_v2_scorer,
+        InitMICEV2FromCheckpoint,
+    )
+
+    loader = resolve_trained_model_loader("VictorMorand/MiceV2-l10p4-ettin-68m")
+    source_model = loader.model
+
+    scorer_cfg, _ = mice_v2_scorer(
+        hf_id=source_model.hf_id,
+        n_contextualization_layers=source_model.n_contextualization_layers,
+        n_interaction_layers=source_model.n_interaction_layers,
+        bound_bottom_layers=source_model.bound_bottom_layers,
+        use_upper_rope=source_model.use_upper_rope,
+        top_layers_doc_ln=source_model.top_layers_doc_ln,
+        bottom_final_norm=source_model.bottom_final_norm,
+        top_final_norm=source_model.top_final_norm,
+        compress_dim=1.0,
+        compress_init_option="seed",
+        utility_pred=True,
+    )
+
+    init_task = InitMICEV2FromCheckpoint.C(
+        scorer=scorer_cfg,
+        checkpoint_loader=loader,
+        freeze_bottom_layers=True,
+    ).instance()
+
+    init_task.execute()
+
+    scorer = init_task.scorer
+    hf_model = scorer.hf_model
+
+    sd = load_file(loader.path)
+
+    # Bottom layers, top layers, and classifier must all match checkpoint
+    assert torch.equal(hf_model.model.layers[0].attn.Wqkv.weight, sd["model.layers.0.attn.Wqkv.weight"])
+    assert torch.equal(hf_model.top_layers[0].self_attn.Wqkv.weight, sd["top_layers.0.self_attn.Wqkv.weight"])
+    assert torch.equal(hf_model.output_modules.dense_score.linear.weight, sd["output_modules.dense_score.linear.weight"])
+
+
+def test_load_model_raises_on_shape_mismatch():
+    """Test that ModernBertMiceScorer.load_model strictly raises RuntimeError on weight shape mismatch."""
+    import tempfile
+    import torch
+    from safetensors.torch import save_file
+    from MICE.modeling.mice_v2.modernbert_xpm import mice_v2_scorer
+
+    scorer_cfg, _ = mice_v2_scorer(
+        hf_id="VictorMorand/MiceV2-l10p4-ettin-68m",
+        n_contextualization_layers=10,
+        n_interaction_layers=4,
+        compress_dim=1.0,
+    )
+    scorer = scorer_cfg.instance()
+    scorer.initialize()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        # Create incompatible weights: layer 0 attention weight has wrong shape [100, 100] instead of [1536, 512]
+        bad_sd = {"model.layers.0.attn.Wqkv.weight": torch.randn(100, 100)}
+        save_file(bad_sd, str(tmp_path / "model.safetensors"))
+
+        with pytest.raises(RuntimeError) as excinfo:
+            scorer.load_model(tmp_path)
+        assert "size mismatch" in str(excinfo.value)
+
+
+def test_load_model_ignore_top():
+    """Test that ModernBertMiceScorer.load_model with ignore_top=True discards top weights and succeeds."""
+    import tempfile
+    import torch
+    from safetensors.torch import save_file
+    from MICE.modeling.mice_v2.modernbert_xpm import mice_v2_scorer
+
+    loader = resolve_trained_model_loader("VictorMorand/MiceV2-l10p4-ettin-68m")
+    source_model = loader.model
+    uncompressed_model_dir = Path(loader.path).parent
+
+    scorer_cfg, _ = mice_v2_scorer(
+        hf_id=source_model.hf_id,
+        n_contextualization_layers=source_model.n_contextualization_layers,
+        n_interaction_layers=source_model.n_interaction_layers,
+        bound_bottom_layers=source_model.bound_bottom_layers,
+        use_upper_rope=source_model.use_upper_rope,
+        top_layers_doc_ln=source_model.top_layers_doc_ln,
+        bottom_final_norm=source_model.bottom_final_norm,
+        top_final_norm=source_model.top_final_norm,
+        compress_dim=1.333333333,
+    )
+    scorer = scorer_cfg.instance()
+    scorer.initialize()
+
+    # With ignore_top=False (default), uncompressed top layers mismatch shape [512] vs [384] -> raises RuntimeError
+    with pytest.raises(RuntimeError) as excinfo:
+        scorer.load_model(uncompressed_model_dir, ignore_top=False)
+    assert "size mismatch" in str(excinfo.value)
+
+    # With ignore_top=True, top layers are discarded -> succeeds cleanly
+    scorer.load_model(uncompressed_model_dir, ignore_top=True)
+    assert scorer._initialized

@@ -80,28 +80,35 @@ def parse_args():
         default=None,
         help="Device to use ('cuda', 'mps', 'cpu'). Defaults to auto-detection.",
     )
+    parser.add_argument(
+        "--buffer_size",
+        type=int,
+        default=None,
+        help="Streaming shuffle buffer size. Defaults to min(500, max(20, samples_per_subset * 2)).",
+    )
     return parser.parse_args()
 
 
 def sample_dataset(
-    subsets: List[str], target_samples: int
+    subsets: List[str], target_samples: int, buffer_size: int = None
 ) -> List[Dict[str, Any]]:
     """Samples query-document-teacher tuples evenly across specified subsets."""
     samples_per_subset = max(1, target_samples // len(subsets))
+    buf_size = buffer_size if buffer_size is not None else min(500, max(20, samples_per_subset * 2))
     logger.info(
-        f"Sampling ~{samples_per_subset} samples from each of {len(subsets)} subsets: {subsets}"
+        f"Sampling ~{samples_per_subset} samples from each of {len(subsets)} subsets: {subsets} (buffer_size={buf_size})"
     )
 
     collected: List[Dict[str, Any]] = []
     for subset in subsets:
-        logger.info(f"Streaming from subset: '{subset}' (streaming=True)...")
+        logger.info(f"Streaming from subset: '{subset}' (streaming=True, buffer_size={buf_size})...")
         try:
             ds = load_dataset(
                 "cross-encoder/ettin-reranker-v1-data",
                 subset,
                 split="train",
                 streaming=True,
-            ).shuffle(buffer_size=10_000, seed=42)
+            ).shuffle(buffer_size=buf_size, seed=42)
             count = 0
             for item in ds:
                 q = item.get("query")
@@ -295,6 +302,7 @@ def plot_distributions(
     sig_max: Dict[str, Any],
     sig_mean: Dict[str, Any],
     output_path: Path,
+    teachers_centered_sig: np.ndarray = None,
 ):
     """Generates a 2-row x 3-column figure visualizing distributions, regressions, and calibrations."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -413,6 +421,18 @@ def plot_distributions(
             color="#1f77b4",
             label=f"Sigmoid Calib (R²={sig_mean['r2']:.3f}, RMSE={sig_mean['rmse']:.3f})",
         )
+    if teachers_centered_sig is not None:
+        rmse_censig = float(np.sqrt(np.mean((meanmaxsim - teachers_centered_sig) ** 2)))
+        ax.hist(
+            teachers_centered_sig,
+            bins=40,
+            density=True,
+            histtype="step",
+            lw=1.8,
+            linestyle="-.",
+            color="#ff7f0e",
+            label=f"Centered+Temp Sigmoid (RMSE={rmse_censig:.3f})",
+        )
     ax.hist(
         teacher_scaled_heuristic,
         bins=40,
@@ -455,7 +475,7 @@ def main():
     logger.info(f"Using device: '{device}'")
 
     # 1. Sample dataset
-    samples = sample_dataset(args.subsets, args.num_samples)
+    samples = sample_dataset(args.subsets, args.num_samples, buffer_size=args.buffer_size)
 
     # 2. Load model
     logger.info(f"Loading LateOn MultiVectorEncoder from '{args.model_id}'...")
@@ -466,23 +486,46 @@ def main():
         model, samples, args.batch_size
     )
 
-    # 4. Affine regressions
+    # 4. Centering + Temperature Scaling on Teacher Logits
+    mu_t = float(np.mean(teachers))
+    std_t = float(np.std(teachers))
+    tau_t = max(std_t, 1e-4)
+    teachers_centered_tau = (teachers - mu_t) / tau_t
+    teachers_centered_sig = 1.0 / (1.0 + np.exp(-teachers_centered_tau))
+    teachers_raw_sig = 1.0 / (1.0 + np.exp(-teachers))
+
+    # 5. Affine regressions
     reg_max = fit_affine_regressions(maxsim, teachers)
     reg_mean = fit_affine_regressions(meanmaxsim, teachers)
 
-    # 5. Generalized Sigmoid regressions (Teacher -> Student)
+    # 6. Generalized Sigmoid regressions (Teacher -> Student)
     sig_max = fit_sigmoid_regression(teachers, maxsim)
     sig_mean = fit_sigmoid_regression(teachers, meanmaxsim)
 
-    # 6. Print Summary Tables
+    # 7. Print Summary Tables
     print("\n" + "=" * 90)
     print("SCORE DISTRIBUTION DESCRIPTIVE STATISTICS")
     print("=" * 90)
-    print(f"| {'Metric / Score':<18} | {'Mean':>7} | {'Std':>6} | {'Min':>7} | {'P5':>6} | {'Median':>6} | {'P95':>6} | {'Max':>7} |")
-    print("|" + "-" * 20 + "|" + "-" * 9 + "|" + "-" * 8 + "|" + "-" * 9 + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 9 + "|")
-    print_stats_table("Teacher Logits", teachers)
+    print(f"| {'Metric / Score':<28} | {'Mean':>7} | {'Std':>6} | {'Min':>7} | {'P5':>6} | {'Median':>6} | {'P95':>6} | {'Max':>7} |")
+    print("|" + "-" * 30 + "|" + "-" * 9 + "|" + "-" * 8 + "|" + "-" * 9 + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 8 + "|" + "-" * 9 + "|")
+    print_stats_table("Teacher Logits (Raw)", teachers)
+    print_stats_table("Teacher Raw Sigmoid", teachers_raw_sig)
+    print_stats_table("Teacher Centered+Temp Sig", teachers_centered_sig)
     print_stats_table("LateOn MaxSim", maxsim)
     print_stats_table("LateOn MeanMaxSim", meanmaxsim)
+    print("=" * 90)
+
+    print("\n" + "=" * 90)
+    print("CENTERING & TEMPERATURE SCALING COMPARISON (vs MeanMaxSim)")
+    print("=" * 90)
+    r_raw, _ = stats.pearsonr(teachers_raw_sig, meanmaxsim)
+    r_cen, _ = stats.pearsonr(teachers_centered_sig, meanmaxsim)
+    rho_cen, _ = stats.spearmanr(teachers_centered_sig, meanmaxsim)
+    rmse_raw_sig = float(np.sqrt(np.mean((teachers_raw_sig - meanmaxsim) ** 2)))
+    rmse_cen_sig = float(np.sqrt(np.mean((teachers_centered_sig - meanmaxsim) ** 2)))
+    print(f"1. Teacher Raw Sigmoid:         μ={teachers_raw_sig.mean():.4f}, σ={teachers_raw_sig.std():.4f} | Pearson r={r_raw:.4f}, RMSE={rmse_raw_sig:.4f}")
+    print(f"2. Teacher Centered+Temp Sig:   μ={teachers_centered_sig.mean():.4f}, σ={teachers_centered_sig.std():.4f} | Pearson r={r_cen:.4f}, Spearman ρ={rho_cen:.4f}, RMSE={rmse_cen_sig:.4f}")
+    print(f"3. Student MeanMaxSim (Target): μ={meanmaxsim.mean():.4f}, σ={meanmaxsim.std():.4f}")
     print("=" * 90)
 
     print("\n" + "=" * 90)
@@ -530,10 +573,18 @@ def main():
         print(f"\n2. MaxSim Sigmoid Fit: Failed ({sig_max.get('error')})")
     print("=" * 90 + "\n")
 
-    # 7. Generate Plot
+    # 8. Generate Plot
     output_path = Path(args.output_path)
     plot_distributions(
-        teachers, maxsim, meanmaxsim, reg_max, reg_mean, sig_max, sig_mean, output_path
+        teachers,
+        maxsim,
+        meanmaxsim,
+        reg_max,
+        reg_mean,
+        sig_max,
+        sig_mean,
+        output_path,
+        teachers_centered_sig=teachers_centered_sig,
     )
     logger.info("Done! Calibration analysis complete.")
 
