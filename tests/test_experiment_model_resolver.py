@@ -494,17 +494,19 @@ def test_validate_and_align_ignores_unpopulated_field_descriptors():
     cfg = MiceV2_FineTuning()
     scorer_cfg, _ = mice_v2_scorer()
     old_model = scorer_cfg.instance()
-    # Simulate an old checkpoint where newly introduced parameters are unpopulated on the instance
-    old_model.__dict__.pop("doc_bottleneck_dim", None)
-
-    assert isinstance(getattr(old_model, "doc_bottleneck_dim", None), field)
+    # 1. With field descriptor implemented, unpopulated instance access properly evaluates to its default (None)
+    assert getattr(old_model, "doc_bottleneck_dim", None) is None
 
     validate_and_align_config(cfg, old_model)
-
-    assert cfg.doc_bottleneck_dim is None, (
-        f"Expected doc_bottleneck_dim to remain None, but got {cfg.doc_bottleneck_dim!r}"
-    )
+    assert cfg.doc_bottleneck_dim is None
     assert not isinstance(cfg.doc_bottleneck_dim, field)
+
+    # 2. Defensive guard check: even if an unpatched environment injects a raw field object, validate_and_align ignores it
+    object.__setattr__(old_model, "doc_bottleneck_dim", field(default=None))
+    cfg_legacy = MiceV2_FineTuning()
+    validate_and_align_config(cfg_legacy, old_model)
+    assert cfg_legacy.doc_bottleneck_dim is None
+    assert not isinstance(cfg_legacy.doc_bottleneck_dim, field)
 
 
 def test_init_micev2_from_checkpoint_with_freeze_top_layers():

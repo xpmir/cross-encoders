@@ -9,14 +9,14 @@ nb_repetitions: 2
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:
+    loss: pearson_mixedbread_large
     optimization:
-        max_epochs: 5000 # 5k x 256 x 100 = 128M < 143M in dataset
+        max_epochs: 6000 # 5k x 256 x 100 = 128M < 143M in dataset
         num_warmup_steps: 20000 # Follows the original setup
         # Values from Ettin Rerankers: https://huggingface.co/blog/ettin-reranker
         batch_size: 256
-        lr: 1e-5
         re_no_l2_regularization: [ '\.bias$', '(?i)norm' ]
-    requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=50G) * 2
+    requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=50G) * 4
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 base: lightonai/LateOn-unsupervised
@@ -39,4 +39,4 @@ evaluation: #default = Minified tests
 
 
 grid_search:
-    learner.optimization.lr: [3e-5, 1e-4, 3e-4]
+    learner.optimization.lr: [3e-5, 1e-4]

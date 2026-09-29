@@ -1020,7 +1020,7 @@ requires-dist = [
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "pytorch-lightning" },
-    { name = "sentence-transformers", marker = "extra == 'neural'", specifier = ">=5.4.0" },
+    { name = "sentence-transformers", marker = "extra == 'neural'", specifier = ">=6.0.0" },
     { name = "tensorboard", marker = "extra == 'neural'" },
     { name = "toma" },
     { name = "torch", marker = "extra == 'neural'", specifier = ">=2.10" },

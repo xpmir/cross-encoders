@@ -1,0 +1,42 @@
+id: train_micev2_ettin68m_l10+4_v3_plaid_128
+title: "Mice-Ettin-68m Training with Bottleneck for plaid indexation"
+description:
+    This experiments takes a pretrained Mice - Ettin 68 Model, trains a compressed bottleneck on top of it
+    and then evaluate with a Plaid index for storing the muli-vector representations.
+
+module: MICE.experiments.micev2_training
+parent: ./_ettin68m.yaml
+nb_repetitions: 1
+
+from_experiment: train_micev2_ettin68m_l10+4_v3
+
+learner:
+    optimization:
+        max_epochs: 3000 # 5k x 256 x 100 = 128M < 143M in dataset
+        lr: 7e-5
+
+evaluation: #default = Minified tests
+    eval_checkpoint: "last"
+    all_datasets: false
+    in_domain: false
+    beir13: false
+    datasets:
+        - nfcorpus
+        - scifact
+        - scidocs
+
+plaid:
+    use_plaid: true
+    buffer_size: 5000
+    n_bits: 8
+
+
+indexation:
+    requirements: duration=10h & cpu(cores=16) & cuda(mem=40G)
+
+
+freeze_bottom_layers_phase1: true
+freeze_top_layers: false
+
+grid_search:
+    doc_bottleneck_dim: [null, 128]

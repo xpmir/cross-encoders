@@ -4,6 +4,7 @@ description:
 module: MICE.experiments.micev2_training
 parent: ./_common.yaml
 
+export_trained_models: false #by default, override to save best model among seeds / configs: ready for HF export
 
 pref_attn_implementation: flash_attention_2
 #common to all Mice v2 experiments, but can be overridden in ablations

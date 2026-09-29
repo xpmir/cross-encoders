@@ -6,6 +6,8 @@ description:
 module: cross_encoders_training.experiment
 parent: ../_common.yaml
 nb_repetitions: 2
+export_trained_models: false
+
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:
