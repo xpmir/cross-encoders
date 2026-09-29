@@ -5,7 +5,7 @@ description:
     training for 5000 epochs with compression ratios 1.0 and 1.3333.
 
 module: MICE.experiments.micev2_training
-parent: ./_ettin68m.yaml
+parent: ../_ettin68m.yaml
 nb_repetitions: 2
 
 base: cross-encoder/ettin-reranker-68m-v1

@@ -853,6 +853,9 @@ class InitMICEV2FromCheckpoint(LightweightTask):
     freeze_utility: Param[bool] = field(default=True, ignore_default=True)
     """Whether to freeze the utility predictor after loading checkpoint"""
 
+    freeze_top_layers: Param[bool] = field(default=False, ignore_default=True)
+    """Whether to freeze the top interaction layers and head after loading checkpoint (leaving bottleneck trainable)"""
+
     def execute(self):
         ckpt_path = Path(self.checkpoint_loader.path)
         logger.info("[InitMICEV2] Loading checkpoint from: %s", ckpt_path)
@@ -879,6 +882,9 @@ class InitMICEV2FromCheckpoint(LightweightTask):
 
             if self.freeze_bottom_layers:
                 self.scorer.freeze_bottom_layers()
+
+            if self.freeze_top_layers:
+                self.scorer.freeze_top_layers()
 
             # 2. Checkpoint copying only on rank zero for epoch directories
             if not is_rank_zero():
@@ -1009,6 +1015,8 @@ class InitMICEV2FromCheckpoint(LightweightTask):
                 self.scorer.freeze_utility()
             if self.freeze_bottom_layers:
                 self.scorer.freeze_bottom_layers()
+            if self.freeze_top_layers:
+                self.scorer.freeze_top_layers()
         else:
             logger.info(
                 "[InitMICEV2] latest_epoch_dir is None and no exported weights file found at %s. "
@@ -1021,6 +1029,8 @@ class InitMICEV2FromCheckpoint(LightweightTask):
                 self.scorer.freeze_utility()
             if self.freeze_bottom_layers:
                 self.scorer.freeze_bottom_layers()
+            if self.freeze_top_layers:
+                self.scorer.freeze_top_layers()
 
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             torch.distributed.barrier()
@@ -1345,6 +1355,9 @@ class ModernBertMiceScorer(AbstractModuleScorer):
     head_type: Param[str] = field(default="linear", ignore_default=True)
     """Type of classification head pipeline: 'linear' (default, legacy single linear layer) or 'st_reranker' (ST pooling + dense + LayerNorm + dense)"""
 
+    doc_bottleneck_dim: Param[Optional[int]] = field(default=None, ignore_default=True)
+    """Bottleneck dimension for document token embeddings (d). If set, compresses document embeddings to d dimensions before storage/cross-attention."""
+
     _version: Constant[str] = "2.0.2"
 
     hf_model: nn.Module
@@ -1357,12 +1370,17 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         """Freezes bottom layers and embeddings."""
         self.hf_model.freeze_bottom_layers()
 
+    def freeze_top_layers(self):
+        """Freezes top interaction layers, rotary embeddings, adapter, and classification head."""
+        self.hf_model.freeze_top_layers()
+
     def build_top_layers(
         self,
         compress_dim: Optional[float] = None,
         compress_init_option: Optional[str] = None,
         n_interaction_layers: Optional[int] = None,
         head_type: Optional[str] = None,
+        doc_bottleneck_dim: Optional[int] = None,
     ):
         """Rebuilds top interaction layers on self.hf_model and synchronizes scorer parameters."""
         if not self._initialized:
@@ -1372,6 +1390,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             compress_init_option=compress_init_option,
             n_interaction_layers=n_interaction_layers,
             head_type=head_type,
+            doc_bottleneck_dim=doc_bottleneck_dim,
         )
         if compress_dim is not None:
             self.compress_dim = compress_dim
@@ -1381,6 +1400,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             self.n_interaction_layers = n_interaction_layers
         if head_type is not None:
             self.head_type = head_type
+        if doc_bottleneck_dim is not None:
+            self.doc_bottleneck_dim = doc_bottleneck_dim
 
     def apply_config_overrides(
         self,
@@ -1412,6 +1433,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 "hc_zeta",
                 "compress_dim",
                 "compress_init_option",
+                "doc_bottleneck_dim",
                 "use_cross_attn",
                 "head_type",
             ]
@@ -1420,7 +1442,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             if not hasattr(mice_config, attr):
                 continue
             self_val = getattr(self, attr, None)
-            if self_val is None:
+            if self_val is None or isinstance(self_val, field):
                 continue
             ckpt_val = getattr(mice_config, attr)
             if self_val != ckpt_val:
@@ -1487,6 +1509,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 hc_zeta=self.hc_zeta,
                 compress_dim=self.compress_dim,
                 compress_init_option=self.compress_init_option,
+                doc_bottleneck_dim=self.doc_bottleneck_dim,
                 use_cross_attn=self.use_cross_attn,
                 head_type=self.head_type,
                 **config_kwargs,
@@ -2030,6 +2053,8 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             if load_res.missing_keys:
                 ignored_prefixes = [
                     "utility_predictor",
+                    "doc_compress",
+                    "doc_decompress",
                 ]
                 if ignore_top:
                     ignored_prefixes.extend(
@@ -2080,6 +2105,9 @@ class MiceV2DocumentEncoder(TextEncoderBase):
 
     @property
     def dimension(self):
+        doc_bot_dim = getattr(self.model.hf_model.config, "doc_bottleneck_dim", None)
+        if doc_bot_dim is not None and doc_bot_dim > 0:
+            return doc_bot_dim
         top_config = getattr(
             self.model.hf_model, "top_config", self.model.hf_model.config
         )
@@ -2181,6 +2209,7 @@ def mice_v2_scorer(
     hc_zeta: float = 1.1,
     compress_dim: float = 1.0,
     compress_init_option: str = "seed",
+    doc_bottleneck_dim: Optional[int] = None,
     use_cross_attn: bool = True,
     head_type: str = "linear",
     max_query_length: Optional[int] = None,
@@ -2243,6 +2272,7 @@ def mice_v2_scorer(
         hc_zeta=hc_zeta,
         compress_dim=compress_dim,
         compress_init_option=compress_init_option,
+        doc_bottleneck_dim=doc_bottleneck_dim,
         use_cross_attn=use_cross_attn,
         head_type=head_type,
     )

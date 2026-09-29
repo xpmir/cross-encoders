@@ -12,6 +12,7 @@ retrievers_hf_id:
 
 scorers_st_id:
   - VictorMorand/MiceV2-l10p4-ettin-68m
+  - VictorMorand/MiceV2-l12p4-ettin-150m
 
 
 max_query_length: 32

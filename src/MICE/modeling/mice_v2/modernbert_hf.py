@@ -582,6 +582,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         hc_zeta: float = 1.1,
         compress_dim: float = 1.0,
         compress_init_option: str = "seed",
+        doc_bottleneck_dim: Optional[int] = None,
         use_cross_attn: bool = True,
         head_type: str = "linear",
         num_labels: int = 1,
@@ -626,6 +627,18 @@ class ModernBertMiceConfig(ModernBertConfig):
         assert compress_dim >= 1.0, f"compress_dim must be >= 1.0, got {compress_dim}"
         self.compress_dim = compress_dim
         self.compress_init_option = compress_init_option
+        if doc_bottleneck_dim is not None:
+            assert doc_bottleneck_dim > 0, (
+                f"doc_bottleneck_dim must be > 0, got {doc_bottleneck_dim}"
+            )
+        self.doc_bottleneck_dim = doc_bottleneck_dim
+        if self.doc_bottleneck_dim is not None and not self.normalize_doc_embeds:
+            logger.warning(
+                "⚠️ [MICE V2 CONFIG WARNING] `doc_bottleneck_dim` is enabled (%s) but "
+                "`normalize_doc_embeds` is False! Document vectors stored in the index "
+                "will not have unit L2 norm, which can severely degrade PLAID indexing/retrieval.",
+                self.doc_bottleneck_dim,
+            )
         self.use_cross_attn = use_cross_attn
         self.head_type = head_type
 
@@ -1149,9 +1162,10 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         compress_init_option: Optional[str] = None,
         n_interaction_layers: Optional[int] = None,
         head_type: Optional[str] = None,
+        doc_bottleneck_dim: Optional[int] = None,
     ):
         """Builds (or rebuilds) the top interaction layers, adapter, top rotary embedding,
-        and classification head matching the specified or configured compression ratio."""
+        document bottleneck, and classification head matching the specified or configured compression ratio."""
         if compress_dim is not None:
             self.config.compress_dim = compress_dim
         if compress_init_option is not None:
@@ -1160,6 +1174,8 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             self.config.n_interaction_layers = n_interaction_layers
         if head_type is not None:
             self.config.head_type = head_type
+        if doc_bottleneck_dim is not None:
+            self.config.doc_bottleneck_dim = doc_bottleneck_dim
 
         c_dim = getattr(self.config, "compress_dim", 1.0)
         if c_dim > 1.0:
@@ -1200,6 +1216,18 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         else:
             self.top_rotary_emb = None
             self.adapter = None
+
+        doc_bot_dim = getattr(self.config, "doc_bottleneck_dim", None)
+        if doc_bot_dim is not None and doc_bot_dim > 0:
+            self.doc_compress = nn.Linear(
+                self.config.hidden_size, doc_bot_dim, bias=False
+            )
+            self.doc_decompress = nn.Linear(
+                doc_bot_dim, top_config.hidden_size, bias=False
+            )
+        else:
+            self.doc_compress = None
+            self.doc_decompress = None
 
         head_dim = top_config.hidden_size
         num_labels = self.config.num_labels if hasattr(self.config, "num_labels") else 1
@@ -1262,6 +1290,10 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     self.top_rotary_emb.to(device=p.device, dtype=p.dtype)
                 if self.adapter is not None:
                     self.adapter.to(device=p.device, dtype=p.dtype)
+                if self.doc_compress is not None:
+                    self.doc_compress.to(device=p.device, dtype=p.dtype)
+                if self.doc_decompress is not None:
+                    self.doc_decompress.to(device=p.device, dtype=p.dtype)
                 self.output_modules.to(device=p.device, dtype=p.dtype)
             except StopIteration:
                 pass
@@ -1271,6 +1303,10 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             self._init_weights(layer)
         if self.adapter is not None:
             self._init_weights(self.adapter)
+        if self.doc_compress is not None:
+            self._init_weights(self.doc_compress)
+        if self.doc_decompress is not None:
+            self._init_weights(self.doc_decompress)
         for m in self.output_modules.modules():
             if isinstance(m, nn.Linear):
                 self._init_weights(m)
@@ -1509,7 +1545,26 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             for param in self.model.rotary_emb.parameters():
                 param.requires_grad = False
 
+        if hasattr(self.model, "final_norm") and self.model.final_norm is not None:
+            for param in self.model.final_norm.parameters():
+                param.requires_grad = False
+
         logger.info("[MICE v2] Frozen embeddings and bottom contextualization layers.")
+
+    def freeze_top_layers(self):
+        """Freezes top interaction layers, rotary embeddings, adapter, and classification head,
+        leaving document compression/decompression bottleneck parameters trainable."""
+        for param in self.top_layers.parameters():
+            param.requires_grad = False
+        if self.top_rotary_emb is not None:
+            for param in self.top_rotary_emb.parameters():
+                param.requires_grad = False
+        if self.adapter is not None:
+            for param in self.adapter.parameters():
+                param.requires_grad = False
+        for param in self.output_modules.parameters():
+            param.requires_grad = False
+        logger.info("[MICE v2] Frozen top layers and classification head.")
 
     def _document_embed_post_process(
         self,
@@ -1605,7 +1660,9 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             self.last_doc_hidden = None
             self.pruned_utilities = None
 
-        if self.adapter is not None:
+        if self.doc_compress is not None:
+            d_hidden = self.doc_compress(d_hidden)
+        elif self.adapter is not None:
             d_hidden = self.adapter(d_hidden)
 
         return d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids
@@ -1733,8 +1790,12 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         if not getattr(self.config, "use_upper_rope", True):
             q_pos_emb_top = None
 
-        # 2. Document Bottom Layers (Bypassed if doc_hidden is given)
+        # 2. Document Representation Pipeline
         if doc_hidden is not None:
+            # Path A: Pre-encoded document embeddings (from index / cache / encode_documents).
+            # These are ALREADY normalized, utility-gated/pruned, and compressed (if doc_bottleneck_dim is set).
+            # We ONLY decompress them (d -> H_top) if a bottleneck is configured;
+            # otherwise they are already in H_top space ready for top cross-attention.
             if doc_mask is None:
                 doc_mask = torch.ones(
                     (doc_hidden.shape[0], doc_hidden.shape[1]),
@@ -1753,7 +1814,13 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             else:
                 d_hidden = doc_hidden
                 cu_seqlens_d = max_seqlen_d = None
+                d_pos_ids = None
+
+            if self.doc_decompress is not None:
+                d_hidden = self.doc_decompress(d_hidden)
         else:
+            # Path B: Raw text token IDs (end-to-end training or standard inference without cache).
+            # 2a. Run raw tokens through bottom contextualization layers (H_bottom space).
             if use_unpadded:
                 d_embeds = self.model.embeddings(input_ids=doc_ids)
                 (
@@ -1774,19 +1841,29 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
                 cu_seqlens_d = max_seqlen_d = None
 
-        # 2b. Apply Utility Predictor (Soft Gating or Hard Pruning)
-        d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids = (
-            self._document_embed_post_process(
-                d_hidden,
-                doc_mask,
-                use_unpadded=use_unpadded,
-                cu_seqlens_d=cu_seqlens_d,
-                max_seqlen_d=max_seqlen_d,
-                d_pos_ids=d_pos_ids if use_unpadded else None,
+            # 2b. Full Document Post-Processing:
+            # Applies L2 normalization, utility prediction / gating / hard pruning,
+            # and doc_compress projection (H_bottom -> d) or adapter projection (H_bottom -> H_top).
+            d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids = (
+                self._document_embed_post_process(
+                    d_hidden,
+                    doc_mask,
+                    use_unpadded=use_unpadded,
+                    cu_seqlens_d=cu_seqlens_d,
+                    max_seqlen_d=max_seqlen_d,
+                    d_pos_ids=d_pos_ids if use_unpadded else None,
+                )
             )
-        )
 
-        if self.utility_predictor is not None:
+            # 2c. If bottleneck is active, decompress from storage dim d to interaction dim H_top.
+            if self.doc_decompress is not None:
+                d_hidden = self.doc_decompress(d_hidden)
+
+        # 3. Top Cross-Attention Utilities (for Value-gating, if active)
+        # Pre-encoded doc_hidden already baked in soft-gating or physical pruning during indexing.
+        if doc_hidden is not None:
+            d_utilities = None
+        elif self.utility_predictor is not None:
             if getattr(self.config, "hard_pruning", False):
                 if getattr(self.config, "use_hard_concrete", False):
                     # Hard Concrete Value-gated slicing: pass pruned utilities to top layers

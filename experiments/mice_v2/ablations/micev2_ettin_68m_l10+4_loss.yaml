@@ -1,0 +1,24 @@
+id: train_micev2_ettin68m_l10+4_v3_abl_loss
+title: "Mice-Ettin-68m Training with Bottleneck for plaid indexation"
+description:
+    Contrain a trained Mice model to a bottleneck for document encoding
+
+module: MICE.experiments.micev2_training
+parent: ../_ettin68m.yaml
+nb_repetitions: 2
+
+learner:
+    optimization:
+        max_epochs: 3000 # 5k x 256 x 100 = 128M < 143M in dataset
+        lr: 7e-5
+
+evaluation: #default = Minified tests
+    eval_checkpoint: "last"
+    all_datasets: false
+    in_domain: false
+    beir13: false
+
+
+grid_search:
+    learner.loss: ["pearson_mixedbread_large", "MSE_mixedbread_large"]
+    learner.optimization.lr: [7e-5, 1e-4]

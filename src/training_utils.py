@@ -1287,7 +1287,7 @@ def validate_and_align_config(
 
     # 1. Base model alignment / override detection
     src_base = getattr(xpm_model_config, "hf_id", None)
-    if src_base:
+    if src_base and not isinstance(src_base, field):
         if not getattr(xp_config, "base", None) or xp_config.base == default_cfg.base:
             logger.info(
                 "[Model Alignment] Inherited base '%s' from loaded model '%s' (was default %r)",
@@ -1317,6 +1317,7 @@ def validate_and_align_config(
         "top_final_norm",
         "compress_dim",
         "compress_init_option",
+        "doc_bottleneck_dim",
         "use_cross_attn",
         "utility_pred",
         "gate_target",
@@ -1329,7 +1330,7 @@ def validate_and_align_config(
             continue
 
         src_val = getattr(xpm_model_config, attr, None)
-        if src_val is None:
+        if src_val is None or isinstance(src_val, field):
             continue
 
         cfg_val = getattr(xp_config, attr)

@@ -1,6 +1,6 @@
 description:
     This is the base configuration for all experiments in the MICE v2 series.
-parent: ./_common_mice.yaml
+parent: ./_common_mice_v3.yaml
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:

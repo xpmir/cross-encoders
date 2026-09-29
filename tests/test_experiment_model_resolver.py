@@ -481,3 +481,128 @@ def test_load_model_ignore_top():
     # With ignore_top=True, top layers are discarded -> succeeds cleanly
     scorer.load_model(uncompressed_model_dir, ignore_top=True)
     assert scorer._initialized
+
+
+def test_validate_and_align_ignores_unpopulated_field_descriptors():
+    """Verify that validate_and_align_config never copies class-level `field` descriptors
+    from old model checkpoints where newly added parameters were unpopulated."""
+    from training_utils import validate_and_align_config
+    from MICE.experiments.micev2_training import MiceV2_FineTuning
+    from MICE.modeling.mice_v2.modernbert_xpm import mice_v2_scorer
+    from experimaestro.core.arguments import field
+
+    cfg = MiceV2_FineTuning()
+    scorer_cfg, _ = mice_v2_scorer()
+    old_model = scorer_cfg.instance()
+    # Simulate an old checkpoint where newly introduced parameters are unpopulated on the instance
+    old_model.__dict__.pop("doc_bottleneck_dim", None)
+
+    assert isinstance(getattr(old_model, "doc_bottleneck_dim", None), field)
+
+    validate_and_align_config(cfg, old_model)
+
+    assert cfg.doc_bottleneck_dim is None, (
+        f"Expected doc_bottleneck_dim to remain None, but got {cfg.doc_bottleneck_dim!r}"
+    )
+    assert not isinstance(cfg.doc_bottleneck_dim, field)
+
+
+def test_init_micev2_from_checkpoint_with_freeze_top_layers():
+    """Verify that InitMICEV2FromCheckpoint with freeze_top_layers=True freezes top layers and head,
+    while leaving bottleneck projection parameters trainable."""
+    import torch
+    from MICE.modeling.mice_v2.modernbert_xpm import (
+        mice_v2_scorer,
+        InitMICEV2FromCheckpoint,
+    )
+
+    loader = resolve_trained_model_loader("VictorMorand/MiceV2-l10p4-ettin-68m")
+    source_model = loader.model
+
+    scorer_cfg, _ = mice_v2_scorer(
+        hf_id=source_model.hf_id,
+        n_contextualization_layers=source_model.n_contextualization_layers,
+        n_interaction_layers=source_model.n_interaction_layers,
+        bound_bottom_layers=source_model.bound_bottom_layers,
+        use_upper_rope=source_model.use_upper_rope,
+        top_layers_doc_ln=source_model.top_layers_doc_ln,
+        bottom_final_norm=source_model.bottom_final_norm,
+        top_final_norm=source_model.top_final_norm,
+        compress_dim=1.0,
+        compress_init_option="seed",
+        doc_bottleneck_dim=256,
+        utility_pred=True,
+    )
+
+    init_task = InitMICEV2FromCheckpoint.C(
+        scorer=scorer_cfg,
+        checkpoint_loader=loader,
+        freeze_bottom_layers=True,
+        freeze_top_layers=True,
+    ).instance()
+
+    init_task.execute()
+
+    scorer = init_task.scorer
+    assert scorer._initialized
+    hf_model = scorer.hf_model
+
+    # Bottom layers: frozen
+    for param in hf_model.model.layers.parameters():
+        assert not param.requires_grad
+    for param in hf_model.model.embeddings.parameters():
+        assert not param.requires_grad
+
+    # Top layers and classifier: frozen
+    for param in hf_model.top_layers.parameters():
+        assert not param.requires_grad
+    for param in hf_model.output_modules.parameters():
+        assert not param.requires_grad
+
+    # Bottleneck parameters: trainable
+    assert hf_model.doc_compress is not None
+    assert hf_model.doc_compress.weight.requires_grad
+    assert hf_model.doc_decompress is not None
+    assert hf_model.doc_decompress.weight.requires_grad
+
+
+def test_build_mice_v2_with_freeze_top_layers():
+    """Verify that build_mice_v2 propagates freeze_top_layers=True to InitMICEV2FromCheckpoint."""
+    from MICE.experiments.micev2_training import MiceV2_FineTuning, build_mice_v2, InitMICEV2FromCheckpoint
+
+    cfg = MiceV2_FineTuning()
+    cfg.from_experiment = "VictorMorand/MiceV2-l10p4-ettin-68m"
+    cfg.freeze_top_layers = True
+    cfg.doc_bottleneck_dim = 512
+
+    scorer, init_tasks = build_mice_v2(cfg)
+
+    assert len(init_tasks) == 1
+    init_task = init_tasks[0]
+    assert isinstance(init_task, InitMICEV2FromCheckpoint)
+    assert init_task.freeze_top_layers is True
+
+
+def test_get_name_from_tags_freeze_top():
+    """Verify that get_name_from_tags appends -freezetop when freeze_top_layers is True."""
+    from MICE.experiments.micev2_training import MiceV2_FineTuning, get_name_from_tags
+
+    cfg = MiceV2_FineTuning()
+    cfg.base = "jhu-clsp/ettin-encoder-17m"
+    cfg.n_contextualization_layers = 10
+    cfg.freeze_bottom_layers_phase1 = True
+    cfg.freeze_top_layers = True
+    cfg.doc_bottleneck_dim = 512
+
+    model_tags = {
+        "base": cfg.base,
+        "n_contextualization_layers": 10,
+        "freeze_bottom_layers_phase1": True,
+        "freeze_top_layers": True,
+        "doc_bottleneck_dim": 512,
+    }
+
+    name = get_name_from_tags(model_tags, cfg)
+    assert "-freezebottom" in name
+    assert "-freezetop" in name
+    assert "-dbot512" in name

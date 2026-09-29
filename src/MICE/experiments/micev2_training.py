@@ -123,6 +123,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     freeze_bottom_layers_phase1: GridSearch[bool] = False
     """Whether to freeze bottom contextualization layers during Phase 1 training (embeddings and bottom layers frozen, leaving top layers, utility predictor, and head trainable)"""
 
+    freeze_top_layers: GridSearch[bool] = False
+    """Whether to freeze top interaction layers, adapter, rotary embeddings, and classification head (leaving bottleneck parameters trainable)"""
+
     eval_phase_1: GridSearch[bool] = False
     """Whether to also evaluate the Phase 1 model (soft gating without hard pruning) when phase2_training is enabled."""
 
@@ -162,6 +165,9 @@ class MiceV2_FineTuning(CE_FineTuning):
     skip seeding, keep each layer's own default init), 'random_projection', or
     'svd_projection' (both only meaningful when compress_dim > 1.0)"""
 
+    doc_bottleneck_dim: GridSearch[Optional[int]] = None
+    """Optional bottleneck dimension for document token embeddings (d). If set, compresses document embeddings to d dimensions before storage/cross-attention."""
+
     use_cross_attn: GridSearch[bool] = True
     """Whether top layers use Cross+Self attention (True) or Concatenated Self-Attention only (False)"""
 
@@ -200,6 +206,12 @@ def build_mice_v2(
 
     attn_impl = cfg.attn_implementation or cfg.pref_attn_implementation
 
+    freeze_bottom = (
+        cfg.freeze_bottom_layers
+        if (phase_2 or cfg.hard_pruning)
+        else cfg.freeze_bottom_layers_phase1
+    )
+
     kwargs = dict(
         hf_id=cfg.base,
         n_contextualization_layers=cfg.n_contextualization_layers,
@@ -221,6 +233,7 @@ def build_mice_v2(
         hc_zeta=cfg.hc_zeta,
         compress_dim=cfg.compress_dim,
         compress_init_option=cfg.compress_init_option,
+        doc_bottleneck_dim=cfg.doc_bottleneck_dim,
         use_cross_attn=cfg.use_cross_attn,
         head_type=cfg.head_type,
         max_length=max_len,
@@ -228,14 +241,8 @@ def build_mice_v2(
         max_doc_length=getattr(cfg, "max_doc_length", None),
         query_prompt=getattr(cfg, "query_prompt", None),
         doc_prompt=getattr(cfg, "doc_prompt", None),
+        freeze_bottom_layers=freeze_bottom,
     )
-
-    freeze_bottom = (
-        cfg.freeze_bottom_layers
-        if (phase_2 or cfg.hard_pruning)
-        else cfg.freeze_bottom_layers_phase1
-    )
-    kwargs["freeze_bottom_layers"] = freeze_bottom
 
     if phase_2:
         logging.info(
@@ -277,6 +284,7 @@ def build_mice_v2(
                 checkpoint_loader=stop_tags(checkpoint_loader),
                 freeze_bottom_layers=freeze_bottom,
                 freeze_utility=phase_2,
+                freeze_top_layers=cfg.freeze_top_layers,
             )
         ]
 
@@ -328,10 +336,21 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     )
     freeze_bottom_suffix = "-freezebottom" if freeze_bottom_phase1 else ""
 
+    freeze_top = model_tags.get(
+        "freeze_top_layers",
+        getattr(cfg, "freeze_top_layers", False),
+    )
+    freeze_top_suffix = "-freezetop" if freeze_top else ""
+
     compress_dim = model_tags.get("compress_dim", getattr(cfg, "compress_dim", 1.0))
     compress_suffix = (
         f"-cdim{round(float(compress_dim), 2)}" if float(compress_dim) > 1.0 else ""
     )
+
+    doc_bot_dim = model_tags.get(
+        "doc_bottleneck_dim", getattr(cfg, "doc_bottleneck_dim", None)
+    )
+    dbot_suffix = f"-dbot{doc_bot_dim}" if doc_bot_dim else ""
 
     utility_bias = model_tags.get("utility_bias", getattr(cfg, "utility_bias", 5.0))
     ubias_suffix = f"-ubias{utility_bias}" if utility_bias != 5.0 else ""
@@ -344,7 +363,7 @@ def get_name_from_tags(model_tags: dict, cfg: MiceV2_FineTuning) -> str:
     if len(loss):
         loss = f"-{loss}"
 
-    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{gate_suffix}{hc_suffix}{prune_suffix}{freeze_bottom_suffix}{compress_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
+    return f"MiceV2-l{n_ctx_layers}{doc_suffix}{rope_suffix}{doc_ln_suffix}{nobottomln_suffix}{topln_suffix}{gate_suffix}{hc_suffix}{prune_suffix}{freeze_bottom_suffix}{freeze_top_suffix}{compress_suffix}{dbot_suffix}{head_suffix}{ubias_suffix}{attn_suffix}-{base}{loss}"
 
 
 def TrainEvaluateMiceV2(
@@ -501,8 +520,6 @@ def TrainEvaluateMiceV2(
         if cfg.freeze_LN:
             freeze_hook = FreezeParameterHook.C(pattern=cfg.freeze_LN_pattern)
             learner_hooks.append(freeze_hook)
-            if "freeze_LN" not in cfg_tags:
-                cfg_tags["freeze_LN"] = True
 
         # Phase 1 hooks: base hooks + UtilityRegularizer (if soft gating utility prediction is active)
 
@@ -650,6 +667,7 @@ def TrainEvaluateMiceV2(
                         outputs.learned_model
                     ),  # use outputs from phase 1 as init for phase 2
                     freeze_bottom_layers=cfg.freeze_bottom_layers,
+                    freeze_top_layers=cfg.freeze_top_layers,
                 )
 
                 outputs_p2 = learner_p2.submit(
