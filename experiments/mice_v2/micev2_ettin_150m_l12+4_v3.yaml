@@ -3,6 +3,7 @@ title: "Mice-Ettin-150m Training"
 description:
     Long Training for Mice-l12+4
 parent: ./_common_mice_v3.yaml
+export_trained_models: true #by default, override to save best model among seeds / configs: ready for HF export
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:
@@ -25,6 +26,7 @@ evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
     beir13: true
+    beir13_decontaminated: true
 
 grid_search:
     learner.optimization.lr:

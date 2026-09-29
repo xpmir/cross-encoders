@@ -180,3 +180,70 @@ def test_retrievers_only_aggregations():
     )
     assert not agg_df.empty
     assert "mean" in agg_df["dataset"].values
+
+
+def test_plaid_retriever_distributed_sharding():
+    """Verify that PlaidRetriever.retrieve_all correctly shards across ranks and gathers results."""
+    from unittest.mock import MagicMock, patch
+
+    queries = {
+        f"q_{i}": IDTextRecord(id=f"q_{i}", text_item=f"query {i}")
+        for i in range(4)
+    }
+
+    doc_store = SampleDocumentStore.C(num_docs=4)
+    scorer_cfg = st_multivector_scorer(model_id="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    index = PlaidIndex.C(
+        documents=doc_store,
+        index_path=Path("/tmp/fake_idx"),
+        compress_only=False,
+    )
+    retriever = PlaidRetriever.C(
+        encoder=scorer_cfg,
+        index=index,
+        topk=2,
+        batch_size=2,
+    ).instance()
+
+    # Mock encoder query_token_embeddings and fast_plaid search
+    retriever.encoder.query_token_embeddings = MagicMock(
+        return_value=torch.zeros((2, 1, 128))
+    )
+    retriever._fast_plaid = MagicMock()
+    retriever._fast_plaid.search.return_value = [[(0, 0.9)], [(1, 0.8)]]
+
+    # Setup simulated fabric ranks
+    fabric_0 = MagicMock()
+    fabric_0.world_size = 2
+    fabric_0.global_rank = 0
+    fabric_0.is_global_zero = True
+
+    fabric_1 = MagicMock()
+    fabric_1.world_size = 2
+    fabric_1.global_rank = 1
+    fabric_1.is_global_zero = False
+
+    with patch("torch.distributed.all_gather_object") as mock_gather:
+        # 1. Run rank 1 (slave rank): handles odd indices [1, 3]
+        retriever.fabric = fabric_1
+        res_rank1 = retriever.retrieve_all(queries)
+        assert res_rank1 == {}  # Non-zero rank returns empty dict
+        assert mock_gather.call_count == 1
+        local_data_rank1 = mock_gather.call_args[0][1]
+        assert [k for k, _ in local_data_rank1] == ["q_1", "q_3"]
+
+        # 2. Run rank 0 (master rank): handles even indices [0, 2] and merges
+        mock_gather.reset_mock()
+        retriever.fabric = fabric_0
+
+        def simulate_gather_into_rank0(gathered_data, local_data_rank0):
+            assert [k for k, _ in local_data_rank0] == ["q_0", "q_2"]
+            gathered_data[0] = local_data_rank0
+            gathered_data[1] = local_data_rank1
+
+        mock_gather.side_effect = simulate_gather_into_rank0
+        res_rank0 = retriever.retrieve_all(queries)
+
+        assert mock_gather.call_count == 1
+        assert list(res_rank0.keys()) == ["q_0", "q_1", "q_2", "q_3"]
+        assert len(res_rank0) == 4

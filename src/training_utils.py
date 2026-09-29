@@ -3,7 +3,7 @@
 import logging
 import shutil
 import json
-from typing import Callable, Optional, Any, Dict
+from typing import Callable, Optional, Any, Dict, Tuple, List
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -1115,6 +1115,83 @@ def find_checkpoint(
     )
 
 
+def find_candidate_experiment_dirs(exp_id: str) -> List[Path]:
+    """Find candidate directories for an experiment ID across Experimaestro workspaces and local roots."""
+    candidate_exp_dirs = []
+    try:
+        settings = get_settings()
+        # Check workspaces in settings
+        for ws in settings.workspaces:
+            if ws.path:
+                p_exp = Path(ws.path) / "experiments" / exp_id
+                if p_exp.exists():
+                    candidate_exp_dirs.append(p_exp)
+                p_direct = Path(ws.path) / exp_id
+                if p_direct.exists():
+                    candidate_exp_dirs.append(p_direct)
+    except Exception as e:
+        logger.debug(f"Could not inspect settings.workspaces: {e}")
+
+    # Check default experiment roots (~/code/experiments/*)
+    default_experiments_root = Path.home() / "code" / "experiments"
+    if default_experiments_root.exists():
+        for sub in default_experiments_root.iterdir():
+            if sub.is_dir():
+                sub_exp = sub / exp_id
+                if sub_exp.exists() and sub_exp not in candidate_exp_dirs:
+                    candidate_exp_dirs.append(sub_exp)
+                sub_experiments_exp = sub / "experiments" / exp_id
+                if (
+                    sub_experiments_exp.exists()
+                    and sub_experiments_exp not in candidate_exp_dirs
+                ):
+                    candidate_exp_dirs.append(sub_experiments_exp)
+
+    return candidate_exp_dirs
+
+
+def parse_experiment_ref(ref: str) -> Tuple[str, Optional[str]]:
+    """Parse an experiment reference into (exp_id, run_id).
+
+    If ref contains a slash:
+    - Check for direct absolute path like /path/to/exp_dir/run_id where parent directory exists.
+    - Check if it matches 'exp_id/run_id' where exp_id is a known local experiment in workspaces.
+    Otherwise returns (ref, None).
+    """
+    if "/" not in ref:
+        return ref, None
+
+    # Check for direct absolute path like /path/to/exp_dir/run_id
+    p = Path(ref).expanduser()
+    if p.is_absolute() and p.parent.is_dir():
+        return str(p.parent), p.name
+
+    # Check for exp_id/run_id where exp_id is a known local experiment
+    parts = ref.strip("/").split("/")
+    if len(parts) == 2:
+        candidate_exp, candidate_run = parts[0], parts[1]
+        if find_candidate_experiment_dirs(candidate_exp):
+            return candidate_exp, candidate_run
+
+    return ref, None
+
+
+def _find_exported_models_in_run(run_dir: Path) -> List[Path]:
+    """Find directories containing experimaestro.json inside run_dir/results/models."""
+    models_dir = (
+        run_dir / "results" / "models"
+        if (run_dir / "results").exists()
+        else (run_dir / "models" if run_dir.name == "results" else run_dir)
+    )
+    if not models_dir.exists() or not models_dir.is_dir():
+        return []
+    return [
+        d
+        for d in models_dir.iterdir()
+        if d.is_dir() and (d / "experimaestro.json").exists()
+    ]
+
+
 def find_experiment_results_model_dir(experiment_ref: str) -> Path:
     """Finds the exported model directory inside an experiment's results/models path.
 
@@ -1133,130 +1210,118 @@ def find_experiment_results_model_dir(experiment_ref: str) -> Path:
         logger.info(f"Using direct model path: {ref_path}")
         return ref_path
 
-    # 2. Direct path to run directory or results directory
+    # 2. Direct path to a run directory containing results/models
     if ref_path.is_dir():
-        models_dir = (
-            ref_path / "results" / "models"
-            if (ref_path / "results").exists()
-            else (ref_path / "models" if ref_path.name == "results" else ref_path)
-        )
-        if models_dir.exists():
-            candidates = [
-                d
-                for d in models_dir.iterdir()
-                if d.is_dir() and (d / "experimaestro.json").exists()
-            ]
-            if candidates:
-                logger.info(f"Found exported model in {candidates[0]}")
-                return candidates[0]
+        models = _find_exported_models_in_run(ref_path)
+        if models:
+            logger.info(f"Found exported model in {models[0]}")
+            return models[0]
 
-    # 3. Experiment ID lookup across configured Experimaestro workspaces and local experiments
-    parts = experiment_ref.strip("/").split("/")
-    exp_id = parts[0]
-    run_id = parts[1] if len(parts) > 1 else None
-
-    settings = get_settings()
-    candidate_exp_dirs = []
-
-    # Check workspaces in settings
-    for ws in settings.workspaces:
-        if ws.path:
-            p_exp = Path(ws.path) / "experiments" / exp_id
-            if p_exp.exists():
-                candidate_exp_dirs.append(p_exp)
-            p_direct = Path(ws.path) / exp_id
-            if p_direct.exists():
-                candidate_exp_dirs.append(p_direct)
-
-    # Check default experiment roots (~/code/experiments/*)
-    default_experiments_root = Path.home() / "code" / "experiments"
-    if default_experiments_root.exists():
-        for sub in default_experiments_root.iterdir():
-            if sub.is_dir():
-                sub_exp = sub / exp_id
-                if sub_exp.exists() and sub_exp not in candidate_exp_dirs:
-                    candidate_exp_dirs.append(sub_exp)
-                sub_experiments_exp = sub / "experiments" / exp_id
-                if (
-                    sub_experiments_exp.exists()
-                    and sub_experiments_exp not in candidate_exp_dirs
-                ):
-                    candidate_exp_dirs.append(sub_experiments_exp)
+    # 3. Experiment ID / run lookup across workspaces and local experiment directories
+    exp_id, run_id = parse_experiment_ref(experiment_ref)
+    candidate_exp_dirs = find_candidate_experiment_dirs(exp_id)
 
     if not candidate_exp_dirs:
-        raise FileNotFoundError(
-            f"Experiment '{exp_id}' not found in any workspace or local experiment paths. "
-            f"Searched workspaces: {[str(ws.path) for ws in settings.workspaces if ws.path]}"
-        )
+        if Path(exp_id).is_dir():
+            exp_base = Path(exp_id)
+        elif ref_path.is_dir():
+            exp_base = ref_path
+        else:
+            settings = get_settings()
+            searched_ws = [str(ws.path) for ws in settings.workspaces if ws.path]
+            raise FileNotFoundError(
+                f"Experiment '{exp_id}' not found in any workspace or local experiment paths. "
+                f"Searched workspaces: {searched_ws}"
+            )
+    else:
+        exp_base = candidate_exp_dirs[0]
 
-    exp_base = candidate_exp_dirs[0]
-
-    # Determine run directory
+    # If run_id is explicitly specified, load directly from it
     if run_id:
         run_dir = exp_base / run_id
         if not run_dir.exists():
-            raise FileNotFoundError(f"Run ID '{run_id}' not found under {exp_base}")
-    elif (exp_base / "current").exists():
-        run_dir = (exp_base / "current").resolve()
-    else:
-        run_dirs = sorted(
-            [
-                d
-                for d in exp_base.iterdir()
-                if d.is_dir() and not d.name.startswith(".")
-            ],
-            key=lambda d: d.stat().st_mtime,
-            reverse=True,
+            raise FileNotFoundError(
+                f"Run ID '{run_id}' not found under experiment base directory {exp_base}"
+            )
+        models = _find_exported_models_in_run(run_dir)
+        if not models:
+            raise FileNotFoundError(
+                f"No valid exported models with experimaestro.json found in run '{run_id}' at {run_dir}"
+            )
+        selected_model_dir = models[0]
+        logger.info(
+            f"Resolved experiment '{experiment_ref}' (run '{run_id}') to model at {selected_model_dir}"
         )
-        if not run_dirs:
-            raise FileNotFoundError(f"No run directories found in {exp_base}")
-        run_dir = run_dirs[0]
+        return selected_model_dir
 
-    models_dir = run_dir / "results" / "models"
-    if not models_dir.exists():
-        raise FileNotFoundError(f"No results/models directory found in {run_dir}")
+    # When run_id is omitted:
+    # First, check 'current'
+    current_path = exp_base / "current"
+    if current_path.exists():
+        current_run = current_path.resolve()
+        models = _find_exported_models_in_run(current_run)
+        if models:
+            selected_model_dir = models[0]
+            logger.info(
+                f"Resolved experiment '{experiment_ref}' (current run '{current_run.name}') to model at {selected_model_dir}"
+            )
+            return selected_model_dir
+        else:
+            logger.warning(
+                f"'current' run in {exp_base} ('{current_run.name}') has no exported models yet "
+                "(run may still be in progress). Searching for previous completed runs..."
+            )
 
-    exported_models = [
-        d
-        for d in models_dir.iterdir()
-        if d.is_dir() and (d / "experimaestro.json").exists()
-    ]
-    if not exported_models:
-        raise FileNotFoundError(
-            f"No valid exported models with experimaestro.json found in {models_dir}"
-        )
-
-    selected_model_dir = exported_models[0]
-    logger.info(
-        f"Resolved experiment '{experiment_ref}' to model at {selected_model_dir}"
+    # Search completed runs among siblings, sorted by mtime descending
+    run_dirs = sorted(
+        [
+            d
+            for d in exp_base.iterdir()
+            if d.is_dir()
+            and not d.name.startswith(".")
+            and d.name not in ("current", "dry-run")
+        ],
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
     )
-    return selected_model_dir
+    for candidate_run in run_dirs:
+        models = _find_exported_models_in_run(candidate_run)
+        if models:
+            selected_model_dir = models[0]
+            logger.info(
+                f"Resolved experiment '{experiment_ref}' to latest completed run '{candidate_run.name}' at {selected_model_dir}"
+            )
+            return selected_model_dir
+
+    raise FileNotFoundError(
+        f"Experiment '{exp_id}' found at {exp_base}, but no completed runs with exported models "
+        "(containing experimaestro.json) were found."
+    )
 
 
 def resolve_trained_model_loader(source: str) -> ModuleLoader:
     """Unified resolution of an experiment ID, local path, or Hugging Face Hub repo into a ModuleLoader config.
 
     Args:
-        source: Experiment ID ('train_mice_ettin32m_l4+4'), local folder path,
-                or HF Hub repo ('VictorMorand/MiceV2-l10p4-ettin-68m').
+        source: Experiment ID ('train_mice_ettin32m_l4+4'),
+                pinned run ID ('train_micev2_ettin68m_l10+4_v3/20260924_180227'),
+                local folder path, or HF Hub repo ('VictorMorand/MiceV2-l10p4-ettin-68m').
 
     Returns:
         ModuleLoader Config whose `.model` attribute is the Model Config.
     """
     path_candidate = Path(source).expanduser()
 
-    # If it's a direct path or known experiment folder/ID
-    if path_candidate.exists() or (
-        "/" in source
-        and not source.startswith("http")
-        and Path(source.split("/")[0]).exists()
-    ):
+    # If it's a direct path to an existing directory
+    if path_candidate.is_dir():
         target = find_experiment_results_model_dir(source)
     else:
-        # Check if it's an experiment ID in workspaces
-        try:
+        exp_id, run_id = parse_experiment_ref(source)
+        candidates = find_candidate_experiment_dirs(exp_id)
+        if candidates or Path(exp_id).is_dir():
+            # Experiment is local. Do not swallow FileNotFoundError to avoid false HF Hub fallback.
             target = find_experiment_results_model_dir(source)
-        except FileNotFoundError:
+        else:
             # Fall back to Hugging Face Hub repo ID
             logger.info(
                 f"'{source}' not found locally as experiment; treating as Hugging Face Hub repo ID."
@@ -1376,5 +1441,11 @@ def validate_and_align_config(
     if tags is not None:
         if "base" not in tags or tags["base"] != getattr(xp_config, "base", None):
             tags["base"] = getattr(xp_config, "base", None)
-        if "from_experiment" not in tags and source_label:
-            tags["from_experiment"] = str(source_label)
+        ref_to_parse = tags.get("from_experiment", source_label)
+        if ref_to_parse:
+            parsed_exp_id, run_id = parse_experiment_ref(str(ref_to_parse))
+            tags["from_experiment"] = parsed_exp_id
+            if run_id:
+                tags["from_run_id"] = run_id
+            if hasattr(xp_config, "from_run_id") and run_id:
+                xp_config.from_run_id = run_id

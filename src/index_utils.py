@@ -88,9 +88,10 @@ def get_plaid_index(
         fabric_config=FabricConfiguration.C(precision="bf16-true"),
     )
 
-    indexer_id = index_builder.__identifier__()
+    init_paths = tuple(str(getattr(t, "path", t)) for t in init_tasks)
+    cache_key = (index_builder.__identifier__(), init_paths)
 
-    if indexer_id not in _indexes:
+    if cache_key not in _indexes:
         logger.info(
             "Indexing %s (%s documents) with PLAID via %s",
             documents.id,
@@ -100,8 +101,8 @@ def get_plaid_index(
         index = index_builder.tag("index_documents", documents.id).submit(
             launcher=launcher_index, init_tasks=init_tasks
         )
-        _indexes[indexer_id] = index
+        _indexes[cache_key] = index
     else:
-        index = _indexes[indexer_id]
+        index = _indexes[cache_key]
 
     return index

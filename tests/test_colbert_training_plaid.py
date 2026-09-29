@@ -42,6 +42,7 @@ def test_build_st_multivector_encoder_dim_none():
 
 def test_get_plaid_index_caching_key():
     """Verify that get_plaid_index caches by (index_builder, init_task_checkpoint_paths)."""
+    _indexes.clear()
     doc_store = SampleDocumentStore.C(num_docs=4)
     scorer = st_multivector_scorer(model_id="cross-encoder/ms-marco-MiniLM-L-6-v2")
     plaid_cfg = PlaidConfiguration(n_bits=2, kmeans_niters=2, buffer_size=4)

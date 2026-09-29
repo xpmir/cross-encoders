@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 from training_utils import (
+    find_candidate_experiment_dirs,
     find_experiment_results_model_dir,
+    parse_experiment_ref,
     resolve_trained_model_loader,
     validate_and_align_config,
 )
@@ -608,3 +610,149 @@ def test_get_name_from_tags_freeze_top():
     assert "-freezebottom" in name
     assert "-freezetop" in name
     assert "-dbot512" in name
+
+
+def test_parse_experiment_ref(monkeypatch, tmp_path):
+    """Test parse_experiment_ref correctly distinguishes local runs from HF Hub repos."""
+    # HF Hub ID with slash
+    exp_id, run_id = parse_experiment_ref("VictorMorand/MiceV2-l10p4-ettin-68m")
+    assert exp_id == "VictorMorand/MiceV2-l10p4-ettin-68m"
+    assert run_id is None
+
+    # Single string without slash
+    exp_id, run_id = parse_experiment_ref("bert-base-uncased")
+    assert exp_id == "bert-base-uncased"
+    assert run_id is None
+
+    # Local experiment with run ID
+    fake_exp_dir = tmp_path / "mock_local_exp"
+    fake_exp_dir.mkdir()
+    monkeypatch.setattr(
+        "training_utils.find_candidate_experiment_dirs",
+        lambda eid: [fake_exp_dir] if eid == "mock_local_exp" else [],
+    )
+
+    exp_id, run_id = parse_experiment_ref("mock_local_exp/20260924_180227")
+    assert exp_id == "mock_local_exp"
+    assert run_id == "20260924_180227"
+
+
+def test_find_experiment_results_model_dir_with_pinned_run(monkeypatch, tmp_path):
+    """Test resolving a specific pinned run ID (exp_id/run_id)."""
+    exp_dir = tmp_path / "test_exp"
+    run1 = exp_dir / "20260924_180227" / "results" / "models" / "ModelA"
+    run2 = exp_dir / "20260925_120000" / "results" / "models" / "ModelB"
+    run1.mkdir(parents=True)
+    run2.mkdir(parents=True)
+    (run1 / "experimaestro.json").write_text("{}")
+    (run2 / "experimaestro.json").write_text("{}")
+
+    # current points to run2
+    (exp_dir / "current").symlink_to(exp_dir / "20260925_120000")
+
+    monkeypatch.setattr(
+        "training_utils.find_candidate_experiment_dirs",
+        lambda eid: [exp_dir] if eid == "test_exp" else [],
+    )
+
+    # 1. Pinned to run1
+    resolved_run1 = find_experiment_results_model_dir("test_exp/20260924_180227")
+    assert resolved_run1 == run1
+
+    # 2. Default (omitted run_id) resolves to current (run2)
+    resolved_current = find_experiment_results_model_dir("test_exp")
+    assert resolved_current == run2
+
+    # 3. Non-existent run_id raises FileNotFoundError
+    with pytest.raises(FileNotFoundError, match="Run ID 'non_existent_run' not found"):
+        find_experiment_results_model_dir("test_exp/non_existent_run")
+
+
+def test_find_experiment_results_model_dir_fallback_when_current_in_progress(monkeypatch, tmp_path):
+    """Test that when 'current' run is in progress (no models yet), it falls back to the latest completed run."""
+    exp_dir = tmp_path / "test_exp"
+    completed_run = exp_dir / "20260924_180227" / "results" / "models" / "ModelCompleted"
+    completed_run.mkdir(parents=True)
+    (completed_run / "experimaestro.json").write_text("{}")
+
+    # In-progress run has no results/models directory
+    in_progress_run = exp_dir / "20260929_180000"
+    in_progress_run.mkdir(parents=True)
+
+    # current symlink points to in_progress_run
+    (exp_dir / "current").symlink_to(in_progress_run)
+
+    monkeypatch.setattr(
+        "training_utils.find_candidate_experiment_dirs",
+        lambda eid: [exp_dir] if eid == "test_exp" else [],
+    )
+
+    # Resolving without run_id should automatically fall back to completed_run
+    resolved = find_experiment_results_model_dir("test_exp")
+    assert resolved == completed_run
+
+
+def test_find_experiment_results_model_dir_no_completed_runs_raises(monkeypatch, tmp_path):
+    """Test that when no completed runs have exported models, an informative FileNotFoundError is raised."""
+    exp_dir = tmp_path / "test_exp"
+    in_progress_run = exp_dir / "20260929_180000"
+    in_progress_run.mkdir(parents=True)
+    (exp_dir / "current").symlink_to(in_progress_run)
+
+    monkeypatch.setattr(
+        "training_utils.find_candidate_experiment_dirs",
+        lambda eid: [exp_dir] if eid == "test_exp" else [],
+    )
+
+    with pytest.raises(FileNotFoundError, match="no completed runs with exported models"):
+        find_experiment_results_model_dir("test_exp")
+
+
+def test_resolve_trained_model_loader_local_does_not_swallow_error(monkeypatch, tmp_path):
+    """Test that if a local experiment has no valid models, resolve_trained_model_loader raises
+    FileNotFoundError and does NOT fall back to Hugging Face Hub."""
+    exp_dir = tmp_path / "local_exp"
+    exp_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "training_utils.find_candidate_experiment_dirs",
+        lambda eid: [exp_dir] if eid == "local_exp" else [],
+    )
+
+    with pytest.raises(FileNotFoundError, match="no completed runs with exported models"):
+        resolve_trained_model_loader("local_exp")
+
+
+def test_validate_and_align_config_pinned_run_tags(monkeypatch, tmp_path):
+    """Test that validate_and_align_config preserves clean experiment ID in tags['from_experiment']
+    and records tags['from_run_id']."""
+    exp_dir = tmp_path / "train_micev2_ettin68m_l10+4_v3"
+    exp_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(
+        "training_utils.find_candidate_experiment_dirs",
+        lambda eid: [exp_dir] if eid == "train_micev2_ettin68m_l10+4_v3" else [],
+    )
+
+    cfg = MiceV2_FineTuning(
+        from_experiment="train_micev2_ettin68m_l10+4_v3/20260924_180227"
+    )
+    tags = {}
+
+    from types import SimpleNamespace
+    dummy_model = SimpleNamespace(
+        hf_id="cross-encoder/ettin-reranker-68m-v1",
+        n_contextualization_layers=10,
+        n_interaction_layers=4,
+    )
+
+    validate_and_align_config(
+        cfg,
+        dummy_model,
+        tags=tags,
+        from_ref=cfg.from_experiment,
+    )
+
+    assert tags["from_experiment"] == "train_micev2_ettin68m_l10+4_v3"
+    assert tags["from_run_id"] == "20260924_180227"
+    assert cfg.from_run_id == "20260924_180227"

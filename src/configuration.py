@@ -356,7 +356,10 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     """If true, will save the run for the first stage - just reload it for evaluation rather than recomputing"""
 
     from_experiment: GridSearch[Optional[str]] = None
-    """Optional experiment ID, local model directory path, or HF Hub model ID to instantiate a trained model from results/models"""
+    """Optional experiment ID (e.g. 'exp_id' or 'exp_id/run_id' to pin a specific run), local model directory path, or HF Hub model ID to instantiate a trained model from results/models"""
+
+    from_run_id: Optional[str] = None
+    """Optional run ID within from_experiment (e.g. '20260924_180227')"""
 
     ## Cross Encoder Model
     base: GridSearch[str] = ""

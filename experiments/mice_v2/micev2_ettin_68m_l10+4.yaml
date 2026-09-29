@@ -5,11 +5,13 @@ description:
 
 module: MICE.experiments.micev2_training
 parent: ./_ettin68m.yaml
-nb_repetitions: 3
+nb_repetitions: 2
+export_trained_models: true
 
 base: cross-encoder/ettin-reranker-68m-v1
 query_prompt: "[Q] "
 doc_prompt: "[D] "
+freeze_LN: false #don't change much here, needed for bigger models
 
 #longer Training
 learner:
@@ -23,6 +25,7 @@ evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
     beir13: true
+    beir13_decontaminated: true
 
 # Exceptionally use H100 for eval
 # retrieval:
