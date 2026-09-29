@@ -276,7 +276,8 @@ def dataframe_to_latex(
                 sc = row[scorer_col]
                 if pd.notna(sc) and str(sc) != "nan":
                     scorer_val = str(sc)
-                    parts.append(scorer_val)
+                    if not parts or scorer_val != parts[0]:
+                        parts.append(scorer_val)
             except Exception:
                 pass
 

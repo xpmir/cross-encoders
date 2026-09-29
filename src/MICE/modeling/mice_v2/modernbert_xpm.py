@@ -1561,6 +1561,50 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         """
         return self.hf_model.encode_documents(doc_ids=doc_ids, doc_mask=doc_mask)
 
+    @property
+    def model(self) -> torch.nn.Module:
+        """Underlying torch module (self.hf_model) for Fabric FA2 compatibility."""
+        return self.hf_model
+
+    @property
+    def dimension(self) -> int:
+        """Token embedding dimension of bottom contextualization layers."""
+        doc_bot_dim = getattr(self.hf_model.config, "doc_bottleneck_dim", None)
+        if doc_bot_dim is not None and doc_bot_dim > 0:
+            return doc_bot_dim
+        top_config = getattr(self.hf_model, "top_config", self.hf_model.config)
+        return getattr(top_config, "hidden_size", 768)
+
+    def document_token_embeddings(
+        self, records: List[IDTextRecord], max_doc_length: Optional[int] = None
+    ) -> List[torch.Tensor]:
+        """Encode a batch of documents and return per-token embeddings filtering padding out.
+
+        Matches the MultiVectorEncoder duck-typed protocol for PlaidIndexBuilder.
+        """
+        effective_max_doc_len = (
+            max_doc_length
+            if max_doc_length is not None
+            else self.tokenizer.max_doc_length
+        )
+        options = TokenizerOptions(max_length=effective_max_doc_len)
+        tokenized = self.batch_tokenize(
+            records, options=options, input_nature=QueryDocInput.DOCUMENT
+        )
+        if tokenized.ids.device != self.device:
+            tokenized = tokenized.to(self.device)
+        encoded, doc_mask = self.encode_documents(tokenized.ids, tokenized.mask)
+        # Apply pruning mask if hard_pruning / utility gating is enabled and shapes differ
+        if doc_mask is not None and doc_mask.shape[1] != encoded.shape[1]:
+            mask = doc_mask.bool()
+        elif tokenized.mask is not None:
+            mask = tokenized.mask.to(encoded.device).bool()
+        else:
+            mask = None
+        if mask is None:
+            return [encoded[i] for i in range(encoded.shape[0])]
+        return [encoded[i][mask[i]] for i in range(encoded.shape[0])]
+
     def get_document_encoder(
         self, max_doc_length: Optional[int] = None
     ) -> TextEncoderBase:

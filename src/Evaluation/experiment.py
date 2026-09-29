@@ -41,8 +41,15 @@ from xpmir.evaluation import MultiRunRetrieverFactory
 
 from format import dataframe_to_latex, aggregations
 from tests import build_tests
-from configuration import Retrieval, Indexation, Preprocessing, Evaluation, ScorerType
-from retrievers import splade_retriever, bm25_retriever
+from configuration import (
+    Retrieval,
+    Indexation,
+    Preprocessing,
+    Evaluation,
+    ScorerType,
+    PlaidConfiguration,
+)
+from retrievers import splade_retriever, bm25_retriever, plaid_retriever
 from training_utils import add_dataset_aggregations
 
 import logging
@@ -79,6 +86,15 @@ class BaselinesConfig(NeuralIRExperiment):
 
     retrievers_hf_id: List[str] = []
 
+    use_plaid: bool = False
+    """If true, evaluate retrievers_hf_id using PLAID multi-vector retrieval instead of SPLADE"""
+
+    plaid: PlaidConfiguration = Factory(PlaidConfiguration)
+    """Configuration for PLAID indexing and retrieval"""
+
+    include_recall_100: bool = False
+    """Whether to additionally report R@100 alongside CE_MEASURES"""
+
     evaluation: Evaluation = Factory(Evaluation)
 
     retrievers_only: bool = False
@@ -114,6 +130,9 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     long_reqs = getattr(cfg.retrieval, "long_requirements", None)
     long_launcher = find_launcher(long_reqs) if long_reqs else None
 
+    if cfg.include_recall_100:
+        cfg.evaluation.include_recall_100 = True
+
     # Built tests collections depending on config
     tests = build_tests(
         cfg.evaluation,
@@ -126,37 +145,76 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         blocking=cfg.preprocessing.blocking_download,
     )
 
-    # Built Retrievers - list of splade models or just bm25
+    # Built Retrievers - list of splade/plaid models or just bm25
     all_retrievers = []
     if len(cfg.retrievers_hf_id) > 0:
         for retriever_hf_id in cfg.retrievers_hf_id:
             if not retriever_hf_id:
                 continue
 
-            logging.info(f"Instantiating retriever {retriever_hf_id} ")
-
             prepare_hf_model(retriever_hf_id)
 
-            splade_encoder, retriever_init_tasks = splade_encoder_from_pretrained_hf(
-                retriever_hf_id
-            )
+            if cfg.use_plaid:
+                logging.info(f"Instantiating PLAID retriever {retriever_hf_id} ")
 
-            all_retrievers.append(
-                (
-                    retriever_hf_id,
-                    partial(
-                        splade_retriever,
-                        cfg,
-                        retriever_hf_id,
-                        splade_encoder,
-                        launcher_index=launcher_index,
-                        topk=cfg.retrieval.k,
-                        init_tasks=retriever_init_tasks,
-                    ),
-                    retriever_init_tasks,
+                plaid_doc_max = (
+                    cfg.plaid.max_doc_length
+                    if cfg.plaid.max_doc_length is not None
+                    else (cfg.max_doc_length or 300)
                 )
-            )
-    else:
+                plaid_query_max = (
+                    cfg.plaid.max_query_length
+                    if cfg.plaid.max_query_length is not None
+                    else (cfg.max_query_length or 32)
+                )
+
+                plaid_encoder = st_multivector_scorer(
+                    model_id=retriever_hf_id,
+                    doc_maxlen=plaid_doc_max,
+                    query_maxlen=plaid_query_max,
+                    pref_attn_implementation=cfg.attn_implementation,
+                )
+                plaid_encoder.tag("scorer", retriever_hf_id)
+                plaid_encoder.tag("scorer_type", ScorerType.stMultiVectorEncoder.value)
+
+                all_retrievers.append(
+                    (
+                        retriever_hf_id,
+                        partial(
+                            plaid_retriever,
+                            cfg,
+                            retriever_hf_id,
+                            plaid_encoder,
+                            launcher_index=launcher_index,
+                            topk=cfg.retrieval.k,
+                        ),
+                        [],
+                    )
+                )
+            else:
+                logging.info(f"Instantiating SPLADE retriever {retriever_hf_id} ")
+
+                splade_encoder, retriever_init_tasks = (
+                    splade_encoder_from_pretrained_hf(retriever_hf_id)
+                )
+
+                all_retrievers.append(
+                    (
+                        retriever_hf_id,
+                        partial(
+                            splade_retriever,
+                            cfg,
+                            retriever_hf_id,
+                            splade_encoder,
+                            launcher_index=launcher_index,
+                            topk=cfg.retrieval.k,
+                            init_tasks=retriever_init_tasks,
+                        ),
+                        retriever_init_tasks,
+                    )
+                )
+
+    if len(all_retrievers) == 0:
         # add bm25 by default
         all_retrievers.append(
             (
@@ -311,8 +369,11 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     cols_to_drop = [col for col in df.columns if "index_doc" in str(col).lower()]
     df = df.drop(columns=cols_to_drop, errors="ignore")
 
-    tag_names = ["first_stage", "scorer", "scorer_type"]  # tags to group by
-    group_by_tags = sorted(list(tag_names))
+    if cfg.retrievers_only:
+        tag_names = ["first_stage"]
+    else:
+        tag_names = ["first_stage", "scorer", "scorer_type"]
+    group_by_tags = [col for col in sorted(list(tag_names)) if col in df.columns]
 
     # Add aggregations
     df = add_dataset_aggregations(
@@ -340,12 +401,19 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         logging.info(f"Results saved to {output_file}")
 
         # Generate and save LaTeX table
+        metric_col = "nDCG@10" if not cfg.retrievers_only else "R@1000"
+        if metric_col not in df.columns:
+            for fallback in ["nDCG@10", "R@100", "R@1000", "RR@10", "Success@5"]:
+                if fallback in df.columns:
+                    metric_col = fallback
+                    break
+
         latex_table = dataframe_to_latex(
             df,
             caption="Evaluation Results",
             label="tab:eval_results",
             sig_df=None,
-            metric_col="nDCG@10" if not cfg.retrievers_only else "R@1000",
+            metric_col=metric_col,
         )
         latex_output_file = helper.xp.resultspath / "results.tex"
         with open(latex_output_file, "w") as f:

@@ -13,13 +13,50 @@ from xpmir.index.plaid import PlaidIndexBuilder, PlaidRetriever
 from xpm_torch.configuration import FabricConfiguration
 
 from MICE.plaid_mice import MicePlaidRetrieverv2
-from configuration import CE_FineTuning, PlaidConfiguration
-from index_utils import get_splade_index
+from configuration import CE_FineTuning, PlaidConfiguration, ScorerType
+from index_utils import get_splade_index, get_plaid_index
 import logging
 
 logger = logging.getLogger(__name__)
 
-### Factories for bm25 and Splade retrievers
+### Factories for bm25, Splade, and PLAID retrievers
+
+
+def plaid_retriever(
+    cfg,
+    name: str,
+    encoder,
+    documents: Documents,
+    launcher_index,
+    init_tasks: list = None,
+    topk: int = None,
+    seed: int = 42,
+    **kwargs,
+) -> Retriever.C:
+    """Factory for PLAID Retriever, given the current configuration"""
+
+    return (
+        PlaidRetriever.C(
+            encoder=encoder,
+            index=stop_tags(
+                get_plaid_index(
+                    documents=documents,
+                    encoder=encoder,
+                    plaid_cfg=cfg.plaid,
+                    launcher_index=launcher_index,
+                    init_tasks=init_tasks,
+                    seed=seed,
+                )
+            ),
+            topk=topk or cfg.retrieval.k,
+            n_ivf_probe=cfg.plaid.n_ivf_probe,
+            n_full_scores=cfg.plaid.n_full_scores,
+            fabric_config=FabricConfiguration.C(precision="bf16-true"),
+        )
+        .tag("first_stage", name)
+        .tag("scorer", name)
+        .tag("scorer_type", ScorerType.stMultiVectorEncoder.value)
+    )
 
 
 def splade_retriever(

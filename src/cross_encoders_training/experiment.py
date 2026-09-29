@@ -29,7 +29,7 @@ from xpmir.rankers import scorer_retriever
 from xpmir.evaluation import MultiRunRetrieverFactory
 from xpmir.neural.splade import splade_encoder_from_pretrained_hf
 
-from retrievers import splade_retriever, bm25_retriever
+from retrievers import splade_retriever, bm25_retriever, plaid_retriever
 from validations import ValidationSet
 from configuration import CE_FineTuning, CheckpointSelection, ScorerType, Losses
 from tests import build_tests
@@ -145,7 +145,6 @@ def build_STCrossEncoder(cfg) -> tuple[STCrossEncoder, list]:
 def build_STMultiVectorEncoder(cfg) -> tuple[STMultiVectorEncoder, list]:
     """Helper factory to build the STMultiVectorEncoder."""
     attn_impl = getattr(cfg, "pref_attn_implementation", None)
-    dim = getattr(cfg.plaid, "dim", 128) if hasattr(cfg, "plaid") else 128
     query_maxlen = getattr(cfg, "max_query_length", None) or 32
     if query_maxlen > 128:
         logger.warning(
@@ -175,7 +174,7 @@ def build_STMultiVectorEncoder(cfg) -> tuple[STMultiVectorEncoder, list]:
 
     scorer = st_multivector_scorer(
         model_id=cfg.base,
-        dim=dim,
+        dim=None,
         query_maxlen=query_maxlen,
         doc_maxlen=doc_maxlen,
         pref_attn_implementation=attn_impl,
@@ -201,6 +200,8 @@ def get_ce_name(model_tags: dict) -> str:
         extra_parts.append(f"bs{model_tags['batch_size']}")
     if "checkpoint" in model_tags and str(model_tags["checkpoint"]) != "last":
         extra_parts.append(str(model_tags["checkpoint"]))
+    if str(model_tags.get("plaid_retriever")).lower() in ("true", "1"):
+        extra_parts.append("plaid")
 
     extra = f"-{'-'.join(extra_parts)}" if extra_parts else ""
     scorer_type = model_tags.get("scorer_type", ScorerType.stCrossEncoder.value)
@@ -465,6 +466,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
 
             # Shared evaluation execution loop
             for model_id, load_model in models_to_evaluate:
+                load_model.tag("scorer", cfg.base)
+                if cfg.plaid.use_plaid:
+                    load_model.tag("plaid_retriever", False)
                 all_weights.append(load_model)
                 tests.evaluate_retriever(
                     partial(
@@ -483,6 +487,45 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                     with_run=cfg.save_runs,
                     fabric_config=cfg.evaluation.fabric.get_config(),
                 )
+
+                # Option A: Standalone PLAID first-stage evaluation
+                if (
+                    cfg.plaid.use_plaid
+                    and scorer_type == ScorerType.stMultiVectorEncoder
+                ):
+                    logging.info(
+                        f"Scheduling PLAID first-stage evaluation for model {model_id}"
+                    )
+                    # Create an independent loader config so tags don't mutate load_model in-place
+                    plaid_load_model = scorer_model.loader_config(
+                        load_model.path,
+                        settings=getattr(load_model, "settings", None),
+                    )
+                    for k, v in load_model.tags().items():
+                        if k not in ("first_stage", "scorer", "plaid_retriever"):
+                            plaid_load_model.tag(k, v)
+                    plaid_load_model.tag("first_stage", cfg.base).tag(
+                        "scorer", cfg.base
+                    ).tag("plaid_retriever", True)
+                    all_weights.append(plaid_load_model)
+
+                    tests.evaluate_retriever(
+                        partial(
+                            plaid_retriever,
+                            cfg=cfg,
+                            name=cfg.base,
+                            encoder=scorer_model,
+                            launcher_index=launcher_index,
+                            init_tasks=[plaid_load_model],
+                            topk=cfg.retrieval.k,
+                            seed=seed,
+                        ),
+                        launcher_evaluate,
+                        model_id=f"{model_id}-plaid",
+                        init_tasks=[plaid_load_model],
+                        with_run=cfg.save_runs,
+                        fabric_config=cfg.evaluation.fabric.get_config(),
+                    )
 
     all_configs, all_tags = generate_grid(cfg)
 

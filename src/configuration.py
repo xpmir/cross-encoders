@@ -282,9 +282,6 @@ class PlaidConfiguration:
     batch_size: int = 0
     """Batch size (in tokens) when indexing documents for Fast PLAID"""
 
-    dim: int = 128
-    """Per-token embedding dimension for PLAID index"""
-
     n_bits: GridSearch[int] = 2
     """Number of bits for residual quantization in PLAID"""
 

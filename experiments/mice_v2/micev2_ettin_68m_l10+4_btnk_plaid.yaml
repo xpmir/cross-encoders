@@ -16,7 +16,9 @@ learner:
         lr: 7e-5
 
 evaluation: #default = Minified tests
-    eval_checkpoint: "last"
+    eval_checkpoint:
+        - last
+        - best
     all_datasets: false
     in_domain: false
     beir13: false
@@ -29,10 +31,12 @@ plaid:
     use_plaid: true
     buffer_size: 5000
     n_bits: 8
+    max_doc_length: 512
+    max_query_length: 32
 
 
 indexation:
-    requirements: duration=10h & cpu(cores=16) & cuda(mem=40G)
+    requirements: duration=2h & cpu(cores=16) & cuda(mem=40G)
 
 
 freeze_bottom_layers_phase1: true
