@@ -266,7 +266,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
             top_k=self.topk,
             batchsize=self.batchsize,
             max_query_length=self.max_query_length,
-        )
+        ).tag("plaid_retriever", True)
 
     def colbert_retriever(self, dataset: Documents, key: str = None) -> PlaidRetriever:
         """Genuine ColBERT-style (MaxSim/IVF) first-stage retriever, searching

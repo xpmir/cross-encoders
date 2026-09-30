@@ -6,6 +6,8 @@ description:
 module: cross_encoders_training.experiment
 parent: ../_common.yaml
 nb_repetitions: 2
+pre_experiment: ""
+export_trained_models: true
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:
@@ -29,5 +31,6 @@ evaluation: #default = Minified tests
     all_datasets: false
     in_domain: true
     beir13: true
+    beir13_decontaminated: true
     eval_checkpoint:
         - last

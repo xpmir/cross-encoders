@@ -26,13 +26,6 @@ evaluation: #default = Minified tests
         - "fiqa"
         - "nfcorpus"
 
-plaid:
-    use_plaid: true
-    buffer_size: 5000
-    n_bits: 8
-    max_doc_length: 512
-    max_query_length: 32
-
 indexation:
     requirements: duration=4h & cpu(cores=16) & cuda(mem=40G)
 

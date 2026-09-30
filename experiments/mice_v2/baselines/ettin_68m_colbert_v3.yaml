@@ -40,4 +40,19 @@ evaluation: #default = Minified tests
     eval_checkpoint:
         - last
 
-#TODO Add Plaid Parameters
+use_plaid: true
+include_recall_100: true
+plaid:
+  use_plaid: true
+  max_doc_length: 512
+  max_query_length: 32
+  n_bits: 2
+  kmeans_niters: 4
+  n_ivf_probe: 8
+  buffer_size: 1000
+  fast_plaid_batch_size: 25000
+
+
+indexation:
+  batch_size: 256
+  requirements: duration=15h & cpu(cores=16, mem=20G) & cuda(mem=40G) # need H100

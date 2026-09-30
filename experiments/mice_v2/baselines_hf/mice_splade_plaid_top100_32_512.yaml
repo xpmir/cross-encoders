@@ -1,6 +1,6 @@
-id: eval_mice_plaid
+id: eval_mice_32_512
 title: cross_scorer_evaluation
-description: Evaluation of MICE HF Scorer
+description: Evaluation of MICE HF Scorer with different tokenization
 
 parent: ../_common.yaml
 module: Evaluation.experiment
@@ -8,11 +8,7 @@ pre_experiment: pre_experiment
 
 #First stage: splade-v3
 retriever: naver/splade-v3-distilbert
-
-from_experiment: train_micev2_ettin68m_l10+4_v3_plaid_128
 scorer_type: auto
-
-
 
 use_plaid: false
 include_recall_100: true
@@ -22,8 +18,10 @@ max_doc_length: 512
 evaluation:
   in_domain: false
   beir13: false
-  beir13_decontaminated: false
-  datasets:
-    - scidocs_decontaminated
-    - scifact_decontaminated
-    - arguana_decontaminated
+  beir13_decontaminated: true
+
+grid_search:
+  from_experiment:
+  - train_micev2_ettin68m_l10+4_v3 #initial Ckpt
+  - train_micev2_ettin68m_l10+4_v3_plaid_128 #Version Ft with 128 bottlenexk
+  # - baseline_ettin68m_long

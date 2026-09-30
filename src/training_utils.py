@@ -1368,23 +1368,28 @@ def validate_and_align_config(
     default_cfg = type(xp_config)()
 
     # 1. Base model alignment / override detection
-    src_base = getattr(xpm_model_config, "hf_id", None)
+    src_base = getattr(xpm_model_config, "hf_id", None) or getattr(
+        xpm_model_config, "base", None
+    )
     if src_base and not isinstance(src_base, field):
-        if not getattr(xp_config, "base", None) or xp_config.base == default_cfg.base:
-            logger.info(
-                "[Model Alignment] Inherited base '%s' from loaded model '%s' (was default %r)",
-                src_base,
-                source_label,
-                getattr(xp_config, "base", None),
-            )
+        cfg_base = getattr(xp_config, "base", None)
+        default_base = getattr(default_cfg, "base", None)
+        if not cfg_base or cfg_base == default_base or cfg_base == src_base:
+            if cfg_base != src_base:
+                logger.info(
+                    "[Model Alignment] Inherited base '%s' from loaded model '%s' (was default %r)",
+                    src_base,
+                    source_label,
+                    cfg_base,
+                )
             xp_config.base = src_base
-        elif xp_config.base != src_base:
+        else:
             logger.warning(
                 "[PARAM OVERRIDE] Config explicitly overrides base model! "
                 "Loaded model (%s) has %r, but config specifies %r.",
                 source_label,
                 src_base,
-                xp_config.base,
+                cfg_base,
             )
 
     # 2. Architectural & operational attributes
@@ -1404,7 +1409,9 @@ def validate_and_align_config(
         "utility_pred",
         "gate_target",
         "head_type",
+        "hard_pruning",
         "hard_prune_threshold",
+        "attn_implementation",
     ]
 
     for attr in aligned_attrs:
@@ -1454,7 +1461,51 @@ def validate_and_align_config(
                     cfg_val,
                 )
 
-    # 3. Synchronize tags
+    # 3. Context/tokenization lengths and prompt attributes
+    tok = getattr(xpm_model_config, "tokenizer", None)
+    length_and_prompt_attrs = [
+        "max_query_length",
+        "max_doc_length",
+        "max_length",
+        "query_prompt",
+        "doc_prompt",
+    ]
+    for attr in length_and_prompt_attrs:
+        if not hasattr(xp_config, attr):
+            continue
+
+        cfg_val = getattr(xp_config, attr)
+        default_val = getattr(default_cfg, attr)
+
+        src_val = getattr(xpm_model_config, attr, None)
+        if (src_val is None or isinstance(src_val, field)) and tok is not None:
+            src_val = getattr(tok, attr, None)
+
+        if src_val is None or isinstance(src_val, field):
+            continue
+
+        if cfg_val == default_val:
+            if cfg_val != src_val:
+                logger.info(
+                    "[Model Alignment] Inherited '%s' from loaded model '%s': %r (was default %r)",
+                    attr,
+                    source_label,
+                    src_val,
+                    default_val,
+                )
+                setattr(xp_config, attr, src_val)
+        else:
+            if cfg_val != src_val:
+                logger.warning(
+                    "[PARAM OVERRIDE] Config explicitly overrides loaded model parameter '%s'! "
+                    "Loaded model (%s) value: %r -> Config override value: %r.",
+                    attr,
+                    source_label,
+                    src_val,
+                    cfg_val,
+                )
+
+    # 4. Synchronize tags
     if tags is not None:
         if "base" not in tags or tags["base"] != getattr(xp_config, "base", None):
             tags["base"] = getattr(xp_config, "base", None)

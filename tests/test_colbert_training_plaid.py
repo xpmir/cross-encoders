@@ -5,6 +5,7 @@ Run with:
     uv run pytest tests/test_colbert_training_plaid.py -v
 """
 
+from functools import partial
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
@@ -17,6 +18,8 @@ from cross_encoders_training.experiment import (
 )
 from Evaluation.experiment import BaselinesConfig
 from index_utils import get_plaid_index, _indexes
+from retrievers import plaid_retriever
+from xpmir.index.plaid import PlaidIndex
 from xpmir.neural.sentence_transformers import STModuleLoader, st_multivector_scorer
 from xpmir.test.utils.utils import SampleDocumentStore
 from tests import build_tests
@@ -203,12 +206,29 @@ def test_colbert_checkpoint_evaluation_dual_dispatch():
             ).tag("plaid_retriever", True)
             all_weights.append(plaid_lm)
 
+            plaid_factory = partial(
+                plaid_retriever,
+                cfg,
+                cfg.base,
+                scorer,
+                launcher_index=None,
+                init_tasks=[plaid_lm],
+                topk=cfg.retrieval.k,
+                seed=42,
+            )
             mock_tests.evaluate_retriever(
-                "plaid_retriever_factory",
+                plaid_factory,
                 launcher="launcher_eval",
                 model_id=f"{model_id}-plaid",
                 init_tasks=[plaid_lm],
             )
+
+            # Verify the factory can be called by xpmir evaluate_retriever with (documents, key=key)
+            doc_store = SampleDocumentStore.C(num_docs=4)
+            fake_index = PlaidIndex.C(documents=doc_store, index_path=Path("/tmp/fake_index"))
+            with patch("retrievers.get_plaid_index", return_value=fake_index):
+                retriever_instance = plaid_factory(doc_store, key="test_key")
+                assert retriever_instance is not None
 
     # 1. Verify two evaluations dispatched
     assert evaluate_calls == ["test_model", "test_model-plaid"]

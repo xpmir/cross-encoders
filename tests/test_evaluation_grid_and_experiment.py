@@ -262,7 +262,8 @@ def test_evaluate_scorer_colbert_without_plaid_warning(caplog):
     assert mock_tests.evaluate_retriever.call_count == 1
     call_args = mock_tests.evaluate_retriever.call_args
     retriever_partial = call_args[0][0]
-    assert retriever_partial.keywords["scorer"].tags()["plaid_retriever"] is False
+    assert retriever_partial.keywords["scorer"] is not None
+    assert "plaid_retriever" not in retriever_partial.keywords["scorer"].tags()
 
 
 def test_evaluate_scorer_missing_first_stage_raises():
@@ -285,3 +286,262 @@ def test_evaluate_scorer_missing_first_stage_raises():
             launcher_index=None,
             fabric_config=None,
         )
+
+
+def test_validate_and_align_config_with_baselines_config(caplog):
+    """Test that validate_and_align_config aligns parameters from xpm_model_config with BaselinesConfig."""
+    import logging
+    from types import SimpleNamespace
+    from training_utils import validate_and_align_config
+
+    mock_tok = SimpleNamespace(max_query_length=32, max_doc_length=128)
+    mock_model_cfg = SimpleNamespace(
+        base="jhu-clsp/ettin-encoder-68m",
+        dim_reduction=128,
+        k_features=10,
+        tokenizer=mock_tok,
+    )
+
+    # 1. Test inheritance when BaselinesConfig has defaults (None)
+    cfg = BaselinesConfig(
+        from_experiment="dummy/xp",
+        scorer_type="miceV2",
+    )
+    tags = {}
+    with caplog.at_level(logging.INFO):
+        validate_and_align_config(
+            xp_config=cfg,
+            xpm_model_config=mock_model_cfg,
+            tags=tags,
+            from_ref="mock_xp",
+        )
+
+    assert cfg.max_query_length == 32
+    assert cfg.max_doc_length == 128
+    assert tags["base"] == "jhu-clsp/ettin-encoder-68m"
+    assert any(
+        "Inherited 'max_query_length' from loaded model" in r.message
+        for r in caplog.records
+    )
+
+    # 2. Test explicit override
+    caplog.clear()
+    cfg_override = BaselinesConfig(
+        from_experiment="dummy/xp",
+        scorer_type="miceV2",
+        max_query_length=48,  # Different from default None and model 32
+    )
+    with caplog.at_level(logging.WARNING):
+        validate_and_align_config(
+            xp_config=cfg_override,
+            xpm_model_config=mock_model_cfg,
+            tags=tags,
+            from_ref="mock_xp",
+        )
+
+    assert cfg_override.max_query_length == 48
+    assert any(
+        "Config explicitly overrides loaded model parameter 'max_query_length'"
+        in r.message
+        for r in caplog.records
+    )
+
+
+def test_validate_scorer_init_tasks_catches_mismatch():
+    """Test that validate_scorer_init_tasks raises ValueError when loader or hook points to a different scorer."""
+    from experimaestro.core.objects.config import clone
+    from Evaluation.experiment import validate_scorer_init_tasks
+    from MICE.modeling.mice_v2.modernbert_xpm import InitEvalSparsityHook
+
+    cfg = BaselinesConfig(
+        from_experiment="VictorMorand/MiceV2-l10p4-ettin-68m",
+        scorer_type="miceV2",
+    )
+    scorer, init_tasks, _, _ = resolve_evaluation_scorer(cfg.from_experiment, cfg)
+
+    # 1. Matching scorer and init_tasks passes
+    validate_scorer_init_tasks(scorer, init_tasks)
+
+    # 2. Cloned (detached) scorer causes ValueError
+    cloned_scorer = clone(scorer)
+    with pytest.raises(
+        ValueError, match="is bound to a different scorer instance"
+    ):
+        validate_scorer_init_tasks(cloned_scorer, init_tasks)
+
+    # 3. Sparsity hook pointing to another scorer causes ValueError
+    sparsity_hook = InitEvalSparsityHook.C(scorer=scorer, threshold=0.3)
+    with pytest.raises(
+        ValueError, match="hook points to a different scorer instance"
+    ):
+        validate_scorer_init_tasks(cloned_scorer, [sparsity_hook])
+
+
+def test_evaluate_scorer_standard_reranking_instance_identity():
+    """Test that evaluate_scorer does not detach the scorer from its init_tasks in standard reranking."""
+    from unittest.mock import MagicMock
+    from experimaestro.core.objects.config_utils import ConfigWrapper
+
+    mock_tests = MagicMock()
+    mock_fs_factory = MagicMock()
+    cfg = BaselinesConfig(
+        from_experiment="VictorMorand/MiceV2-l10p4-ettin-68m",
+        scorer_type="miceV2",
+        use_plaid=False,
+    )
+    evaluate_scorer(
+        cfg=cfg,
+        cfg_tags={},
+        tests=mock_tests,
+        first_stage_factories={"splade": (mock_fs_factory, [])},
+        launcher_evaluate=None,
+        launcher_index=None,
+        fabric_config=None,
+    )
+    assert mock_tests.evaluate_retriever.call_count == 1
+    call_args = mock_tests.evaluate_retriever.call_args
+    retriever_partial = call_args[0][0]
+    init_tasks = call_args[1]["init_tasks"]
+
+    # Crucial assertion: the scorer passed to scorer_retriever MUST BE IDENTICAL to the one in init_tasks
+    evaluated_scorer = retriever_partial.keywords["scorer"]
+    loader_task = init_tasks[0]
+    raw_loader = (
+        loader_task.value
+        if isinstance(loader_task, ConfigWrapper)
+        else getattr(loader_task, "task", loader_task)
+    )
+    assert evaluated_scorer is raw_loader.value
+
+
+def test_evaluate_scorer_baseline_comparison_instance_identities():
+    """Test that evaluate_scorer keeps proper instance identities for both baseline and PLAID evaluations."""
+    from unittest.mock import MagicMock
+    from experimaestro.core.objects.config_utils import ConfigWrapper
+
+    mock_tests = MagicMock()
+    mock_fs_factory = MagicMock()
+    cfg = BaselinesConfig(
+        from_experiment="VictorMorand/MiceV2-l10p4-ettin-68m",
+        scorer_type="miceV2",
+        use_plaid=True,
+        compare_with_baseline=True,
+    )
+    evaluate_scorer(
+        cfg=cfg,
+        cfg_tags={},
+        tests=mock_tests,
+        first_stage_factories={"splade": (mock_fs_factory, [])},
+        launcher_evaluate=None,
+        launcher_index=None,
+        fabric_config=None,
+    )
+    # Should evaluate both baseline reranker and PLAID
+    assert mock_tests.evaluate_retriever.call_count == 2
+
+    # Call 0: Baseline 2-stage reranker
+    call_0 = mock_tests.evaluate_retriever.call_args_list[0]
+    retriever_factory_0 = call_0[0][0]
+    scorer_0 = retriever_factory_0.keywords["scorer"]
+    init_tasks_0 = call_0[1]["init_tasks"]
+    raw_loader_0 = (
+        init_tasks_0[0].value
+        if isinstance(init_tasks_0[0], ConfigWrapper)
+        else getattr(init_tasks_0[0], "task", init_tasks_0[0])
+    )
+    assert scorer_0 is raw_loader_0.value
+    # Scorer does not have plaid_retriever, prune_threshold, or attn_implementation tag
+    assert "plaid_retriever" not in scorer_0.tags()
+    assert "prune_threshold" not in scorer_0.tags()
+    assert "attn_implementation" not in scorer_0.tags()
+
+    # Call 1: PLAID retriever
+    call_1 = mock_tests.evaluate_retriever.call_args_list[1]
+    plaid_factory_1 = (
+        call_1.kwargs["retriever"] if "retriever" in call_1.kwargs else call_1[0][0]
+    )
+    scorer_1 = plaid_factory_1.mice_model
+    init_tasks_1 = (
+        call_1.kwargs["init_tasks"]
+        if "init_tasks" in call_1.kwargs
+        else call_1[1]["init_tasks"]
+    )
+    raw_loader_1 = (
+        init_tasks_1[0].value
+        if isinstance(init_tasks_1[0], ConfigWrapper)
+        else getattr(init_tasks_1[0], "task", init_tasks_1[0])
+    )
+    assert scorer_1 is raw_loader_1.value
+    assert "plaid_retriever" not in scorer_1.tags()
+
+    # Crucial assertion: Scorer is NOT cloned! Both baseline and PLAID share the exact same instance!
+    assert scorer_0 is scorer_1
+    assert raw_loader_0.value is raw_loader_1.value
+
+
+def test_two_stage_reranker_tags_plaid_retriever_false():
+    """Test that two_stage_reranker helper tags the created retriever with plaid_retriever=False."""
+    from unittest.mock import MagicMock, patch
+    from Evaluation.experiment import two_stage_reranker
+
+    mock_retriever = MagicMock()
+    mock_retriever.tag.return_value = mock_retriever
+    with patch("Evaluation.experiment.scorer_retriever", return_value=mock_retriever):
+        res = two_stage_reranker(
+            documents=MagicMock(),
+            batch_size=16,
+            scorer=MagicMock(),
+            retrievers=MagicMock(),
+            key="test_dataset",
+        )
+        mock_retriever.tag.assert_called_once_with("plaid_retriever", False)
+        assert res is mock_retriever
+
+
+def test_scorer_tags_only_include_grid_parameters():
+    """Test that prune_threshold and attn_implementation are NOT tagged by default, but ARE tagged when grid-searched."""
+    from unittest.mock import MagicMock
+
+    mock_tests = MagicMock()
+    mock_fs_factory = MagicMock()
+    cfg = BaselinesConfig(
+        from_experiment="VictorMorand/MiceV2-l10p4-ettin-68m",
+        scorer_type="miceV2",
+        use_plaid=False,
+    )
+
+    # 1. Non-grid run: prune_threshold, attn_implementation, plaid_retriever must NOT be in tags
+    evaluate_scorer(
+        cfg=cfg,
+        cfg_tags={},
+        tests=mock_tests,
+        first_stage_factories={"splade": (mock_fs_factory, [])},
+        launcher_evaluate=None,
+        launcher_index=None,
+        fabric_config=None,
+    )
+    call_args = mock_tests.evaluate_retriever.call_args
+    scorer_default = call_args[0][0].keywords["scorer"]
+    tags_default = scorer_default.tags()
+    assert "prune_threshold" not in tags_default
+    assert "attn_implementation" not in tags_default
+    assert "plaid_retriever" not in tags_default
+    assert tags_default["scorer"] == "VictorMorand/MiceV2-l10p4-ettin-68m"
+
+    # 2. Grid-searched run: parameters present in cfg_tags MUST be tagged
+    mock_tests.reset_mock()
+    evaluate_scorer(
+        cfg=cfg,
+        cfg_tags={"hard_prune_threshold": 0.5, "attn_implementation": "sdpa"},
+        tests=mock_tests,
+        first_stage_factories={"splade": (mock_fs_factory, [])},
+        launcher_evaluate=None,
+        launcher_index=None,
+        fabric_config=None,
+    )
+    call_args = mock_tests.evaluate_retriever.call_args
+    scorer_grid = call_args[0][0].keywords["scorer"]
+    tags_grid = scorer_grid.tags()
+    assert tags_grid["hard_prune_threshold"] == 0.5
+    assert tags_grid["attn_implementation"] == "sdpa"
+    assert "plaid_retriever" not in tags_grid

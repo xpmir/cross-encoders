@@ -512,9 +512,9 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                     tests.evaluate_retriever(
                         partial(
                             plaid_retriever,
-                            cfg=cfg,
-                            name=cfg.base,
-                            encoder=scorer_model,
+                            cfg,
+                            cfg.base,
+                            scorer_model,
                             launcher_index=launcher_index,
                             init_tasks=[plaid_load_model],
                             topk=cfg.retrieval.k,

@@ -66,6 +66,7 @@ from retrievers import (
 from training_utils import (
     add_dataset_aggregations,
     resolve_trained_model_loader,
+    validate_and_align_config,
     parse_experiment_ref,
     sync_eval_sparsity_metrics,
     find_candidate_experiment_dirs,
@@ -139,6 +140,9 @@ class BaselinesConfig(NeuralIRExperiment):
     use_plaid: bool = False
     """Whether to use PLAID multi-vector indexing and retrieval."""
 
+    compare_with_baseline: bool = False
+    """If True and use_plaid=True with MICE, also evaluates standard reranking without PLAID."""
+
     plaid: PlaidConfiguration = Factory(PlaidConfiguration)
     """Configuration for PLAID indexing and retrieval."""
 
@@ -206,11 +210,16 @@ def build_first_stage_retrievers(
 def resolve_evaluation_scorer(
     exp_ref: str,
     cfg: BaselinesConfig,
+    cfg_tags: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Scorer, List[Any], Any, str]:
-    """Resolves an experiment ID, local path, or HF Hub model, clones it for safe
-    parameter overrides, and returns the configured Scorer and its init tasks."""
+    """Resolves an experiment ID, local path, or HF Hub model, aligns configuration,
+    and returns the configured Scorer and its init tasks."""
     loader = resolve_trained_model_loader(exp_ref)
     source_model = loader.model
+
+    # Shared configuration validation and alignment with training
+    validate_and_align_config(cfg, source_model, tags=cfg_tags, from_ref=exp_ref)
+
     scorer = clone(source_model)
 
     is_mice_v2 = isinstance(scorer, ModernBertMiceScorer)
@@ -296,31 +305,46 @@ def resolve_evaluation_scorer(
     return scorer, init_tasks, model_loader, resolved_type_str
 
 
+def validate_scorer_init_tasks(scorer: Scorer, init_tasks: List[Any]) -> None:
+    """Validates that any ModuleLoader or scorer-dependent hook in init_tasks points to the exact scorer instance being evaluated."""
+    from experimaestro.core.objects.config_utils import ConfigWrapper
+
+    for task in init_tasks:
+        raw_task = (
+            task.value
+            if isinstance(task, ConfigWrapper)
+            else getattr(task, "task", task)
+        )
+        if hasattr(raw_task, "value") and isinstance(raw_task.value, Scorer):
+            if raw_task.value is not scorer:
+                raise ValueError(
+                    f"Init task {type(raw_task).__name__} is bound to a different scorer instance "
+                    f"(id={id(raw_task.value)}) than the evaluation scorer (id={id(scorer)}). "
+                    "Weights would not be loaded into the evaluated model!"
+                )
+        if hasattr(raw_task, "scorer") and isinstance(raw_task.scorer, Scorer):
+            if raw_task.scorer is not scorer:
+                raise ValueError(
+                    f"Init task {type(raw_task).__name__} hook points to a different scorer instance "
+                    f"(id={id(raw_task.scorer)}) than the evaluation scorer (id={id(scorer)})."
+                )
+
+
 def tag_scorer(
     scorer: Scorer,
     target_id: str,
     resolved_type_str: str,
     is_from_exp: bool,
-    plaid_retriever: bool,
     cfg_tags: Dict[str, Any],
 ):
-    """Tags a scorer instance with model metadata, run identifiers, and grid parameters."""
+    """Tags a scorer instance with model metadata and active grid search parameters."""
     scorer.tag("scorer", target_id)
     scorer.tag("scorer_type", resolved_type_str)
-    scorer.tag("plaid_retriever", plaid_retriever)
     if is_from_exp:
         exp_id, run_id = parse_experiment_ref(target_id)
         scorer.tag("from_experiment", exp_id)
         if run_id:
             scorer.tag("from_run_id", run_id)
-    if getattr(scorer, "hard_prune_threshold", None) is not None:
-        scorer.tag("prune_threshold", str(scorer.hard_prune_threshold))
-    if hasattr(scorer, "attn_implementation") and scorer.attn_implementation:
-        scorer.tag("attn_implementation", scorer.attn_implementation)
-    elif (
-        hasattr(scorer, "pref_attn_implementation") and scorer.pref_attn_implementation
-    ):
-        scorer.tag("attn_implementation", scorer.pref_attn_implementation)
 
     for k, v in cfg_tags.items():
         if k not in (
@@ -331,6 +355,26 @@ def tag_scorer(
             "plaid_retriever",
         ):
             scorer.tag(k, v)
+
+
+def two_stage_reranker(
+    documents,
+    batch_size: int,
+    scorer: Scorer,
+    retrievers: MultiRunRetrieverFactory,
+    key: str = None,
+    **kwargs,
+):
+    """Wraps scorer_retriever to tag the resulting two-stage retriever with plaid_retriever=False."""
+    retriever = scorer_retriever(
+        documents=documents,
+        batch_size=batch_size,
+        scorer=scorer,
+        retrievers=retrievers,
+        key=key,
+        **kwargs,
+    )
+    return retriever.tag("plaid_retriever", False)
 
 
 def evaluate_scorer(
@@ -384,7 +428,7 @@ def evaluate_scorer(
         ScorerType.from_experiment,
     ):
         scorer, ce_init_tasks, model_loader, resolved_type_str = (
-            resolve_evaluation_scorer(target_id, cfg)
+            resolve_evaluation_scorer(target_id, cfg, cfg_tags=cfg_tags)
         )
     elif scorer_type_enum == ScorerType.hfCrossScorer:
         prepare_hf_model(target_id)
@@ -447,6 +491,15 @@ def evaluate_scorer(
     is_colbert = resolved_type_str == ScorerType.stMultiVectorEncoder.value
     is_mice = resolved_type_str == "mice_v2"
 
+    tag_scorer(
+        scorer,
+        target_id=target_id,
+        resolved_type_str=resolved_type_str,
+        is_from_exp=is_from_exp,
+        cfg_tags=cfg_tags,
+    )
+    validate_scorer_init_tasks(scorer, ce_init_tasks)
+
     # -------------------------------------------------------------------------
     # Branch 1: ColBERT + PLAID (End-to-End Multi-Vector Retrieval)
     # ColBERT model is evaluated directly with PLAID index and retrieval.
@@ -493,19 +546,10 @@ def evaluate_scorer(
                 f"candidates from '{retriever_name}' (use_plaid=False). "
                 "If you intended end-to-end multi-vector retrieval, set 'use_plaid: true'."
             )
-            colbert_reranker = clone(scorer)
-            tag_scorer(
-                colbert_reranker,
-                target_id=target_id,
-                resolved_type_str=resolved_type_str,
-                is_from_exp=is_from_exp,
-                plaid_retriever=False,
-                cfg_tags=cfg_tags,
-            )
             two_stage_retriever_factory = partial(
-                scorer_retriever,
+                two_stage_reranker,
                 batch_size=cfg.retrieval.batch_size,
-                scorer=colbert_reranker,
+                scorer=scorer,
                 retrievers=run_retriever_factory,
             )
             tests.evaluate_retriever(
@@ -529,19 +573,10 @@ def evaluate_scorer(
                     f"Scheduling baseline 2-stage evaluation: first_stage={retriever_name}, "
                     f"scorer={target_id} ({resolved_type_str})"
                 )
-                baseline_scorer = clone(scorer)
-                tag_scorer(
-                    baseline_scorer,
-                    target_id=target_id,
-                    resolved_type_str=resolved_type_str,
-                    is_from_exp=is_from_exp,
-                    plaid_retriever=False,
-                    cfg_tags=cfg_tags,
-                )
                 two_stage_retriever_factory = partial(
-                    scorer_retriever,
+                    two_stage_reranker,
                     batch_size=cfg.retrieval.batch_size,
-                    scorer=baseline_scorer,
+                    scorer=scorer,
                     retrievers=run_retriever_factory,
                 )
                 tests.evaluate_retriever(
@@ -556,24 +591,8 @@ def evaluate_scorer(
                 f"Scheduling MICE-PLAID evaluation for: {target_id} (n_bits={cfg.plaid.n_bits}) "
                 f"over first_stage={retriever_name}"
             )
-            plaid_scorer = clone(scorer)
-            tag_scorer(
-                plaid_scorer,
-                target_id=target_id,
-                resolved_type_str=resolved_type_str,
-                is_from_exp=is_from_exp,
-                plaid_retriever=True,
-                cfg_tags=cfg_tags,
-            )
-
-            plaid_loader = plaid_scorer.loader_config(
-                model_loader.path,
-                settings=getattr(model_loader, "settings", None),
-            )
-            plaid_init_tasks = [stop_tags(plaid_loader)]
-
             mice_plaid_factory = MicePlaidRetrieverFactory(
-                mice_model=plaid_scorer,
+                mice_model=scorer,
                 first_stage_factory=run_retriever_factory,
                 topk=cfg.retrieval.k,
                 batchsize=cfg.retrieval.batch_size,
@@ -588,12 +607,12 @@ def evaluate_scorer(
                 batch_size=cfg.indexation.batch_size or cfg.retrieval.batch_size,
                 seed=0,
                 launcher_index=launcher_index,
-                init_tasks=plaid_init_tasks,
+                init_tasks=ce_init_tasks,
             )
             tests.evaluate_retriever(
                 retriever=mice_plaid_factory,
                 launcher=launcher_evaluate,
-                init_tasks=plaid_init_tasks,
+                init_tasks=ce_init_tasks,
                 fabric_config=fabric_config,
                 with_run=cfg.save_runs,
             )
@@ -605,7 +624,7 @@ def evaluate_scorer(
                 colbert_runs = tests.evaluate_retriever(
                     mice_plaid_factory.colbert_retriever,
                     launcher=launcher_evaluate,
-                    init_tasks=plaid_init_tasks,
+                    init_tasks=ce_init_tasks,
                     with_run=True,
                     fabric_config=fabric_config,
                 )
@@ -613,7 +632,7 @@ def evaluate_scorer(
                     "mice-colbert", colbert_runs
                 )
                 mice_colbert_rerank_factory = MicePlaidRetrieverFactory(
-                    mice_model=plaid_scorer,
+                    mice_model=scorer,
                     first_stage_factory=colbert_run_factory,
                     topk=cfg.retrieval.k,
                     batchsize=cfg.retrieval.batch_size,
@@ -628,12 +647,12 @@ def evaluate_scorer(
                     batch_size=cfg.retrieval.batch_size,
                     seed=0,
                     launcher_index=launcher_index,
-                    init_tasks=plaid_init_tasks,
+                    init_tasks=ce_init_tasks,
                 )
                 tests.evaluate_retriever(
                     retriever=mice_colbert_rerank_factory,
                     launcher=launcher_evaluate,
-                    init_tasks=plaid_init_tasks,
+                    init_tasks=ce_init_tasks,
                     fabric_config=fabric_config,
                     with_run=cfg.save_runs,
                 )
@@ -647,19 +666,10 @@ def evaluate_scorer(
             f"Scheduling standard 2-stage evaluation: first_stage={retriever_name}, "
             f"scorer={target_id} ({resolved_type_str})"
         )
-        ce_scorer = clone(scorer)
-        tag_scorer(
-            ce_scorer,
-            target_id=target_id,
-            resolved_type_str=resolved_type_str,
-            is_from_exp=is_from_exp,
-            plaid_retriever=False,
-            cfg_tags=cfg_tags,
-        )
         two_stage_retriever_factory = partial(
-            scorer_retriever,
+            two_stage_reranker,
             batch_size=cfg.retrieval.batch_size,
-            scorer=ce_scorer,
+            scorer=scorer,
             retrievers=run_retriever_factory,
         )
         tests.evaluate_retriever(
@@ -840,7 +850,6 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
             "scorer_type",
             "from_experiment",
             "from_run_id",
-            "prune_threshold",
             "plaid_retriever",
         ]
     for t_dict in all_tags:
