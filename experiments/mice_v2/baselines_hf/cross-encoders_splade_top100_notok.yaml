@@ -26,8 +26,7 @@ max_length: null #This is useless (independent max_query / doc len) but kept for
 max_query_length: null
 max_doc_length: null
 
-retrievers_hf_id:
-  - naver/splade-v3-distilbert
+retriever: naver/splade-v3-distilbert
 
 evaluation:
   #just for debugging

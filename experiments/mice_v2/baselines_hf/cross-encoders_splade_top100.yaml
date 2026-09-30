@@ -31,8 +31,7 @@ grid_search:
     # - scorer_type: st
     #   scorer_id: mixedbread-ai/mxbai-rerank-large-v2
 
-retrievers_hf_id:
-  - naver/splade-v3-distilbert
+retriever: naver/splade-v3-distilbert
 
 evaluation:
   #just for debugging

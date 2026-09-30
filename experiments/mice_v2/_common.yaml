@@ -2,6 +2,7 @@ description:
     This is the base configuration for all Micev2 experiments
 
 module: MICE.experiments.micev2_training
+pre_experiment: pre_experiment
 seed: 12
 
 # By default, all MICE v2 experiments will use splade-v3 top100 as first stage for evaluation.

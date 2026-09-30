@@ -35,7 +35,8 @@ freeze_LN: true
 evaluation: #default = Minified tests
     all_datasets: false
     in_domain: false
-    beir13: true
+    beir13: false
+    beir13_decontaminated: true
     eval_checkpoint:
         - last
 

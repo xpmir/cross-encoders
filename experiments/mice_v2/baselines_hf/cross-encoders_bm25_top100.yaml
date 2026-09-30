@@ -9,7 +9,7 @@ pre_experiment: pre_experiment
 scorer_type: st
 scorer_id: cross-encoder/ettin-reranker-68m-v1
 
-retrievers_hf_id: []
+retriever: bm25
 
 indexation: #bm25 is cpu only, no need for cuda
   requirements: duration=2h & cpu(cores=8, mem=10G) & cuda(mem=10G)

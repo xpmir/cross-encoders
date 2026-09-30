@@ -7,8 +7,7 @@ module: Evaluation.experiment
 pre_experiment: pre_experiment
 
 #First stage: splade-v3
-retrievers_hf_id:
-  - naver/splade-v3-distilbert
+retriever: naver/splade-v3-distilbert
 
 grid_search:
   config_dicts:
@@ -22,9 +21,9 @@ grid_search:
       scorer_id: cross-encoder/ettin-reranker-32m-v1
     # - scorer_type: miceV2
     #   from_experiment: VictorMorand/MiceV2-l10p4-ettin-68m
-    - scorer_type: st_multivector
+    - scorer_type: stMultiVectorEncoder
       scorer_id: lightonai/LateOn
-    - scorer_type: st_multivector
+    - scorer_type: stMultiVectorEncoder
       scorer_id: lightonai/LateOn-unsupervised
 
 max_query_length: 32

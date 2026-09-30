@@ -9,10 +9,11 @@ pre_experiment: pre_experiment
 use_plaid: true
 include_recall_100: true
 
-retrievers_hf_id:
-  - lightonai/LateOn
-  # - lightonai/LateOn-unsupervised
+max_query_length: 32
+max_doc_length: 512
 
+scorer_id: lightonai/LateOn
+scorer_type: stMultiVectorEncoder
 
 plaid:
   max_doc_length: 512
@@ -25,17 +26,18 @@ plaid:
 
 retrieval:
   k: 100
-  requirements: duration=2h & cpu(cores=4, mem=16G) & cuda(mem=30G)
+  requirements: duration=4h & cpu(cores=8, mem=16G) & cuda(mem=30G)
 
 indexation:
   batch_size: 32
-  requirements: duration=2h & cpu(cores=4, mem=20G) & cuda(mem=30G)
+  requirements: duration=4h & cpu(cores=8, mem=20G) & cuda(mem=30G)
 
 evaluation:
   in_domain: false
   beir13: false
+  beir13_decontaminated: true
   datasets:
     - scidocs
     - nfcorpus
     - scifact
-    - arguana
+    # - arguana

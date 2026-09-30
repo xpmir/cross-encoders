@@ -20,8 +20,7 @@ grid_search:
     # - tomaarsen/ms-marco-ettin-32m-reranker
     # - tomaarsen/ms-marco-ettin-17m-reranker
 
-retrievers_hf_id:
-  - naver/splade-v3-distilbert
+retriever: naver/splade-v3-distilbert
 
 indexation:
   requirements: duration=10h & cpu(cores=16, mem=10G) & cuda(mem=30G)

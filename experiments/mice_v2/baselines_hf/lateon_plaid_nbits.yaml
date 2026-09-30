@@ -9,10 +9,6 @@ pre_experiment: pre_experiment
 use_plaid: true
 include_recall_100: true
 
-retrievers_hf_id:
-  - lightonai/LateOn
-  # - lightonai/LateOn-unsupervised
-
 
 plaid:
   max_doc_length: 512
@@ -42,5 +38,12 @@ evaluation:
     # - fiqa
     # - trec_covid
 
+retriever: naver/splade-v3-distilbert
+
 grid_search:
-  plaid.n_bits: [2, 4, 8, 16]
+  plaid.n_bits: [2, 4, 8]
+  config_dicts:
+    - scorer_type: stMultiVectorEncoder
+      scorer_id: lightonai/LateOn
+    - scorer_type: miceV2
+      scorer_id: train_micev2_ettin68m_l10+4_v3_plaid_128

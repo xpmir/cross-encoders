@@ -54,13 +54,14 @@ def plaid_retriever(
             n_full_scores=cfg.plaid.n_full_scores,
             fabric_config=FabricConfiguration.C(precision="bf16-true"),
         )
-        .tag("first_stage", name)
+        .tag("first_stage", "plaid")
         .tag("scorer", name)
         .tag("scorer_type", ScorerType.stMultiVectorEncoder.value)
+        .tag("plaid_retriever", True)
     )
     if tags:
         for k, v in tags.items():
-            if k not in ("first_stage", "scorer", "scorer_type"):
+            if k not in ("first_stage", "scorer", "scorer_type", "plaid_retriever"):
                 retriever.tag(k, v)
     return retriever
 
@@ -74,11 +75,12 @@ def splade_retriever(
     init_tasks: list = None,
     topk: int = None,
     in_memory: bool = False,
+    tags: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Retriever.C:
     """Factory for Splade Retriever, given the current configuration"""
 
-    return SparseRetriever.C(
+    retriever = SparseRetriever.C(
         index=stop_tags(  # drop 'index_documents' tag that clutters eval.
             get_splade_index(
                 documents,
@@ -93,6 +95,11 @@ def splade_retriever(
         encoder=encoder,
         in_memory=in_memory,
     ).tag("first_stage", name)
+    if tags:
+        for k, v in tags.items():
+            if k != "first_stage":
+                retriever.tag(k, v)
+    return retriever
 
 
 def bm25_retriever(
@@ -101,6 +108,7 @@ def bm25_retriever(
     documents: Documents,
     launcher_index=None,
     topk: int = None,
+    tags: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Retriever.C:
     """Factory for BM25 Retriever, given the current configuration"""
@@ -112,11 +120,16 @@ def bm25_retriever(
         max_docs=cfg.indexation.max_indexed,
     ).submit(launcher=launcher_index)
 
-    return BOWRetriever.C(
+    retriever = BOWRetriever.C(
         index=stop_tags(bow_index),
         model=BM25.C(),
         topk=topk or cfg.retrieval.k,
     ).tag("first_stage", name)
+    if tags:
+        for k, v in tags.items():
+            if k != "first_stage":
+                retriever.tag(k, v)
+    return retriever
 
 
 def anserini_bm25_retriever(

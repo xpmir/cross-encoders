@@ -133,11 +133,11 @@ class BaselinesConfig(NeuralIRExperiment):
     save_runs: bool = False
     """Whether to save the evaluation runs in the resultspath."""
 
-    retrievers_hf_id: List[str] = field(factory=list)
-    """List of first-stage retrievers to evaluate (SPLADE or PLAID). If empty, uses BM25."""
+    retriever: str = ""
+    """First-stage candidate retriever model (e.g. 'naver/splade-v3-distilbert' for SPLADE, or 'bm25'/empty for BM25)."""
 
     use_plaid: bool = False
-    """If true, evaluate retrievers_hf_id using PLAID multi-vector retrieval instead of SPLADE."""
+    """Whether to use PLAID multi-vector indexing and retrieval."""
 
     plaid: PlaidConfiguration = Factory(PlaidConfiguration)
     """Configuration for PLAID indexing and retrieval."""
@@ -156,86 +156,51 @@ def build_first_stage_retrievers(
     launcher_index,
     cfg_tags: Optional[Dict[str, Any]] = None,
 ) -> List[Tuple[str, Any, List[Any]]]:
-    """Instantiate first-stage retrievers (SPLADE, PLAID, or BM25)."""
-    all_retrievers = []
-    if len(cfg.retrievers_hf_id) > 0:
-        for retriever_hf_id in cfg.retrievers_hf_id:
-            if not retriever_hf_id:
-                continue
+    """Instantiate the first-stage candidate retriever (SPLADE or BM25).
 
-            prepare_hf_model(retriever_hf_id)
-
-            if cfg.use_plaid:
-                logging.info(f"Instantiating PLAID retriever {retriever_hf_id} ")
-
-                plaid_doc_max = (
-                    cfg.plaid.max_doc_length
-                    if cfg.plaid.max_doc_length is not None
-                    else (cfg.max_doc_length or 300)
-                )
-                plaid_query_max = (
-                    cfg.plaid.max_query_length
-                    if cfg.plaid.max_query_length is not None
-                    else (cfg.max_query_length or 32)
-                )
-
-                plaid_encoder = st_multivector_scorer(
-                    model_id=retriever_hf_id,
-                    doc_maxlen=plaid_doc_max,
-                    query_maxlen=plaid_query_max,
-                    pref_attn_implementation=cfg.attn_implementation,
-                )
-                plaid_encoder.tag("scorer", retriever_hf_id)
-                plaid_encoder.tag("scorer_type", ScorerType.stMultiVectorEncoder.value)
-
-                all_retrievers.append(
-                    (
-                        retriever_hf_id,
-                        partial(
-                            plaid_retriever,
-                            cfg,
-                            retriever_hf_id,
-                            plaid_encoder,
-                            launcher_index=launcher_index,
-                            topk=cfg.retrieval.k,
-                            tags=cfg_tags,
-                        ),
-                        [],
-                    )
-                )
-            else:
-                logging.info(f"Instantiating SPLADE retriever {retriever_hf_id} ")
-
-                splade_encoder, retriever_init_tasks = (
-                    splade_encoder_from_pretrained_hf(retriever_hf_id)
-                )
-
-                all_retrievers.append(
-                    (
-                        retriever_hf_id,
-                        partial(
-                            splade_retriever,
-                            cfg,
-                            retriever_hf_id,
-                            splade_encoder,
-                            launcher_index=launcher_index,
-                            topk=cfg.retrieval.k,
-                            init_tasks=retriever_init_tasks,
-                        ),
-                        retriever_init_tasks,
-                    )
-                )
-
-    if len(all_retrievers) == 0:
-        # add bm25 by default
-        all_retrievers.append(
-            (
-                "bm25",
-                partial(bm25_retriever, cfg, "bm25", launcher_index=launcher_index),
-                [],  # no init tasks for bm25
-            )
+    PLAID is never built here; PLAID is an indexing/retrieval engine for multi-vector
+    scorers (ColBERT) or token storage for MICE rerankers.
+    """
+    retriever_name = (cfg.retriever or "").strip()
+    if retriever_name and retriever_name.lower() != "bm25":
+        logging.info(
+            f"Instantiating SPLADE first-stage candidate retriever: '{retriever_name}'"
         )
-    return all_retrievers
+        prepare_hf_model(retriever_name)
+        splade_encoder, retriever_init_tasks = splade_encoder_from_pretrained_hf(
+            retriever_name
+        )
+        return [
+            (
+                retriever_name,
+                partial(
+                    splade_retriever,
+                    cfg,
+                    retriever_name,
+                    splade_encoder,
+                    launcher_index=launcher_index,
+                    topk=cfg.retrieval.k,
+                    init_tasks=retriever_init_tasks,
+                    tags=cfg_tags,
+                ),
+                retriever_init_tasks,
+            )
+        ]
+
+    logging.info("Instantiating BM25 first-stage candidate retriever")
+    return [
+        (
+            "bm25",
+            partial(
+                bm25_retriever,
+                cfg,
+                "bm25",
+                launcher_index=launcher_index,
+                tags=cfg_tags,
+            ),
+            [],
+        )
+    ]
 
 
 def resolve_evaluation_scorer(
@@ -318,9 +283,54 @@ def resolve_evaluation_scorer(
     resolved_type_str = (
         "mice_v2"
         if is_mice_v2
-        else ("st_multivector" if is_st_mv else ("st" if is_st_ce else "hf"))
+        else (
+            ScorerType.stMultiVectorEncoder.value
+            if is_st_mv
+            else (
+                ScorerType.stCrossEncoder.value
+                if is_st_ce
+                else ScorerType.hfCrossScorer.value
+            )
+        )
     )
     return scorer, init_tasks, model_loader, resolved_type_str
+
+
+def tag_scorer(
+    scorer: Scorer,
+    target_id: str,
+    resolved_type_str: str,
+    is_from_exp: bool,
+    plaid_retriever: bool,
+    cfg_tags: Dict[str, Any],
+):
+    """Tags a scorer instance with model metadata, run identifiers, and grid parameters."""
+    scorer.tag("scorer", target_id)
+    scorer.tag("scorer_type", resolved_type_str)
+    scorer.tag("plaid_retriever", plaid_retriever)
+    if is_from_exp:
+        exp_id, run_id = parse_experiment_ref(target_id)
+        scorer.tag("from_experiment", exp_id)
+        if run_id:
+            scorer.tag("from_run_id", run_id)
+    if getattr(scorer, "hard_prune_threshold", None) is not None:
+        scorer.tag("prune_threshold", str(scorer.hard_prune_threshold))
+    if hasattr(scorer, "attn_implementation") and scorer.attn_implementation:
+        scorer.tag("attn_implementation", scorer.attn_implementation)
+    elif (
+        hasattr(scorer, "pref_attn_implementation") and scorer.pref_attn_implementation
+    ):
+        scorer.tag("attn_implementation", scorer.pref_attn_implementation)
+
+    for k, v in cfg_tags.items():
+        if k not in (
+            "scorer",
+            "scorer_type",
+            "from_experiment",
+            "from_run_id",
+            "plaid_retriever",
+        ):
+            scorer.tag(k, v)
 
 
 def evaluate_scorer(
@@ -332,7 +342,21 @@ def evaluate_scorer(
     launcher_index,
     fabric_config,
 ):
-    """Evaluates a single scorer configuration over all precomputed first-stage retrievers."""
+    """Evaluates a single scorer configuration.
+
+    Supports four execution branches:
+    1. ColBERT + PLAID (use_plaid=True):
+       Evaluated directly as an end-to-end multi-vector retriever with PLAID indexing.
+       No first-stage candidate retrieval needed.
+    2. ColBERT without PLAID (use_plaid=False):
+       Evaluated as a second-stage reranker over candidate runs from first_stage_factories.
+       Logs a loud warning recommending PLAID multi-vector retrieval.
+    3. MICE + PLAID (use_plaid=True):
+       Uses first-stage candidates (SPLADE or BM25) and builds a PLAID index for token storage
+       at the specified n_bits. If compare_with_baseline=True, also evaluates standard reranking.
+    4. Standard Reranking (use_plaid=False, Cross-Encoders or MICE):
+       Full-text cross-encoder reranking over first-stage candidate runs.
+    """
     target_id = ""
     is_from_exp = False
     if cfg.from_experiment:
@@ -419,34 +443,69 @@ def evaluate_scorer(
     else:
         raise ValueError(f"Unsupported scorer_type: '{scorer_type_enum}'")
 
-    scorer.tag("scorer", target_id)
-    scorer.tag("scorer_type", resolved_type_str)
-    if is_from_exp:
-        exp_id, run_id = parse_experiment_ref(target_id)
-        scorer.tag("from_experiment", exp_id)
-        if run_id:
-            scorer.tag("from_run_id", run_id)
-    if getattr(scorer, "hard_prune_threshold", None) is not None:
-        scorer.tag("prune_threshold", str(scorer.hard_prune_threshold))
-    if cfg.attn_implementation:
-        scorer.tag("attn_implementation", cfg.attn_implementation)
+    is_plaid = bool(cfg.use_plaid or (cfg.plaid and cfg.plaid.use_plaid))
+    is_colbert = resolved_type_str == ScorerType.stMultiVectorEncoder.value
+    is_mice = resolved_type_str == "mice_v2"
 
-    for k, v in cfg_tags.items():
-        if k not in ("scorer", "scorer_type", "from_experiment"):
-            scorer.tag(k, v)
+    # -------------------------------------------------------------------------
+    # Branch 1: ColBERT + PLAID (End-to-End Multi-Vector Retrieval)
+    # ColBERT model is evaluated directly with PLAID index and retrieval.
+    # No candidate retriever (SPLADE or BM25) is needed or used.
+    # -------------------------------------------------------------------------
+    if is_plaid and is_colbert:
+        logging.info(
+            f"Scheduling PLAID multi-vector retrieval evaluation for ColBERT scorer: {target_id}"
+        )
+        plaid_retriever_factory = partial(
+            plaid_retriever,
+            cfg,
+            target_id,
+            scorer,
+            launcher_index=launcher_index,
+            topk=cfg.retrieval.k,
+            init_tasks=ce_init_tasks,
+            tags=cfg_tags,
+        )
+        tests.evaluate_retriever(
+            plaid_retriever_factory,
+            launcher=launcher_evaluate,
+            init_tasks=ce_init_tasks,
+            fabric_config=fabric_config,
+            with_run=cfg.save_runs,
+        )
+        return
+
+    # All subsequent branches require a first-stage candidate retriever
+    if not first_stage_factories:
+        raise ValueError(
+            f"Scorer '{target_id}' ({resolved_type_str}) requires a first-stage candidate "
+            "retriever, but none was configured. Please specify 'retriever: ...' in your config."
+        )
 
     for retriever_name, (run_retriever_factory, _) in first_stage_factories.items():
-        is_mice_plaid = cfg.plaid.use_plaid and resolved_type_str == "mice_v2"
-
-        if not is_mice_plaid or cfg.compare_with_baseline:
-            logging.info(
-                f"Scheduling 2-stage evaluation: first_stage={retriever_name}, "
-                f"scorer={target_id} ({resolved_type_str})"
+        # ---------------------------------------------------------------------
+        # Branch 2: ColBERT without PLAID (Second-Stage Reranker over Candidates)
+        # Evaluates ColBERT by re-ranking first-stage candidate runs.
+        # ---------------------------------------------------------------------
+        if is_colbert and not is_plaid:
+            logging.warning(
+                f"Evaluating ColBERT model '{target_id}' as a second-stage reranker over first-stage "
+                f"candidates from '{retriever_name}' (use_plaid=False). "
+                "If you intended end-to-end multi-vector retrieval, set 'use_plaid: true'."
+            )
+            colbert_reranker = clone(scorer)
+            tag_scorer(
+                colbert_reranker,
+                target_id=target_id,
+                resolved_type_str=resolved_type_str,
+                is_from_exp=is_from_exp,
+                plaid_retriever=False,
+                cfg_tags=cfg_tags,
             )
             two_stage_retriever_factory = partial(
                 scorer_retriever,
                 batch_size=cfg.retrieval.batch_size,
-                scorer=scorer,
+                scorer=colbert_reranker,
                 retrievers=run_retriever_factory,
             )
             tests.evaluate_retriever(
@@ -456,30 +515,56 @@ def evaluate_scorer(
                 fabric_config=fabric_config,
                 with_run=cfg.save_runs,
             )
+            continue
 
-        if is_mice_plaid:
-            logging.info(f"Scheduling MICE-PLAID evaluation for: {target_id}")
-            plaid_scorer = clone(scorer)
-            plaid_scorer.tag("scorer", target_id)
-            plaid_scorer.tag("scorer_type", resolved_type_str)
-            plaid_scorer.tag("plaid_retriever", True)
-            if is_from_exp:
-                exp_id, run_id = parse_experiment_ref(target_id)
-                plaid_scorer.tag("from_experiment", exp_id)
-                if run_id:
-                    plaid_scorer.tag("from_run_id", run_id)
-            if getattr(plaid_scorer, "hard_prune_threshold", None) is not None:
-                plaid_scorer.tag(
-                    "prune_threshold", str(plaid_scorer.hard_prune_threshold)
+        # ---------------------------------------------------------------------
+        # Branch 3: MICE + PLAID (Token Storage Indexing & Candidate Reranking)
+        # First-stage retriever provides candidates (SPLADE or BM25).
+        # PLAID is used as token storage for MICE embeddings (at n_bits).
+        # ---------------------------------------------------------------------
+        if is_plaid and is_mice:
+            # Baseline evaluation without PLAID (if requested)
+            if cfg.compare_with_baseline:
+                logging.info(
+                    f"Scheduling baseline 2-stage evaluation: first_stage={retriever_name}, "
+                    f"scorer={target_id} ({resolved_type_str})"
                 )
-            for k, v in cfg_tags.items():
-                if k not in (
-                    "scorer",
-                    "scorer_type",
-                    "from_experiment",
-                    "plaid_retriever",
-                ):
-                    plaid_scorer.tag(k, v)
+                baseline_scorer = clone(scorer)
+                tag_scorer(
+                    baseline_scorer,
+                    target_id=target_id,
+                    resolved_type_str=resolved_type_str,
+                    is_from_exp=is_from_exp,
+                    plaid_retriever=False,
+                    cfg_tags=cfg_tags,
+                )
+                two_stage_retriever_factory = partial(
+                    scorer_retriever,
+                    batch_size=cfg.retrieval.batch_size,
+                    scorer=baseline_scorer,
+                    retrievers=run_retriever_factory,
+                )
+                tests.evaluate_retriever(
+                    two_stage_retriever_factory,
+                    launcher=launcher_evaluate,
+                    init_tasks=ce_init_tasks,
+                    fabric_config=fabric_config,
+                    with_run=cfg.save_runs,
+                )
+
+            logging.info(
+                f"Scheduling MICE-PLAID evaluation for: {target_id} (n_bits={cfg.plaid.n_bits}) "
+                f"over first_stage={retriever_name}"
+            )
+            plaid_scorer = clone(scorer)
+            tag_scorer(
+                plaid_scorer,
+                target_id=target_id,
+                resolved_type_str=resolved_type_str,
+                is_from_exp=is_from_exp,
+                plaid_retriever=True,
+                cfg_tags=cfg_tags,
+            )
 
             plaid_loader = plaid_scorer.loader_config(
                 model_loader.path,
@@ -552,6 +637,38 @@ def evaluate_scorer(
                     fabric_config=fabric_config,
                     with_run=cfg.save_runs,
                 )
+            continue
+
+        # ---------------------------------------------------------------------
+        # Branch 4: Standard Two-Stage Reranking (Cross-Encoders or MICE without PLAID)
+        # Evaluates full-text cross-encoder reranking over first-stage candidate runs.
+        # ---------------------------------------------------------------------
+        logging.info(
+            f"Scheduling standard 2-stage evaluation: first_stage={retriever_name}, "
+            f"scorer={target_id} ({resolved_type_str})"
+        )
+        ce_scorer = clone(scorer)
+        tag_scorer(
+            ce_scorer,
+            target_id=target_id,
+            resolved_type_str=resolved_type_str,
+            is_from_exp=is_from_exp,
+            plaid_retriever=False,
+            cfg_tags=cfg_tags,
+        )
+        two_stage_retriever_factory = partial(
+            scorer_retriever,
+            batch_size=cfg.retrieval.batch_size,
+            scorer=ce_scorer,
+            retrievers=run_retriever_factory,
+        )
+        tests.evaluate_retriever(
+            two_stage_retriever_factory,
+            launcher=launcher_evaluate,
+            init_tasks=ce_init_tasks,
+            fabric_config=fabric_config,
+            with_run=cfg.save_runs,
+        )
 
 
 @ir_experiment()
@@ -627,33 +744,55 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                     fabric_config=fabric_config,
                 )
     else:
-        # Build first-stage retrievers (SPLADE, PLAID, or BM25)
-        all_retrievers = build_first_stage_retrievers(base_config, launcher_index)
-        logging.info(
-            f"Evaluating first-stage retrievers: {[name for name, _, _ in all_retrievers]}"
-        )
+        # Check if any scorer requires first-stage candidate retrieval
+        # ColBERT with PLAID is an end-to-end retriever and does not require candidates.
+        needs_first_stage = False
+        for c in all_configs:
+            st_type = ScorerType.from_string(c.scorer_type) if c.scorer_type else None
+            is_colbert_plaid = (st_type == ScorerType.stMultiVectorEncoder) and (
+                c.use_plaid or c.plaid.use_plaid
+            )
+            if not is_colbert_plaid:
+                needs_first_stage = True
+                break
 
-        # Evaluate First stage retrievers only and cache their runs
         first_stage_factories: Dict[
             str, Tuple[MultiRunRetrieverFactory, List[Any]]
         ] = {}
-        for retriever_name, retriever_factory, retriever_init_tasks in all_retrievers:
-            eval_results = tests.evaluate_retriever(
-                retriever_factory,
-                launcher=launcher_evaluate,
-                init_tasks=retriever_init_tasks,
-                with_run=True,
-                fabric_config=fabric_config,
-            )
-            run_retriever_factory = MultiRunRetrieverFactory.from_results(
-                retriever_name, eval_results
-            )
-            first_stage_factories[retriever_name] = (
-                run_retriever_factory,
-                retriever_init_tasks,
-            )
+
+        if needs_first_stage:
+            # Build first-stage candidate retrievers (SPLADE or BM25)
+            all_retrievers = build_first_stage_retrievers(base_config, launcher_index)
             logging.info(
-                f"First stage only evaluation done for {retriever_name} on datasets {list(run_retriever_factory.runs.keys())}"
+                f"Evaluating first-stage candidate retrievers: {[name for name, _, _ in all_retrievers]}"
+            )
+
+            # Evaluate first-stage retrievers and cache their candidate runs
+            for (
+                retriever_name,
+                retriever_factory,
+                retriever_init_tasks,
+            ) in all_retrievers:
+                eval_results = tests.evaluate_retriever(
+                    retriever_factory,
+                    launcher=launcher_evaluate,
+                    init_tasks=retriever_init_tasks,
+                    with_run=True,
+                    fabric_config=fabric_config,
+                )
+                run_retriever_factory = MultiRunRetrieverFactory.from_results(
+                    retriever_name, eval_results
+                )
+                first_stage_factories[retriever_name] = (
+                    run_retriever_factory,
+                    retriever_init_tasks,
+                )
+                logging.info(
+                    f"First-stage candidate evaluation done for {retriever_name} on datasets {list(run_retriever_factory.runs.keys())}"
+                )
+        else:
+            logging.info(
+                "All scorers are ColBERT + PLAID; skipping first-stage candidate retrieval."
             )
 
         # Evaluate scorers across all grid configurations

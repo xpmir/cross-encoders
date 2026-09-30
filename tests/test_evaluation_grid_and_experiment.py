@@ -150,3 +150,138 @@ def test_evaluate_scorer_missing_scorer_raises():
     cfg = BaselinesConfig()
     with pytest.raises(ValueError, match="Neither 'scorer_id' nor 'from_experiment'"):
         evaluate_scorer(cfg, {}, None, {}, None, None, None)
+
+
+def test_lateon_plaid_nbits_grid_generation():
+    """Test grid generation for LateOn + MICE multi-configuration evaluation."""
+    cfg = BaselinesConfig(
+        use_plaid=True,
+        retriever="naver/splade-v3-distilbert",
+        grid_search={
+            "plaid.n_bits": [2, 4, 8],
+            "config_dicts": [
+                {
+                    "scorer_type": "stMultiVectorEncoder",
+                    "scorer_id": "lightonai/LateOn",
+                },
+                {
+                    "scorer_type": "miceV2",
+                    "scorer_id": "train_micev2_ettin68m_l10+4_v3_plaid_128",
+                },
+            ],
+        },
+    )
+    all_configs, all_tags = generate_grid(cfg)
+    assert len(all_configs) == 6
+
+    # 3 LateOn configs with PLAID (ColBERT + PLAID)
+    lateon_cfgs = [c for c in all_configs if c.scorer_id == "lightonai/LateOn"]
+    assert len(lateon_cfgs) == 3
+    assert {c.plaid.n_bits for c in lateon_cfgs} == {2, 4, 8}
+    assert all(c.use_plaid for c in lateon_cfgs)
+
+    # 3 MICE configs with PLAID
+    mice_cfgs = [
+        c
+        for c in all_configs
+        if c.scorer_id == "train_micev2_ettin68m_l10+4_v3_plaid_128"
+    ]
+    assert len(mice_cfgs) == 3
+    assert {c.plaid.n_bits for c in mice_cfgs} == {2, 4, 8}
+    assert all(c.retriever == "naver/splade-v3-distilbert" for c in mice_cfgs)
+
+
+def test_mice_plaid_nbits_grid_generation():
+    """Test grid generation for MICE across multiple bit-rates."""
+    cfg = BaselinesConfig(
+        use_plaid=True,
+        retriever="naver/splade-v3-distilbert",
+        from_experiment="VictorMorand/MiceV2-l10p4-ettin-68m",
+        scorer_type="miceV2",
+        grid_search={"plaid.n_bits": [2, 4, 8, 16]},
+    )
+    all_configs, all_tags = generate_grid(cfg)
+    assert len(all_configs) == 4
+    assert [c.plaid.n_bits for c in all_configs] == [2, 4, 8, 16]
+    assert all(c.retriever == "naver/splade-v3-distilbert" for c in all_configs)
+
+
+def test_evaluate_scorer_colbert_plaid_dispatch():
+    """Test that ColBERT + PLAID directly dispatches PlaidRetriever without needing first_stage."""
+    from unittest.mock import MagicMock
+
+    mock_tests = MagicMock()
+    cfg = BaselinesConfig(
+        scorer_id="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        scorer_type="stMultiVectorEncoder",
+        use_plaid=True,
+    )
+    # ColBERT + PLAID requires no first_stage_factories
+    evaluate_scorer(
+        cfg=cfg,
+        cfg_tags={"n_bits": 2},
+        tests=mock_tests,
+        first_stage_factories={},
+        launcher_evaluate=None,
+        launcher_index=None,
+        fabric_config=None,
+    )
+    assert mock_tests.evaluate_retriever.call_count == 1
+    call_args = mock_tests.evaluate_retriever.call_args
+    # First argument is a partial of plaid_retriever
+    assert call_args[0][0].func.__name__ == "plaid_retriever"
+
+
+def test_evaluate_scorer_colbert_without_plaid_warning(caplog):
+    """Test that ColBERT without PLAID logs a loud warning and sets plaid_retriever=False."""
+    import logging
+    from unittest.mock import MagicMock
+
+    mock_tests = MagicMock()
+    mock_fs_factory = MagicMock()
+    cfg = BaselinesConfig(
+        scorer_id="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        scorer_type="stMultiVectorEncoder",
+        use_plaid=False,
+    )
+    with caplog.at_level(logging.WARNING):
+        evaluate_scorer(
+            cfg=cfg,
+            cfg_tags={},
+            tests=mock_tests,
+            first_stage_factories={"splade": (mock_fs_factory, [])},
+            launcher_evaluate=None,
+            launcher_index=None,
+            fabric_config=None,
+        )
+    assert any(
+        "Evaluating ColBERT model" in record.message
+        and "second-stage reranker" in record.message
+        for record in caplog.records
+    )
+    assert mock_tests.evaluate_retriever.call_count == 1
+    call_args = mock_tests.evaluate_retriever.call_args
+    retriever_partial = call_args[0][0]
+    assert retriever_partial.keywords["scorer"].tags()["plaid_retriever"] is False
+
+
+def test_evaluate_scorer_missing_first_stage_raises():
+    """Test that evaluate_scorer raises ValueError if a reranker lacks first_stage_factories."""
+    from unittest.mock import MagicMock
+
+    mock_tests = MagicMock()
+    cfg = BaselinesConfig(
+        scorer_id="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        scorer_type="stCrossEncoder",
+        use_plaid=False,
+    )
+    with pytest.raises(ValueError, match="requires a first-stage candidate retriever"):
+        evaluate_scorer(
+            cfg=cfg,
+            cfg_tags={},
+            tests=mock_tests,
+            first_stage_factories={},
+            launcher_evaluate=None,
+            launcher_index=None,
+            fabric_config=None,
+        )

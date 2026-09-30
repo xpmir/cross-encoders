@@ -7,8 +7,7 @@ pre_experiment: pre_experiment
 parent: ../_common.yaml
 gpu: true
 
-retrievers_hf_id:
-  - naver/splade-v3-distilbert
+retriever: naver/splade-v3-distilbert
 
 scorer_type: st
 

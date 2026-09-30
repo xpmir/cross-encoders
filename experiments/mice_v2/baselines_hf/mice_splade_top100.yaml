@@ -7,8 +7,7 @@ module: Evaluation.experiment
 pre_experiment: pre_experiment
 
 #First stage: splade-v3
-retrievers_hf_id:
-  - naver/splade-v3-distilbert
+retriever: naver/splade-v3-distilbert
 
 from_experiment: VictorMorand/MiceV2-l10p4-ettin-68m
 scorer_type: miceV2
