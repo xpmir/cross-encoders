@@ -13,8 +13,21 @@ where they are required for execution.
 
 from experimaestro.experiments import mock_modules
 import logging
+import experimaestro.experiments.mockmodule as mm
 
 logger = logging.getLogger(__name__)
+
+# Ensure _FakeClassProxy has __bases__ = () for issubclass compatibility
+# (e.g. in datasets/utils/_dill.py: issubclass(obj_type, torch.Tensor))
+_orig_proxy_init = mm._FakeClassProxy.__init__
+
+
+def _proxy_init_with_bases(self, fake_class):
+    _orig_proxy_init(self, fake_class)
+    object.__setattr__(self, "__bases__", ())
+
+
+mm._FakeClassProxy.__init__ = _proxy_init_with_bases
 
 # Modules to mock (submodules are automatically included)
 # this avoid the heavy importing of some lib for the main experiment task that only launches the real jobs
