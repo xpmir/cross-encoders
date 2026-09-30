@@ -8,15 +8,15 @@ Run with:
 from functools import partial
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-import pytest
 import pandas as pd
 
-from configuration import CE_FineTuning, Evaluation, Indexation, PlaidConfiguration, ScorerType
+from configuration import CE_FineTuning, Indexation, PlaidConfiguration, ScorerType
 from cross_encoders_training.experiment import (
     build_STMultiVectorEncoder,
     get_ce_name,
 )
 from Evaluation.experiment import BaselinesConfig
+from format import dataframe_to_latex
 from index_utils import get_plaid_index, _indexes
 from retrievers import plaid_retriever
 from xpmir.index.plaid import PlaidIndex
@@ -26,7 +26,7 @@ from tests import build_tests
 
 
 def test_build_st_multivector_encoder_dim_none():
-    """Verify build_STMultiVectorEncoder builds cleanly with self-inferred dimension."""
+    """Verify build_STMultiVectorEncoder builds cleanly with self-inferred dimension (dim=None)."""
     cfg = CE_FineTuning()
     cfg.base = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     cfg.max_query_length = 32
@@ -37,7 +37,25 @@ def test_build_st_multivector_encoder_dim_none():
     assert init_tasks == []
     assert scorer.query_maxlen == 32
     assert scorer.doc_maxlen == 128
+    assert scorer.dim is None
     # Dim is self-inferred by the underlying model
+    instance = scorer.instance()
+    instance.initialize()
+    assert instance.dimension == 128
+
+
+def test_build_st_multivector_encoder_explicit_dim():
+    """Verify build_STMultiVectorEncoder forwards explicit plaid.dim (preserving hash)."""
+    cfg = CE_FineTuning()
+    cfg.base = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    cfg.max_query_length = 32
+    cfg.max_doc_length = 128
+    cfg.plaid.dim = 128
+
+    scorer, init_tasks = build_STMultiVectorEncoder(cfg)
+    assert scorer is not None
+    assert init_tasks == []
+    assert scorer.dim == 128
     instance = scorer.instance()
     instance.initialize()
     assert instance.dimension == 128
@@ -123,9 +141,6 @@ def test_baselines_config_include_recall_100():
         measures = built_measures[0]
         assert any(m.identifier == "R" and m.cutoff == 100 for m in measures)
         assert any(m.identifier == "nDCG" and m.cutoff == 10 for m in measures)
-
-
-from format import dataframe_to_latex
 
 
 def test_independent_loader_cloning_for_plaid():
@@ -327,6 +342,7 @@ def test_plaid_batch_sizes_separation():
             launcher_index=None,
         )
 
+    # fast_plaid_batch_size is Meta[int], so it correctly preserves the task identifier
     assert captured_variant is not None
     assert captured_variant.fast_plaid_batch_size == 32
-    assert captured_builder.__identifier__() != captured_variant.__identifier__()
+    assert captured_builder.__identifier__() == captured_variant.__identifier__()

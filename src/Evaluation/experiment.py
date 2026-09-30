@@ -410,17 +410,21 @@ def evaluate_scorer(
         is_from_exp = True
     elif cfg.scorer_id:
         target_id = cfg.scorer_id
-        exp_id, _ = parse_experiment_ref(target_id)
-        if Path(target_id).is_dir() or bool(find_candidate_experiment_dirs(exp_id)):
-            is_from_exp = True
     else:
         raise ValueError(
             "Neither 'scorer_id' nor 'from_experiment' was specified in config."
         )
 
     scorer_type_enum = ScorerType.from_string(cfg.scorer_type)
-    if scorer_type_enum == ScorerType.from_experiment:
+    if scorer_type_enum in (ScorerType.from_experiment, ScorerType.miceV2):
         is_from_exp = True
+    elif scorer_type_enum == ScorerType.auto:
+        exp_id, _ = parse_experiment_ref(target_id)
+        target_path = Path(target_id).expanduser()
+        if (target_path / "experimaestro.json").exists() or bool(
+            find_candidate_experiment_dirs(exp_id)
+        ):
+            is_from_exp = True
 
     model_loader = None
     if is_from_exp or scorer_type_enum in (
@@ -431,7 +435,8 @@ def evaluate_scorer(
             resolve_evaluation_scorer(target_id, cfg, cfg_tags=cfg_tags)
         )
     elif scorer_type_enum == ScorerType.hfCrossScorer:
-        prepare_hf_model(target_id)
+        if not Path(target_id).is_dir():
+            prepare_hf_model(target_id)
         scorer, ce_init_tasks = hf_cross_scorer(
             hf_id=target_id,
             max_length=cfg.max_length,
@@ -441,7 +446,8 @@ def evaluate_scorer(
         )
         resolved_type_str = ScorerType.hfCrossScorer.value
     elif scorer_type_enum == ScorerType.stCrossEncoder:
-        prepare_hf_model(target_id)
+        if not Path(target_id).is_dir():
+            prepare_hf_model(target_id)
         st_tok = None
         if cfg.max_query_length is not None or cfg.max_doc_length is not None:
             from xpmir.neural.huggingface import HFQueryDocTokenizer
@@ -461,7 +467,8 @@ def evaluate_scorer(
         ce_init_tasks = []
         resolved_type_str = ScorerType.stCrossEncoder.value
     elif scorer_type_enum == ScorerType.stMultiVectorEncoder:
-        prepare_hf_model(target_id)
+        if not Path(target_id).is_dir():
+            prepare_hf_model(target_id)
         query_maxlen = cfg.max_query_length
         doc_maxlen = cfg.max_doc_length or cfg.max_length
 
@@ -476,8 +483,16 @@ def evaluate_scorer(
                 "Consider checking your length config."
             )
 
+        # TODO: Remove explicit `dim` override once legacy runs with dim=128 are deprecated
+        dim = cfg.plaid.dim
+        if dim is not None:
+            logging.info(
+                f"MultiVector scorer '{target_id}': using explicit projection dimension dim={dim}"
+            )
+
         scorer = st_multivector_scorer(
             model_id=target_id,
+            dim=dim,
             query_maxlen=query_maxlen,
             doc_maxlen=doc_maxlen,
             pref_attn_implementation=cfg.attn_implementation,

@@ -545,3 +545,73 @@ def test_scorer_tags_only_include_grid_parameters():
     assert tags_grid["hard_prune_threshold"] == 0.5
     assert tags_grid["attn_implementation"] == "sdpa"
     assert "plaid_retriever" not in tags_grid
+
+
+def test_evaluate_scorer_local_st_directory_as_scorer_id(tmp_path):
+    """Test that evaluate_scorer treats a local directory path with scorer_type='st' as a HF/ST model rather than an Experimaestro object."""
+    import json
+    from unittest.mock import MagicMock
+    from xpmir.neural.sentence_transformers import STCrossEncoder
+
+    # Create mock ST model directory on disk with NO experimaestro.json
+    model_dir = tmp_path / "cross-encoder-ettin-68m"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(json.dumps({"max_position_embeddings": 512}))
+    (model_dir / "modules.json").write_text(json.dumps([]))
+
+    mock_tests = MagicMock()
+    mock_fs_factory = MagicMock()
+    cfg = BaselinesConfig(
+        scorer_id=str(model_dir),
+        scorer_type="st",
+        max_query_length=32,
+        max_doc_length=512,
+    )
+
+    evaluate_scorer(
+        cfg=cfg,
+        cfg_tags={},
+        tests=mock_tests,
+        first_stage_factories={"splade": (mock_fs_factory, [])},
+        launcher_evaluate=None,
+        launcher_index=None,
+        fabric_config=None,
+    )
+
+    assert mock_tests.evaluate_retriever.call_count == 1
+    call_args = mock_tests.evaluate_retriever.call_args
+    retriever_partial = call_args[0][0]
+    evaluated_scorer = retriever_partial.keywords["scorer"]
+    init_tasks = call_args[1]["init_tasks"]
+
+    # Verify that it is instantiated as an STCrossEncoder with no init tasks and no from_experiment tags
+    assert isinstance(evaluated_scorer, STCrossEncoder)
+    assert init_tasks == []
+    tags = evaluated_scorer.tags()
+    assert tags["scorer"] == str(model_dir)
+    assert tags["scorer_type"] == "stCrossEncoder"
+    assert "from_experiment" not in tags
+    assert "from_run_id" not in tags
+
+
+def test_get_hf_config_local_directory(tmp_path):
+    """Test that get_hf_config reads config.json from a local directory directly."""
+    import json
+    from xpm_torch.huggingface import get_hf_config
+
+    model_dir = tmp_path / "local_hf_model"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(json.dumps({"max_position_embeddings": 256, "hidden_size": 768}))
+
+    config = get_hf_config(str(model_dir))
+    assert config["max_position_embeddings"] == 256
+    assert config["hidden_size"] == 768
+
+
+def test_prepare_hf_model_local_directory(tmp_path):
+    """Test that prepare_hf_model returns True immediately for a local directory."""
+    from xpm_torch.huggingface import prepare_hf_model
+
+    local_dir = tmp_path / "dummy_dir"
+    local_dir.mkdir()
+    assert prepare_hf_model(str(local_dir)) is True

@@ -31,12 +31,15 @@ max_doc_length: 512
 
 evaluation: #default = Minified tests
     all_datasets: false
-    in_domain: false
+    in_domain: true
     beir13: true
+    beir13_decontaminated: true
     eval_checkpoint:
         - last
-        - best
+        # - best
 
+plaid:
+    dim: 128
 
 grid_search:
     learner.optimization.lr: [3e-5, 1e-4]

@@ -172,9 +172,16 @@ def build_STMultiVectorEncoder(cfg) -> tuple[STMultiVectorEncoder, list]:
         else "maxsim"
     )
 
+    # TODO: Remove explicit `dim` override once legacy runs with dim=128 are deprecated
+    dim = cfg.plaid.dim
+    if dim is not None:
+        logger.info(
+            f"MultiVector scorer: using explicit projection dimension dim={dim}"
+        )
+
     scorer = st_multivector_scorer(
         model_id=cfg.base,
-        dim=None,
+        dim=dim,
         query_maxlen=query_maxlen,
         doc_maxlen=doc_maxlen,
         pref_attn_implementation=attn_impl,

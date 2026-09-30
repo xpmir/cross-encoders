@@ -3,7 +3,9 @@ title: "Mice-Ettin-400m Training"
 description:
     Long Training for Mice-l12+4
 parent: ./_common_mice_v3.yaml
-export_trained_models: true #by default, override to save best model among seeds / configs: ready for HF export
+
+# pre_experiment: "" #uncomment to save model
+# export_trained_models: false #by default, override to save best model among seeds / configs: ready for HF export
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:

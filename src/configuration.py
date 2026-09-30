@@ -311,6 +311,10 @@ class PlaidConfiguration:
     the existing SPLADE/BM25-based baselines. Requires use_plaid=True."""
 
     ### Indexation params ###
+    # TODO: Remove `dim` once previous runs with hardcoded dim=128 are finished/deprecated
+    dim: GridSearch[Optional[int]] = None
+    """Projection dimension of the per-token vectors (if None, inferred from model weights)."""
+
     max_doc_length: GridSearch[Optional[int]] = None
     """Maximum number of tokens per document stored in the PLAID index.
     When set, overrides the encoder's default to force storing only up to this many vectors."""
