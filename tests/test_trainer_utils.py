@@ -98,3 +98,44 @@ def test_wrap_collate_with_wrapped_model():
     batch = collate_fn(["doc1", "doc2"])
     assert batch["records"] == ["doc1", "doc2"]
     assert batch["tokenized_records"] == {"input_ids": [1, 2, 3]}
+
+
+def test_export_model_skips_when_torch_mocked(tmp_path, caplog, monkeypatch):
+    import pandas as pd
+    from experimaestro.experiments.mockmodule import FakeModule
+    from training_utils import export_model
+    import training_utils as tu
+
+    dummy_torch = FakeModule("torch", None)
+    monkeypatch.setattr(tu, "torch", dummy_torch)
+
+    best_tags = {"base": "dummy_base", "from_experiment": "exp1"}
+    csv_results = pd.DataFrame([{"dataset": "test", "ndcg": 0.5}])
+    md_results = pd.DataFrame([{"dataset": "test", "ndcg": 0.5}])
+
+    class DummyTask:
+        class __xpm__:
+            @staticmethod
+            def tags():
+                return best_tags
+
+        def export_action(self, *args, **kwargs):
+            raise RuntimeError("Should not be called when torch is mocked!")
+
+    dummy_weight_task = DummyTask()
+
+    with caplog.at_level(logging.WARNING):
+        export_model(
+            best_tags=best_tags,
+            model_name="test_model",
+            csv_results=csv_results,
+            md_results=md_results,
+            learners=[],
+            all_weights=[dummy_weight_task],
+            best_cfg=None,
+            resultspath=tmp_path,
+            save_runs=False,
+        )
+
+    assert "MODEL EXPORT SKIPPED - MOCKS DETECTED" in caplog.text
+    assert (tmp_path / "models" / "test_model" / "results.csv").exists()

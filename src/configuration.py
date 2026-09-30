@@ -322,8 +322,9 @@ class PlaidConfiguration:
     buffer_size: GridSearch[int] = 1000
     """Number of documents to use for creating/updating the PLAID index"""
 
-    batch_size: int = 0
-    """Batch size (in tokens) when indexing documents for Fast PLAID"""
+    fast_plaid_batch_size: GridSearch[int] = 25000
+    """Fast-PLAID internal batch size (in tokens) used by the Rust engine for quantization
+    and shard writing. Defaults to 25000 (native Fast-PLAID default)."""
 
     n_bits: GridSearch[int] = 2
     """Number of bits for residual quantization in PLAID"""

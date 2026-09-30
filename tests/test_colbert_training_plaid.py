@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import pandas as pd
 
-from configuration import CE_FineTuning, Evaluation, PlaidConfiguration, ScorerType
+from configuration import CE_FineTuning, Evaluation, Indexation, PlaidConfiguration, ScorerType
 from cross_encoders_training.experiment import (
     build_STMultiVectorEncoder,
     get_ce_name,
@@ -246,3 +246,67 @@ def test_dataframe_to_latex_plaid_deduplication():
     assert "cross-encoder/ms-marco-MiniLM-L-6-v2" in latex
     # For 2-stage re-ranking, should keep "bm25 / cross-encoder/ms-marco-MiniLM-L-6-v2"
     assert "bm25 / cross-encoder/ms-marco-MiniLM-L-6-v2" in latex
+
+
+def test_plaid_batch_sizes_separation():
+    """Verify that get_plaid_index correctly separates doc encoder batch_size from fast_plaid_batch_size,
+    and that varying fast_plaid_batch_size changes the PlaidIndexBuilder identifier."""
+    _indexes.clear()
+    doc_store = SampleDocumentStore.C(num_docs=4)
+    scorer = st_multivector_scorer(model_id="cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+    plaid_cfg = PlaidConfiguration(
+        n_bits=2,
+        kmeans_niters=2,
+        buffer_size=4,
+        fast_plaid_batch_size=25000,
+    )
+    indexation_cfg = Indexation(batch_size=64)
+
+    captured_builder = None
+
+    def mock_submit(self, launcher=None, init_tasks=None):
+        nonlocal captured_builder
+        captured_builder = self
+        return MagicMock()
+
+    with patch("xpmir.index.plaid.PlaidIndexBuilder.C.submit", new=mock_submit):
+        get_plaid_index(
+            documents=doc_store,
+            encoder=scorer,
+            plaid_cfg=plaid_cfg,
+            indexation_cfg=indexation_cfg,
+            launcher_index=None,
+        )
+
+    assert captured_builder is not None
+    assert captured_builder.batch_size == 64
+    assert captured_builder.fast_plaid_batch_size == 25000
+
+    # Also test varying fast_plaid_batch_size changes the task identifier
+    _indexes.clear()
+    plaid_cfg_variant = PlaidConfiguration(
+        n_bits=2,
+        kmeans_niters=2,
+        buffer_size=4,
+        fast_plaid_batch_size=32,
+    )
+    captured_variant = None
+
+    def mock_submit_variant(self, launcher=None, init_tasks=None):
+        nonlocal captured_variant
+        captured_variant = self
+        return MagicMock()
+
+    with patch("xpmir.index.plaid.PlaidIndexBuilder.C.submit", new=mock_submit_variant):
+        get_plaid_index(
+            documents=doc_store,
+            encoder=scorer,
+            plaid_cfg=plaid_cfg_variant,
+            indexation_cfg=indexation_cfg,
+            launcher_index=None,
+        )
+
+    assert captured_variant is not None
+    assert captured_variant.fast_plaid_batch_size == 32
+    assert captured_builder.__identifier__() != captured_variant.__identifier__()

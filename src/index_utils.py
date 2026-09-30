@@ -1,11 +1,12 @@
 """Utilities for index management."""
 
 import logging
+from typing import Optional
 from xpmir.index.sparse import SparseRetrieverIndexBuilder
 from xpmir.index.plaid import PlaidIndexBuilder
 from xpmir.rankers import Documents
 from xpm_torch.configuration import FabricConfiguration
-from configuration import PlaidConfiguration
+from configuration import Indexation, PlaidConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ def get_plaid_index(
     encoder,
     plaid_cfg: PlaidConfiguration,
     launcher_index,
+    indexation_cfg: Optional[Indexation] = None,
+    batch_size: Optional[int] = None,
     init_tasks: list = None,
     seed: int = 42,
 ):
@@ -66,18 +69,27 @@ def get_plaid_index(
     if init_tasks is None:
         init_tasks = []
 
-    batch_size = (
-        plaid_cfg.batch_size
-        if plaid_cfg.batch_size and plaid_cfg.batch_size > 0
-        else 32
+    # Document encoder batch size (GPU forward pass)
+    if batch_size is not None and batch_size > 0:
+        doc_batch_size = batch_size
+    elif indexation_cfg is not None and indexation_cfg.batch_size > 0:
+        doc_batch_size = indexation_cfg.batch_size
+    else:
+        doc_batch_size = 32
+
+    # Fast-PLAID internal token batch size
+    fast_plaid_bs = (
+        plaid_cfg.fast_plaid_batch_size
+        if plaid_cfg.fast_plaid_batch_size > 0
+        else 25000
     )
 
     index_builder = PlaidIndexBuilder.C(
         documents=documents,
         encoder=encoder,
         buffer_size=plaid_cfg.buffer_size,
-        batch_size=batch_size,
-        fast_plaid_batch_size=plaid_cfg.batch_size if plaid_cfg.batch_size > 0 else 32,
+        batch_size=doc_batch_size,
+        fast_plaid_batch_size=fast_plaid_bs,
         n_bits=plaid_cfg.n_bits,
         kmeans_niters=plaid_cfg.kmeans_niters,
         n_samples_kmeans=plaid_cfg.n_samples_kmeans,

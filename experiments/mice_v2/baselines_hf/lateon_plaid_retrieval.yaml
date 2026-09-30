@@ -22,7 +22,7 @@ plaid:
   kmeans_niters: 4
   n_ivf_probe: 8
   buffer_size: 1000
-  batch_size: 32
+  fast_plaid_batch_size: 25000
 
 retrieval:
   k: 100

@@ -13,7 +13,7 @@ from xpmir.index.plaid import PlaidIndex, PlaidIndexBuilder, PlaidRetriever
 from xpmir.neural.sentence_transformers import st_multivector_scorer
 from retrievers import plaid_retriever
 from index_utils import _indexes
-from configuration import PlaidConfiguration
+from configuration import Indexation, PlaidConfiguration
 from MICE.modeling.mice_v2.modernbert_xpm import mice_v2_scorer
 
 
@@ -139,6 +139,7 @@ def test_plaid_retriever_factory(tmp_path: Path):
         class MockConfig:
             plaid = PlaidConfiguration(n_ivf_probe=4, n_bits=2)
             retrieval = type("MockRetrieval", (), {"k": 100})()
+            indexation = Indexation()
 
         retriever_c = plaid_retriever(
             cfg=MockConfig(),

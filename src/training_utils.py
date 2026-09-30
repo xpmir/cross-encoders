@@ -12,6 +12,7 @@ from functools import lru_cache
 import torch
 from torch import Tensor
 from experimaestro import RunMode, Param, field
+from experimaestro.experiments.mockmodule import FakeModule
 from experimaestro.launcherfinder import find_launcher
 from experimaestro.annotations import tags as get_tags
 from xpm_torch.context import InitializationHook, Context
@@ -626,22 +627,38 @@ def export_model(
                 model_obj._tb_path = tb_log_path
             model_obj._export_metadata = export_metadata
 
-        logger.info(f"Exporting model using ExportAction to {best_model_path}")
-        action_cfg = best_model_loader.export_action(default_name=model_name)
-        action_inst = action_cfg.instance()
+        if isinstance(torch, FakeModule):
+            logger.warning(
+                "\n" + "=" * 80 + "\n"
+                f"[MODEL EXPORT SKIPPED - MOCKS DETECTED]\n"
+                f"Model '{model_name}' was NOT exported to {best_model_path} because\n"
+                "modules (torch, transformers) are mocked in this experiment manager process (pre_experiment).\n"
+                "Instantiating and exporting PyTorch weights to safetensors requires real PyTorch and Transformers.\n\n"
+                "All metrics, raw_results.csv, and model results.csv have been saved successfully.\n"
+                "To export the model safetensors to results/models/:\n"
+                "  1. Override 'pre_experiment: []' in your experiment YAML (or run without pre_experiment)\n"
+                "  2. Re-run: uv run experimaestro run-experiment <your_experiment.yaml>\n"
+                "     (All completed SLURM jobs will be reused from cache instantly; export will finish in ~5s)\n"
+                + "="
+                * 80
+            )
+        else:
+            logger.info(f"Exporting model using ExportAction to {best_model_path}")
+            action_cfg = best_model_loader.export_action(default_name=model_name)
+            action_inst = action_cfg.instance()
 
-        # Attach metadata to action_inst loader & model so it is accessible during write_hub_extras
-        if hasattr(action_inst, "loader") and action_inst.loader is not None:
-            if (
-                hasattr(action_inst.loader, "model")
-                and action_inst.loader.model is not None
-            ):
-                action_inst.loader.model._export_metadata = export_metadata
-                action_inst.loader.model.model_name = model_name
-                if tb_log_path:
-                    action_inst.loader.model._tb_path = tb_log_path
+            # Attach metadata to action_inst loader & model so it is accessible during write_hub_extras
+            if hasattr(action_inst, "loader") and action_inst.loader is not None:
+                if (
+                    hasattr(action_inst.loader, "model")
+                    and action_inst.loader.model is not None
+                ):
+                    action_inst.loader.model._export_metadata = export_metadata
+                    action_inst.loader.model.model_name = model_name
+                    if tb_log_path:
+                        action_inst.loader.model._tb_path = tb_log_path
 
-        action_inst.export_to_folder(best_model_path)
+            action_inst.export_to_folder(best_model_path)
     else:
         logger.warning(f"Could not find model task for tags {best_tags} in all_weights")
 

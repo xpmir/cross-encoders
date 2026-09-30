@@ -585,7 +585,7 @@ def evaluate_scorer(
             mice_plaid_factory.build_indexes(
                 evaluations=tests,
                 cfg=cfg.plaid,
-                batch_size=cfg.retrieval.batch_size,
+                batch_size=cfg.indexation.batch_size or cfg.retrieval.batch_size,
                 seed=0,
                 launcher_index=launcher_index,
                 init_tasks=plaid_init_tasks,

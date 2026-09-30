@@ -7,6 +7,8 @@ description:
 module: MICE.experiments.micev2_training
 parent: ./_ettin68m.yaml
 nb_repetitions: 2
+export_trained_models: true
+pre_experiment: ""
 
 from_experiment: train_micev2_ettin68m_l10+4_v3
 
@@ -22,12 +24,12 @@ evaluation: #default = Minified tests
     beir13: false
     beir13_decontaminated: true
 
-plaid:
-    use_plaid: true
-    buffer_size: 5000
-    n_bits: 8
-    max_doc_length: 512
-    max_query_length: 32
+# plaid: #TODO when plaid params are fixed
+#     use_plaid: true
+#     buffer_size: 5000
+#     n_bits: 8
+#     max_doc_length: 512
+#     max_query_length: 32
 
 indexation:
     requirements: duration=4h & cpu(cores=16) & cuda(mem=40G)
