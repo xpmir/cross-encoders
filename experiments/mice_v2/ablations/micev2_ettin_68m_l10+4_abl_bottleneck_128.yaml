@@ -1,0 +1,46 @@
+id: train_micev2_ettin68m_l10+4_v3_abl_btnk_128
+title: "Retrain a bottleneck Auto-Encoder on top of trained Mice"
+description:
+    With bottleNeck 128, look if its better to freeze parts of the model.
+module: MICE.experiments.micev2_training
+parent: ../_ettin68m.yaml
+nb_repetitions: 2
+
+from_experiment: train_micev2_ettin68m_l10+4_v3
+
+learner:
+    optimization:
+        max_epochs: 5000 # 5k x 256 x 100 = 128M < 143M in dataset
+        lr: 7e-5
+
+evaluation: #default = Minified tests
+    eval_checkpoint:
+        - last
+        - best
+    all_datasets: false
+    in_domain: false
+    beir13: false
+    datasets:
+        - "scifact"
+        - "touche"
+        - "fiqa"
+        - "nfcorpus"
+
+plaid:
+    use_plaid: true
+    buffer_size: 5000
+    n_bits: 8
+    max_doc_length: 512
+    max_query_length: 32
+
+indexation:
+    requirements: duration=4h & cpu(cores=16) & cuda(mem=40G)
+
+doc_bottleneck_dim: 128
+
+
+grid_search:
+    config_dicts:
+        - {freeze_top_layers: true, freeze_bottom_layers_phase1: true}
+        - {freeze_top_layers: false, freeze_bottom_layers_phase1: true}
+        - {freeze_top_layers: false, freeze_bottom_layers_phase1: false}

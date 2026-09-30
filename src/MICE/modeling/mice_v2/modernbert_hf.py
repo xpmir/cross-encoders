@@ -2032,8 +2032,13 @@ AutoModelForSequenceClassification.register(
     ModernBertMiceConfig, ModernBertMiceForSequenceClassification
 )
 
-ModernBertMiceConfig.register_for_auto_class("AutoConfig")
-ModernBertMiceForSequenceClassification.register_for_auto_class("AutoModel")
-ModernBertMiceForSequenceClassification.register_for_auto_class(
-    "AutoModelForSequenceClassification"
-)
+try:
+    ModernBertMiceConfig.register_for_auto_class("AutoConfig")
+    ModernBertMiceForSequenceClassification.register_for_auto_class("AutoModel")
+    ModernBertMiceForSequenceClassification.register_for_auto_class(
+        "AutoModelForSequenceClassification"
+    )
+except AttributeError:
+    # When transformers is mocked in pre_experiment during experiment orchestration,
+    # base classes are replaced with _FakeBaseClass which lacks register_for_auto_class
+    pass

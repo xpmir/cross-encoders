@@ -115,7 +115,7 @@ def test_baselines_config_include_recall_100():
         return mock_eval
 
     with patch("tests.DatasetSpec.build", side_effect=fake_build, autospec=True):
-        build_tests(cfg.evaluation, retrievers_only=False, check_docs=False)
+        build_tests(cfg.evaluation, check_docs=False)
         assert len(built_measures) == 1
         measures = built_measures[0]
         assert any(m.identifier == "R" and m.cutoff == 100 for m in measures)

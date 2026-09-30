@@ -1,14 +1,13 @@
 id: eval_scorer_bm25_top100
 title: cross_scorer_evaluation
-description: Debug Evalutation of pushed HF Models
+description: Debug Evaluation of pushed HF Models
 
 parent: ../_common.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 
-
-scorers_st_id:
-  - cross-encoder/ettin-reranker-68m-v1
+scorer_type: st
+scorer_id: cross-encoder/ettin-reranker-68m-v1
 
 retrievers_hf_id: []
 

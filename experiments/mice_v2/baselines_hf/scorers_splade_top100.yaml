@@ -10,22 +10,25 @@ pre_experiment: pre_experiment
 retrievers_hf_id:
   - naver/splade-v3-distilbert
 
-
-scorers_st_id:
-  - cross-encoder/ettin-reranker-400m-v1
-  - cross-encoder/ettin-reranker-150m-v1
-  - cross-encoder/ettin-reranker-68m-v1
-  - cross-encoder/ettin-reranker-32m-v1
-  # - VictorMorand/MiceV2-l10p4-ettin-68m
-
-
-scorers_st_multivector_id:
-  - lightonai/LateOn
-  - lightonai/LateOn-unsupervised
+grid_search:
+  config_dicts:
+    - scorer_type: st
+      scorer_id: cross-encoder/ettin-reranker-400m-v1
+    - scorer_type: st
+      scorer_id: cross-encoder/ettin-reranker-150m-v1
+    - scorer_type: st
+      scorer_id: cross-encoder/ettin-reranker-68m-v1
+    - scorer_type: st
+      scorer_id: cross-encoder/ettin-reranker-32m-v1
+    # - scorer_type: miceV2
+    #   from_experiment: VictorMorand/MiceV2-l10p4-ettin-68m
+    - scorer_type: st_multivector
+      scorer_id: lightonai/LateOn
+    - scorer_type: st_multivector
+      scorer_id: lightonai/LateOn-unsupervised
 
 max_query_length: 32
 max_doc_length: 512
-
 
 evaluation:
   #just for debugging

@@ -73,6 +73,49 @@ class ScorerType(str, Enum):
     stCrossEncoder = "stCrossEncoder"
     stMultiVectorEncoder = "stMultiVectorEncoder"
     hfCrossScorer = "hfCrossScorer"
+    miceV2 = "miceV2"
+    from_experiment = "from_experiment"
+    auto = "auto"
+
+    @classmethod
+    def from_string(cls, val: Union[str, "ScorerType"]) -> "ScorerType":
+        """Resolve a string or ScorerType instance to a ScorerType enum member."""
+        if isinstance(val, cls):
+            return val
+        if not isinstance(val, str):
+            raise TypeError(f"Expected str or ScorerType, got {type(val).__name__}")
+
+        normalized = val.strip()
+        cleaned = normalized.lower().replace("-", "").replace("_", "")
+        for member in cls:
+            if cleaned == member.value.lower().replace("-", "").replace(
+                "_", ""
+            ) or cleaned == member.name.lower().replace("-", "").replace("_", ""):
+                return member
+
+        aliases = {
+            "hf": cls.hfCrossScorer,
+            "hfcrossscorer": cls.hfCrossScorer,
+            "st": cls.stCrossEncoder,
+            "stcrossencoder": cls.stCrossEncoder,
+            "sentencetransformers": cls.stCrossEncoder,
+            "multivector": cls.stMultiVectorEncoder,
+            "stmultivector": cls.stMultiVectorEncoder,
+            "stmultivectorencoder": cls.stMultiVectorEncoder,
+            "colbert": cls.stMultiVectorEncoder,
+            "micev2": cls.miceV2,
+            "mice": cls.miceV2,
+            "fromexperiment": cls.from_experiment,
+            "experiment": cls.from_experiment,
+            "auto": cls.auto,
+        }
+        if cleaned in aliases:
+            return aliases[cleaned]
+
+        raise ValueError(
+            f"Unknown scorer_type: '{val}'. "
+            f"Expected one of {[e.value for e in cls]} or aliases {list(aliases.keys())}"
+        )
 
 
 class Validation(str, Enum):

@@ -1,0 +1,33 @@
+id: eval_mice_plaid_nbits
+title: mice_plaid_nbits_evaluation
+description: Evaluate MICE reranker across multiple PLAID bit-rates
+
+parent: ../_common.yaml
+module: Evaluation.experiment
+pre_experiment: pre_experiment
+
+# First stage: splade-v3
+retrievers_hf_id:
+  - naver/splade-v3-distilbert
+
+from_experiment: VictorMorand/MiceV2-l10p4-ettin-68m
+scorer_type: miceV2
+include_recall_100: true
+
+plaid:
+  use_plaid: true
+  n_bits: 2
+  buffer_size: 1000
+  kmeans_niters: 4
+  n_ivf_probe: 8
+
+evaluation:
+  in_domain: false
+  beir13: false
+  datasets:
+    - scidocs
+    - scifact
+    - arguana
+
+grid_search:
+  plaid.n_bits: [2, 4, 8, 16]

@@ -7,7 +7,6 @@ module: Evaluation.experiment
 pre_experiment: pre_experiment
 
 use_plaid: true
-retrievers_only: false
 include_recall_100: true
 
 retrievers_hf_id:

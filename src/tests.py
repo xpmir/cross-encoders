@@ -288,7 +288,6 @@ class DatasetSpec:
     def build(
         self,
         test_topic_nb: int = 0,
-        retrievers_only: bool = False,
         launcher: Optional[Launcher] = None,
         blocking: Optional[bool] = None,
         measures: Optional[list] = None,
@@ -312,7 +311,7 @@ class DatasetSpec:
             ds = get_fold(ds, test_topic_nb, launcher=launcher)
 
         if measures is None:
-            measures = CE_MEASURES if not retrievers_only else RETRIEVERS_MEASURES
+            measures = CE_MEASURES
 
         return Evaluations(ds, measures=measures)
 
@@ -452,7 +451,6 @@ class TestRegistry:
         self,
         targets: Union[str, list[str]],
         test_topic_nb: int = 0,
-        retrievers_only: bool = False,
         include_recall_100: bool = False,
         launcher: Optional[Launcher] = None,
         blocking: Optional[bool] = None,
@@ -460,6 +458,7 @@ class TestRegistry:
         long_launcher: Optional[Launcher] = None,
         long_evals: Optional[list[str]] = None,
         check_docs: bool = False,
+        measures: Optional[list] = None,
     ) -> EvaluationsCollection:
         """Lazily build and return an EvaluationsCollection for ONLY the requested targets."""
         dataset_names = self.resolve_names(targets)
@@ -467,17 +466,16 @@ class TestRegistry:
 
         for name in dataset_names:
             spec = self._datasets[name]
-            measures = (
-                get_ce_measures(include_recall_100)
-                if not retrievers_only
-                else RETRIEVERS_MEASURES
+            ds_measures = (
+                measures
+                if measures is not None
+                else get_ce_measures(include_recall_100)
             )
             evals_dict[name] = spec.build(
                 test_topic_nb=test_topic_nb,
-                retrievers_only=retrievers_only,
                 launcher=launcher,
                 blocking=blocking,
-                measures=measures,
+                measures=ds_measures,
             )
 
         if long_evals is None:
@@ -606,7 +604,6 @@ aggregation_hf = {
 def get_decontaminated_test(
     key: str,
     test_topic_nb: int,
-    retrievers_only: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> Evaluations:
@@ -614,7 +611,6 @@ def get_decontaminated_test(
     spec = test_registry._datasets[key]
     return spec.build(
         test_topic_nb=test_topic_nb,
-        retrievers_only=retrievers_only,
         launcher=launcher,
         blocking=blocking,
     )
@@ -624,7 +620,6 @@ def get_decontaminated_test(
 def minified_tests(
     test_topic_nb: int,
     check_docs: bool = True,
-    retrievers_only: bool = False,
     include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
@@ -633,7 +628,6 @@ def minified_tests(
     return test_registry.build_collection(
         "minified",
         test_topic_nb=test_topic_nb,
-        retrievers_only=retrievers_only,
         include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
@@ -644,7 +638,6 @@ def minified_tests(
 @lru_cache
 def BEIR_13_tests(
     test_topic_nb: int,
-    retrievers_only: bool = False,
     include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
@@ -653,7 +646,6 @@ def BEIR_13_tests(
     return test_registry.build_collection(
         "beir13",
         test_topic_nb=test_topic_nb,
-        retrievers_only=retrievers_only,
         include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
@@ -663,7 +655,6 @@ def BEIR_13_tests(
 @lru_cache
 def BEIR13_decontaminated_tests(
     test_topic_nb: int,
-    retrievers_only: bool = False,
     include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
@@ -672,7 +663,6 @@ def BEIR13_decontaminated_tests(
     return test_registry.build_collection(
         "beir13_decontaminated",
         test_topic_nb=test_topic_nb,
-        retrievers_only=retrievers_only,
         include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
@@ -682,7 +672,6 @@ def BEIR13_decontaminated_tests(
 @lru_cache
 def Robust04_test(
     test_topic_nb: int,
-    retrievers_only: bool = False,
     include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
@@ -691,7 +680,6 @@ def Robust04_test(
     return test_registry.build_collection(
         "robust04",
         test_topic_nb=test_topic_nb,
-        retrievers_only=retrievers_only,
         include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
@@ -701,7 +689,6 @@ def Robust04_test(
 @lru_cache
 def LoTTE_tests(
     test_topic_nb: int,
-    retrievers_only: bool = False,
     include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
@@ -710,7 +697,6 @@ def LoTTE_tests(
     return test_registry.build_collection(
         "lotte",
         test_topic_nb=test_topic_nb,
-        retrievers_only=retrievers_only,
         include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
@@ -720,7 +706,6 @@ def LoTTE_tests(
 @lru_cache
 def nano_beir_tests(
     test_topic_nb: int,
-    retrievers_only: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
@@ -728,7 +713,6 @@ def nano_beir_tests(
     return test_registry.build_collection(
         "nano_beir",
         test_topic_nb=test_topic_nb,
-        retrievers_only=retrievers_only,
         launcher=launcher,
         blocking=blocking,
     )
@@ -737,7 +721,6 @@ def nano_beir_tests(
 @lru_cache
 def limit_tests(
     test_topic_nb: int,
-    retrievers_only: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
 ) -> EvaluationsCollection:
@@ -745,7 +728,6 @@ def limit_tests(
     return test_registry.build_collection(
         "limit",
         test_topic_nb=test_topic_nb,
-        retrievers_only=retrievers_only,
         launcher=launcher,
         blocking=blocking,
     )
@@ -755,7 +737,6 @@ def limit_tests(
 def paper_tests(
     test_topic_nb: int,
     check_docs: bool = True,
-    retrievers_only: bool = False,
     include_recall_100: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
@@ -764,7 +745,6 @@ def paper_tests(
     return test_registry.build_collection(
         "paper",
         test_topic_nb=test_topic_nb,
-        retrievers_only=retrievers_only,
         include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
@@ -780,12 +760,12 @@ def paper_tests(
 def build_tests(
     cfg: Evaluation,
     check_docs: bool = True,
-    retrievers_only: bool = False,
     launcher=None,
     blocking: Optional[bool] = None,
     default_launcher=None,
     long_launcher=None,
     long_evals: Optional[List[str]] = None,
+    measures: Optional[list] = None,
 ) -> EvaluationsCollection:
     """Build the tests to use for evaluation during training or at the end of it.
 
@@ -827,7 +807,6 @@ def build_tests(
     return test_registry.build_collection(
         targets=targets,
         test_topic_nb=cfg.test_max_topics,
-        retrievers_only=retrievers_only,
         include_recall_100=include_recall_100,
         launcher=launcher,
         blocking=blocking,
@@ -835,6 +814,7 @@ def build_tests(
         long_launcher=long_launcher,
         long_evals=long_evals,
         check_docs=check_docs,
+        measures=measures,
     )
 
 

@@ -27,11 +27,12 @@ modules_to_mock = [
     "lightning_fabric",
     "sentence_transformers",
     "transformers",
-    "huggingface_hub.hub_mixin",
+    "safetensors.torch",
     "pylate",
     "xpmir.learning.losses",
     "xpmir.neural._sparton",
     "xpm_torch.datasets",
+    "MICE.modeling.mice_v2.modernbert_hf",
 ]
 logger.info(
     f"Mocking (not importing) the following modules in experiment manager: {modules_to_mock}"
@@ -50,3 +51,7 @@ mock_modules(
         "torch.inference_mode",
     ],
 )
+
+import torch  # noqa: E402
+
+torch.__version__ = "2.5.0"

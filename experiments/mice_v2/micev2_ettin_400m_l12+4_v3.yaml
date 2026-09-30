@@ -15,8 +15,6 @@ learner:
         batch_size: 256
     requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=50G) * 4
 
-nb_repetitions: 2
-
 base: cross-encoder/ettin-reranker-400m-v1
 n_contextualization_layers: 18
 n_interaction_layers: 4

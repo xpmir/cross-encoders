@@ -11,8 +11,6 @@ gpu: true
 retrievers_hf_id:
   - naver/splade-v3-distilbert
 
-retrievers_only: true
-
 indexation:
     requirements: duration=8h & cpu(cores=5) & cuda(mem=24G)
     sparse2bmp_requirements: duration=8h & cpu(cores=8)

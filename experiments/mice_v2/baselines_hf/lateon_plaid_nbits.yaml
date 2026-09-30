@@ -1,0 +1,46 @@
+id: eval_lateon_plaid_abl_nbits
+title: lateon_plaid_retrieval_evaluation
+description: Evaluate LateOn on Various nbits
+
+parent: ../_common.yaml
+module: Evaluation.experiment
+pre_experiment: pre_experiment
+
+use_plaid: true
+include_recall_100: true
+
+retrievers_hf_id:
+  - lightonai/LateOn
+  # - lightonai/LateOn-unsupervised
+
+
+plaid:
+  max_doc_length: 512
+  max_query_length: 32
+  n_bits: 2
+  kmeans_niters: 4
+  n_ivf_probe: 8
+  buffer_size: 1000
+  batch_size: 32
+
+retrieval:
+  k: 100
+  requirements: duration=4h & cpu(cores=4, mem=16G) & cuda(mem=30G)
+
+indexation:
+  batch_size: 32
+  requirements: duration=4h & cpu(cores=4, mem=20G) & cuda(mem=30G)
+
+evaluation:
+  in_domain: false
+  beir13: false
+  datasets:
+    - scidocs
+    - scifact
+    - arguana
+    # - nfcorpus
+    # - fiqa
+    # - trec_covid
+
+grid_search:
+  plaid.n_bits: [2, 4, 8, 16]

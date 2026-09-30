@@ -154,8 +154,8 @@ def test_plaid_retriever_factory(tmp_path: Path):
         assert retriever_c.n_ivf_probe == 4
 
 
-def test_retrievers_only_aggregations():
-    """Verify that dataframe aggregation works when retrievers_only is True (no scorer tag)."""
+def test_retriever_aggregations():
+    """Verify that dataframe aggregation works for retriever-only evaluations (no scorer tag)."""
     import pandas as pd
     from training_utils import add_dataset_aggregations
     from format import aggregations

@@ -16,12 +16,11 @@ learner:
         lr: 7e-5
 
 evaluation: #default = Minified tests
-    eval_checkpoint:
-        - last
-        - best
+    eval_checkpoint: best
     all_datasets: false
     in_domain: false
     beir13: false
+    beir13_decontaminated: true
 
 plaid:
     use_plaid: true
@@ -31,11 +30,8 @@ plaid:
     max_query_length: 32
 
 indexation:
-    requirements: duration=2h & cpu(cores=16) & cuda(mem=40G)
+    requirements: duration=4h & cpu(cores=16) & cuda(mem=40G)
 
 doc_bottleneck_dim: 128
 freeze_bottom_layers_phase1: true
-
-
-grid_search:
-    freeze_top_layers: [true, false]
+freeze_top_layers: false

@@ -7,14 +7,16 @@ pre_experiment: pre_experiment
 
 gpu: true
 
+scorer_type: st
 max_length: 1024
-scorers_st_id:
-  - cross-encoder/ettin-reranker-17m-v1
-  - cross-encoder/ettin-reranker-32m-v1
-  - cross-encoder/ettin-reranker-68m-v1
-  - cross-encoder/ettin-reranker-150m-v1
-  # - cross-encoder/ettin-reranker-400m-v1
 
+grid_search:
+  scorer_id:
+    - cross-encoder/ettin-reranker-17m-v1
+    - cross-encoder/ettin-reranker-32m-v1
+    - cross-encoder/ettin-reranker-68m-v1
+    - cross-encoder/ettin-reranker-150m-v1
+    # - cross-encoder/ettin-reranker-400m-v1
 
 retrievers_hf_id:
   - naver/splade-v3-distilbert

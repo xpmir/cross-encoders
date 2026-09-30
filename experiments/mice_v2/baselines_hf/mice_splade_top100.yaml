@@ -1,6 +1,6 @@
 id: eval_mice_top100
 title: cross_scorer_evaluation
-description: Evalutation of various HF Scorers
+description: Evaluation of MICE HF Scorer
 
 parent: ../_common.yaml
 module: Evaluation.experiment
@@ -10,17 +10,11 @@ pre_experiment: pre_experiment
 retrievers_hf_id:
   - naver/splade-v3-distilbert
 
-scorers_st_id:
-  - VictorMorand/MiceV2-l10p4-ettin-68m
-
+from_experiment: VictorMorand/MiceV2-l10p4-ettin-68m
+scorer_type: miceV2
 
 evaluation:
   #just for debugging
   in_domain: true
   beir13: true
   beir13_decontaminated: false
-
-# grid_search: #TODO - eval don't support grid search for now
-#     config_dicts:
-#         - {max_query_length: 32, max_doc_length: 512}
-#         - {max_query_length: 1024, max_doc_length: 1024}

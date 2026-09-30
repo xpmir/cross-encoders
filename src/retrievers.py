@@ -1,6 +1,6 @@
 """This file contains utilities for building Retrievers that can be used in various experiments"""
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from experimaestro import stop_tags
 from datamaestro_ir.data import Documents
 from xpmir.rankers import Retriever
@@ -31,11 +31,12 @@ def plaid_retriever(
     init_tasks: list = None,
     topk: int = None,
     seed: int = 42,
+    tags: Optional[Dict[str, Any]] = None,
     **kwargs,
 ) -> Retriever.C:
     """Factory for PLAID Retriever, given the current configuration"""
 
-    return (
+    retriever = (
         PlaidRetriever.C(
             encoder=encoder,
             index=stop_tags(
@@ -57,6 +58,11 @@ def plaid_retriever(
         .tag("scorer", name)
         .tag("scorer_type", ScorerType.stMultiVectorEncoder.value)
     )
+    if tags:
+        for k, v in tags.items():
+            if k not in ("first_stage", "scorer", "scorer_type"):
+                retriever.tag(k, v)
+    return retriever
 
 
 def splade_retriever(
