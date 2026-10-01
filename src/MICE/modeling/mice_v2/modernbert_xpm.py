@@ -2037,17 +2037,28 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         if not path.exists():
             raise FileNotFoundError(f"Model directory '{path}' does not exist.")
 
-        if (path / "config.json").exists():
-            logger.info(f"Loading MICE config from {path / 'config.json'}")
-            mice_config = AutoConfig.from_pretrained(path)
-            self.apply_config_overrides(mice_config, source_path_or_id=path)
+        if not self._initialized:
+            if (path / "config.json").exists():
+                logger.info(f"Loading MICE config from {path / 'config.json'}")
+                mice_config = AutoConfig.from_pretrained(path)
+                self.apply_config_overrides(mice_config, source_path_or_id=path)
 
-            hf_model = ModernBertMiceForSequenceClassification(mice_config)
-            self.add_module("hf_model", hf_model)
-            self.eval_sparsity_tracker = None
-            self._initialized = True
-        elif not self._initialized:
-            self.initialize()
+                hf_model = ModernBertMiceForSequenceClassification(mice_config)
+                self.add_module("hf_model", hf_model)
+                self.eval_sparsity_tracker = None
+                self._initialized = True
+            else:
+                self.initialize()
+
+            if hasattr(self, "fabric") and self.fabric is not None:
+                self.hf_model.to(self.fabric.device)
+        else:
+            if (path / "config.json").exists():
+                logger.info(
+                    f"Loading checkpoint weights into initialized MICE model from {path} (device: {self.device})"
+                )
+                mice_config = AutoConfig.from_pretrained(path)
+                self.apply_config_overrides(mice_config, source_path_or_id=path)
 
         # Ensure tokenizer is initialized in the main process before DataLoader workers fork
         if (path / "tokenizer_config.json").exists() or (

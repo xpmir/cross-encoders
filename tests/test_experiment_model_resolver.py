@@ -485,6 +485,56 @@ def test_load_model_ignore_top():
     assert scorer._initialized
 
 
+def test_load_model_preserves_device_and_buffers_on_initialized_model():
+    """Verify that load_model on an already-initialized model updates weights in-place,
+    preserving parameter tensor objects, parameter device, and buffer devices (preventing DDP CPU buffer sync crashes)."""
+    import tempfile
+    import torch
+    from MICE.modeling.mice_v2.modernbert_xpm import mice_v2_scorer
+
+    scorer_cfg, _ = mice_v2_scorer(
+        hf_id="hf-internal-testing/tiny-random-ModernBertModel",
+        n_contextualization_layers=1,
+        n_interaction_layers=1,
+        utility_pred=True,
+    )
+    scorer = scorer_cfg.instance()
+    scorer.initialize()
+
+    # Determine target device (MPS if on Apple Silicon, CUDA if on GPU, otherwise CPU)
+    if torch.cuda.is_available():
+        target_device = torch.device("cuda:0")
+    elif torch.backends.mps.is_available():
+        target_device = torch.device("mps")
+    else:
+        target_device = torch.device("cpu")
+
+    scorer.to(target_device)
+    initial_p = next(scorer.parameters())
+    initial_param_id = id(initial_p)
+    assert initial_p.device.type == target_device.type
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        scorer.save_model(tmp_path)
+
+        # Call load_model on the already initialized & placed model
+        scorer.load_model(tmp_path)
+
+        # 1. Parameter identities MUST be preserved (in-place weight update)
+        reloaded_p = next(scorer.parameters())
+        assert id(reloaded_p) == initial_param_id, "load_model re-instantiated module instead of loading state_dict in-place!"
+        assert reloaded_p.device.type == target_device.type
+
+        # 2. All registered buffers MUST remain on target_device
+        named_bufs = dict(scorer.hf_model.named_buffers())
+        assert len(named_bufs) > 0, "Expected registered buffers in MICE model"
+        for buf_name, buf in named_bufs.items():
+            assert buf.device.type == target_device.type, (
+                f"Buffer '{buf_name}' is on device {buf.device}, expected {target_device}!"
+            )
+
+
 def test_validate_and_align_ignores_unpopulated_field_descriptors():
     """Verify that validate_and_align_config never copies class-level `field` descriptors
     from old model checkpoints where newly added parameters were unpopulated."""
