@@ -32,31 +32,56 @@ retrieval:
 
 indexation:
   batch_size: 32
-  requirements: duration=2h & cpu(cores=8, mem=20G) & cuda(mem=30G)
+  requirements: duration=10h & cpu(cores=16, mem=32G) & cuda(mem=50G)
 
 evaluation:
   in_domain: false
   beir13: false
   beir13_decontaminated: false
   datasets:
-    - touche
+    - climate_fever_decontaminated
+    - touche_decontaminated
+    - nfcorpus_decontaminated
+    - arguana_decontaminated
     # - scidocs
-    # - nfcorpus
-    # - arguana
 
 grid_search:
   config_dicts:
     # 1. Baseline: Slow Rust chunking (1k buffer, 32 Fast-PLAID token chunk)
-    - plaid.buffer_size: 5000
-      plaid.fast_plaid_batch_size: 25000
-      indexation.batch_size: 512
 
-    # 2. Fast-PLAID Chunk Speedup: 25k token chunk at 1k buffer (tests pure Rust chunking speedup)
     - plaid.buffer_size: 5000
-      plaid.fast_plaid_batch_size: 10000
+      plaid.fast_plaid_batch_size: 5000
+      plaid.n_bits: 4
+      plaid.n_samples_kmeans: 800
       indexation.batch_size: 256
+      attn_implementation: flash_attention_2
 
-    # 3. Buffer Size Speedup: 5k buffer at 25k chunk
-    - plaid.buffer_size: 10000
-      plaid.fast_plaid_batch_size: 25000
-      indexation.batch_size: 512
+    - plaid.buffer_size: 5000
+      plaid.fast_plaid_batch_size: 5000
+      plaid.n_bits: 4
+      plaid.n_samples_kmeans: 200
+      indexation.batch_size: 256
+      attn_implementation: flash_attention_2
+
+    - plaid.buffer_size: 5000
+      plaid.fast_plaid_batch_size: 5000
+      plaid.n_bits: 2
+      plaid.n_samples_kmeans: 200
+      indexation.batch_size: 256
+      attn_implementation: flash_attention_2
+
+
+    - plaid.buffer_size: 5000
+      plaid.fast_plaid_batch_size: 5000
+      plaid.n_bits: 2
+      plaid.n_samples_kmeans: 200
+      indexation.batch_size: 256
+      attn_implementation: null
+
+    # Default, but crashes
+    # - plaid.buffer_size: 5000
+    #   plaid.fast_plaid_batch_size: 5000
+    #   plaid.n_bits: 2
+    #   plaid.n_samples_kmeans: 0
+    #   indexation.batch_size: 256
+    #   attn_implementation: null

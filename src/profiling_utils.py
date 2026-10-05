@@ -74,6 +74,9 @@ def benchmark_model(
     verify_weights_fn: Optional[Callable] = None,
     model_kwargs=None,
 ):
+    """
+    Benchmarks a model by running it through a series of iterations and measuring performance.
+    """
     logger.info(f"--- Benchmarking {name} ---")
     try:
         cuda_available = torch.cuda.is_available()

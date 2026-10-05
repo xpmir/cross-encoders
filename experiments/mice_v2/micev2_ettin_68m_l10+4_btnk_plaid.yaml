@@ -11,6 +11,9 @@ export_trained_models: true
 pre_experiment: ""
 
 from_experiment: train_micev2_ettin68m_l10+4_v3
+doc_bottleneck_dim: 128
+freeze_bottom_layers_phase1: true
+freeze_top_layers: false
 
 learner:
     optimization:
@@ -33,7 +36,3 @@ evaluation: #default = Minified tests
 
 indexation:
     requirements: duration=4h & cpu(cores=16) & cuda(mem=40G)
-
-doc_bottleneck_dim: 128
-freeze_bottom_layers_phase1: true
-freeze_top_layers: false

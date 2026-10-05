@@ -635,10 +635,6 @@ def export_model(
                 "modules (torch, transformers) are mocked in this experiment manager process (pre_experiment).\n"
                 "Instantiating and exporting PyTorch weights to safetensors requires real PyTorch and Transformers.\n\n"
                 "All metrics, raw_results.csv, and model results.csv have been saved successfully.\n"
-                "To export the model safetensors to results/models/:\n"
-                "  1. Override 'pre_experiment: []' in your experiment YAML (or run without pre_experiment)\n"
-                "  2. Re-run: uv run experimaestro run-experiment <your_experiment.yaml>\n"
-                "     (All completed SLURM jobs will be reused from cache instantly; export will finish in ~5s)\n"
                 + "="
                 * 80
             )

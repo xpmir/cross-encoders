@@ -8,26 +8,30 @@ pre_experiment: pre_experiment
 
 # First stage: splade-v3
 retriever: naver/splade-v3-distilbert
-use_plaid: true
 
 from_experiment: VictorMorand/MiceV2-l10p4-ettin-68m
 scorer_type: miceV2
 include_recall_100: true
 
+use_plaid: true
 plaid:
-  use_plaid: true
+  max_doc_length: 512
+  max_query_length: 32
+  n_samples_kmeans: 200 #default Fastplaid is 0 (all? -> crash)
   n_bits: 2
-  buffer_size: 1000
   kmeans_niters: 4
   n_ivf_probe: 8
+  buffer_size: 5000
+  fast_plaid_batch_size: 5000
 
 evaluation:
   in_domain: false
   beir13: false
   datasets:
-    - scidocs
-    - scifact
-    - arguana
+    - scidocs_decontaminated
+    - scifact_decontaminated
+    - arguana_decontaminated
+    - nfcorpus_decontaminated
 
 grid_search:
   plaid.n_bits: [2, 4, 8, 16]

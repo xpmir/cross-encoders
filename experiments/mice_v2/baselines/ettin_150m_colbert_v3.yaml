@@ -1,0 +1,62 @@
+id: baseline_ettin400m_colbert_long_v3
+title: "Training Ettin-400m Reranker with MSE"
+description:
+    Configuration for training an ettin-400m model with the MSE_mixedbread_large loss on cross_encoder.ettin_reranker_v1_data.
+
+module: cross_encoders_training.experiment
+parent: ../_common.yaml
+nb_repetitions: 2
+
+pre_experiment: ""
+export_trained_models: true #by default, override to save best model among seeds / configs: ready for HF export
+
+# This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
+learner:
+    loss: pearson_mixedbread_large
+    optimization:
+        max_epochs: 6000 # 5k x 256 x 100 = 128M < 143M in dataset
+        num_warmup_steps: 20000 # Follows the original setup
+        # Values from Ettin Rerankers: https://huggingface.co/blog/ettin-reranker
+        batch_size: 256
+        lr: 3e-5
+        re_no_l2_regularization: [ '\.bias$', '(?i)norm' ]
+    requirements: duration=20h & cpu(mem=10G) & cuda(mem=50G) * 2
+    # requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=30G) * 2 # JZ
+
+# Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
+
+base: "cross-encoder/ettin-reranker-400m-v1"
+scorer_type: stMultiVectorEncoder
+
+#override _common.yaml
+max_length: null
+max_query_length: 32
+max_doc_length: 512
+freeze_LN: true
+
+evaluation: #default = Minified tests
+    all_datasets: false
+    in_domain: false
+    beir13: false
+    beir13_decontaminated: true
+    eval_checkpoint:
+        - last
+
+grid_search:
+    learner.optimization.lr: [5e-5, 1e-5]
+
+# use_plaid: true # TODO when plaid params are fixed
+# include_recall_100: true
+# plaid:
+#   use_plaid: true
+#   max_doc_length: 512
+#   max_query_length: 32
+#   n_bits: 2
+#   kmeans_niters: 4
+#   n_ivf_probe: 8
+#   buffer_size: 1000
+#   fast_plaid_batch_size: 25000
+
+indexation:
+  batch_size: 256
+  requirements: duration=15h & cpu(cores=16, mem=20G) & cuda(mem=40G) # need H100

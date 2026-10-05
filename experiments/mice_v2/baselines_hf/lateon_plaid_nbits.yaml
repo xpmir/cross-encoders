@@ -8,7 +8,7 @@ pre_experiment: pre_experiment
 
 use_plaid: true
 include_recall_100: true
-
+attn_implementation: flash_attention_2
 
 plaid:
   max_doc_length: 512
@@ -21,11 +21,11 @@ plaid:
 
 retrieval:
   k: 100
-  requirements: duration=4h & cpu(cores=4, mem=16G) & cuda(mem=30G)
+  requirements: duration=4h & cpu(cores=8, mem=16G) & cuda(mem=30G)
 
 indexation:
   batch_size: 32
-  requirements: duration=4h & cpu(cores=4, mem=20G) & cuda(mem=30G)
+  requirements: duration=5h & cpu(cores=16, mem=32G) & cuda(mem=50G)
 
 evaluation:
   in_domain: false
@@ -34,8 +34,8 @@ evaluation:
     - scidocs
     - scifact
     - arguana
-    # - nfcorpus
-    # - fiqa
+    - nfcorpus
+    - fiqa
     # - trec_covid
 
 retriever: naver/splade-v3-distilbert
