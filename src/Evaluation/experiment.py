@@ -101,7 +101,7 @@ class BaselinesConfig(NeuralIRExperiment):
     from_run_id: Optional[str] = None
     """Optional run ID within from_experiment (e.g. '20260924_180227')."""
 
-    attn_implementation: GridSearch[Optional[str]] = None
+    pref_attn_implementation: GridSearch[Optional[str]] = None
     """Preferred attention implementation (e.g. 'flash_attention_2', 'sdpa', 'eager')."""
 
     precision: Optional[str] = None
@@ -260,11 +260,11 @@ def resolve_evaluation_scorer(
         scorer.tokenizer.doc_prompt = cfg.doc_prompt
 
     # Attention implementation
-    if cfg.attn_implementation is not None:
-        if hasattr(scorer, "attn_implementation"):
-            scorer.attn_implementation = cfg.attn_implementation
-        elif hasattr(scorer, "pref_attn_implementation"):
-            scorer.pref_attn_implementation = cfg.attn_implementation
+    if cfg.pref_attn_implementation is not None:
+        if hasattr(scorer, "pref_attn_implementation"):
+            scorer.pref_attn_implementation = cfg.pref_attn_implementation
+        elif hasattr(scorer, "attn_implementation"):
+            scorer.attn_implementation = cfg.pref_attn_implementation
 
     # MICE v2 pruning overrides
     if is_mice_v2:
@@ -442,7 +442,7 @@ def evaluate_scorer(
             max_length=cfg.max_length,
             max_doc_length=cfg.max_doc_length,
             max_query_length=cfg.max_query_length,
-            pref_attn_implementation=cfg.attn_implementation,
+            pref_attn_implementation=cfg.pref_attn_implementation,
         )
         resolved_type_str = ScorerType.hfCrossScorer.value
     elif scorer_type_enum == ScorerType.stCrossEncoder:
@@ -461,7 +461,7 @@ def evaluate_scorer(
         scorer = st_cross_scorer(
             model_id=target_id,
             max_length=cfg.max_length,
-            pref_attn_implementation=cfg.attn_implementation,
+            pref_attn_implementation=cfg.pref_attn_implementation,
             tokenizer=st_tok,
         )
         ce_init_tasks = []
@@ -495,7 +495,7 @@ def evaluate_scorer(
             dim=dim,
             query_maxlen=query_maxlen,
             doc_maxlen=doc_maxlen,
-            pref_attn_implementation=cfg.attn_implementation,
+            pref_attn_implementation=cfg.pref_attn_implementation,
         )
         ce_init_tasks = []
         resolved_type_str = ScorerType.stMultiVectorEncoder.value

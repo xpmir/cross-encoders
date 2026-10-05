@@ -8,7 +8,7 @@ pre_experiment: pre_experiment
 gpu: true
 
 scorer_type: st
-attn_implementation: flash_attention_2
+pref_attn_implementation: flash_attention_2
 max_length: 1024
 
 grid_search:

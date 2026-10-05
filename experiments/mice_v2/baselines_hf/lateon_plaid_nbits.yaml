@@ -8,7 +8,7 @@ pre_experiment: pre_experiment
 
 use_plaid: true
 include_recall_100: true
-attn_implementation: flash_attention_2
+pref_attn_implementation: flash_attention_2
 
 plaid:
   max_doc_length: 512

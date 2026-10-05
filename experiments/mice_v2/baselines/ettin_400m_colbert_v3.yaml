@@ -1,7 +1,7 @@
-id: baseline_ettin150m_colbert_long_v3
-title: "Training Ettin-150m Reranker with MSE"
+id: baseline_ettin400m_colbert_long_v3
+title: "Training Ettin-400m Reranker with MSE"
 description:
-    Configuration for training an ettin-150m model with the MSE_mixedbread_large loss on cross_encoder.ettin_reranker_v1_data.
+    Configuration for training an ettin-400m model with the MSE_mixedbread_large loss on cross_encoder.ettin_reranker_v1_data.
 
 module: cross_encoders_training.experiment
 parent: ../_common.yaml
@@ -25,7 +25,7 @@ learner:
 
 # Subsets of the ettin-reranker-v1-data dataset to exclude (by default empty, using all 39 subsets)
 
-base: "cross-encoder/ettin-reranker-150m-v1"
+base: "cross-encoder/ettin-reranker-400m-v1"
 scorer_type: stMultiVectorEncoder
 
 #override _common.yaml

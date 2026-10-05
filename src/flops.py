@@ -411,6 +411,9 @@ def compute_flops_mice(
 ):
     n_contextualization_layers = mice_cfg.n_contextualization_layers
     n_interaction_layers = mice_cfg.n_interaction_layers
+    if n_interaction_layers is None:
+        n_interaction_layers = nlayers - n_contextualization_layers
+
     n_docs_ctx_layers = getattr(mice_cfg, "n_docs_ctx_layers", None)
     if n_docs_ctx_layers is None:
         n_docs_ctx_layers = n_contextualization_layers
@@ -450,6 +453,72 @@ def compute_flops_mice(
     baseline_flops = nlayers * compute_flops_transformer_layer(d, d_ff, seq_len, 1.0)
 
     return total_flops, baseline_flops
+
+
+def get_hf_id(model_cfg) -> str:
+    """Extract Hugging Face base ID from model config."""
+    model_class = type(model_cfg).__name__.lower()
+    if "mice" in model_class:
+        return model_cfg.hf_id
+    elif "prettr" in model_class:
+        return model_cfg.encoder.config.hf_id
+    elif "hfcrossscorer" in model_class:
+        return model_cfg.encoder.config.hf_id
+    elif "colbert" in model_class:
+        return model_cfg.encoder.encoder.model.config.hf_id
+    else:
+        raise ValueError(
+            f"Unsupported model class '{type(model_cfg).__name__}' for FLOPs calculation: {model_cfg}"
+        )
+
+
+def compute_flops_model(
+    model_cfg, seq_len=512, query_len=32, precompute_docs=False
+) -> tuple[float, float]:
+    """Computes the FLOPs of a model based on its configuration. Returns a tuple (model_flops, baseline_flops)."""
+    model_class = type(model_cfg).__name__.lower()
+    hf_id = get_hf_id(model_cfg)
+    d, d_ff, nlayers = get_transformer_params(hf_id)
+
+    if "mice" in model_class:
+        return compute_flops_mice(
+            model_cfg,
+            d,
+            d_ff,
+            nlayers,
+            seq_len=seq_len,
+            query_len=query_len,
+            precompute_docs=precompute_docs,
+        )
+    elif "prettr" in model_class:
+        return compute_flops_prettr(
+            model_cfg.join_layer,
+            d,
+            d_ff,
+            nlayers,
+            seq_len=seq_len,
+            query_len=query_len,
+            precompute_docs=precompute_docs,
+        )
+    elif "colbert" in model_class:
+        return compute_flops_colbert(
+            d,
+            d_ff,
+            nlayers,
+            seq_len=seq_len,
+            query_len=query_len,
+            precompute_docs=precompute_docs,
+        )
+    elif "hfcrossscorer" in model_class:
+        return compute_flops_CrossEncoder(
+            d,
+            d_ff,
+            nlayers,
+            seq_len=seq_len,
+        )
+    else:
+        logger.error("Unknown model class %s for FLOPs computation", model_class)
+        raise ValueError(f"Unknown model class {model_class} for model {model_cfg}")
 
 
 def calculate_config_flops(config_path, query_len, max_seq_len):

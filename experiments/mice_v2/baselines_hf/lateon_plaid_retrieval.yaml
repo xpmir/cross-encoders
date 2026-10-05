@@ -12,7 +12,7 @@ max_doc_length: 512
 
 scorer_id: lightonai/LateOn
 scorer_type: stMultiVectorEncoder
-attn_implementation: flash_attention_2
+pref_attn_implementation: flash_attention_2
 
 use_plaid: true
 include_recall_100: true

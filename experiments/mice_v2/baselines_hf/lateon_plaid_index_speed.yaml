@@ -54,21 +54,21 @@ grid_search:
       plaid.n_bits: 4
       plaid.n_samples_kmeans: 800
       indexation.batch_size: 256
-      attn_implementation: flash_attention_2
+      pref_attn_implementation: flash_attention_2
 
     - plaid.buffer_size: 5000
       plaid.fast_plaid_batch_size: 5000
       plaid.n_bits: 4
       plaid.n_samples_kmeans: 200
       indexation.batch_size: 256
-      attn_implementation: flash_attention_2
+      pref_attn_implementation: flash_attention_2
 
     - plaid.buffer_size: 5000
       plaid.fast_plaid_batch_size: 5000
       plaid.n_bits: 2
       plaid.n_samples_kmeans: 200
       indexation.batch_size: 256
-      attn_implementation: flash_attention_2
+      pref_attn_implementation: flash_attention_2
 
 
     - plaid.buffer_size: 5000
@@ -76,7 +76,7 @@ grid_search:
       plaid.n_bits: 2
       plaid.n_samples_kmeans: 200
       indexation.batch_size: 256
-      attn_implementation: null
+      pref_attn_implementation: null
 
     # Default, but crashes
     # - plaid.buffer_size: 5000
@@ -84,4 +84,4 @@ grid_search:
     #   plaid.n_bits: 2
     #   plaid.n_samples_kmeans: 0
     #   indexation.batch_size: 256
-    #   attn_implementation: null
+    #   pref_attn_implementation: null

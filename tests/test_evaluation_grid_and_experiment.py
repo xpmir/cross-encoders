@@ -450,10 +450,10 @@ def test_evaluate_scorer_baseline_comparison_instance_identities():
         else getattr(init_tasks_0[0], "task", init_tasks_0[0])
     )
     assert scorer_0 is raw_loader_0.value
-    # Scorer does not have plaid_retriever, prune_threshold, or attn_implementation tag
+    # Scorer does not have plaid_retriever, prune_threshold, or pref_attn_implementation tag
     assert "plaid_retriever" not in scorer_0.tags()
     assert "prune_threshold" not in scorer_0.tags()
-    assert "attn_implementation" not in scorer_0.tags()
+    assert "pref_attn_implementation" not in scorer_0.tags()
 
     # Call 1: PLAID retriever
     call_1 = mock_tests.evaluate_retriever.call_args_list[1]
@@ -524,7 +524,7 @@ def test_scorer_tags_only_include_grid_parameters():
     scorer_default = call_args[0][0].keywords["scorer"]
     tags_default = scorer_default.tags()
     assert "prune_threshold" not in tags_default
-    assert "attn_implementation" not in tags_default
+    assert "pref_attn_implementation" not in tags_default
     assert "plaid_retriever" not in tags_default
     assert tags_default["scorer"] == "VictorMorand/MiceV2-l10p4-ettin-68m"
 
@@ -532,7 +532,7 @@ def test_scorer_tags_only_include_grid_parameters():
     mock_tests.reset_mock()
     evaluate_scorer(
         cfg=cfg,
-        cfg_tags={"hard_prune_threshold": 0.5, "attn_implementation": "sdpa"},
+        cfg_tags={"hard_prune_threshold": 0.5, "pref_attn_implementation": "sdpa"},
         tests=mock_tests,
         first_stage_factories={"splade": (mock_fs_factory, [])},
         launcher_evaluate=None,
@@ -543,7 +543,7 @@ def test_scorer_tags_only_include_grid_parameters():
     scorer_grid = call_args[0][0].keywords["scorer"]
     tags_grid = scorer_grid.tags()
     assert tags_grid["hard_prune_threshold"] == 0.5
-    assert tags_grid["attn_implementation"] == "sdpa"
+    assert tags_grid["pref_attn_implementation"] == "sdpa"
     assert "plaid_retriever" not in tags_grid
 
 
