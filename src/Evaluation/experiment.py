@@ -63,6 +63,7 @@ from retrievers import (
     plaid_retriever,
     MicePlaidRetrieverFactory,
 )
+from index_utils import sync_index_size_metrics
 from training_utils import (
     add_dataset_aggregations,
     resolve_trained_model_loader,
@@ -837,6 +838,15 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
 
     if any(getattr(c, "eval_sparsity", False) for c in all_configs):
         sync_eval_sparsity_metrics(tests)
+
+    # When use_plaid is True, sync on-disk index sizes from the dependency graph
+    is_plaid = any(
+        getattr(c, "use_plaid", False)
+        or (getattr(c, "plaid", None) and getattr(c.plaid, "use_plaid", False))
+        for c in all_configs
+    )
+    if is_plaid:
+        sync_index_size_metrics(tests)
 
     df = tests.to_dataframe()
 

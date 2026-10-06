@@ -1,8 +1,14 @@
 """Utilities for index management."""
 
 import logging
-from typing import Optional
-from xpmir.index.sparse import SparseRetrieverIndexBuilder
+from pathlib import Path
+import subprocess
+from typing import Optional, List, Dict, Tuple
+from experimaestro import Task
+from xpmir.index.sparse import (
+    SparseRetrieverIndexBuilder,
+    AbstractSparseRetrieverIndexBuilder,
+)
 from xpmir.index.plaid import PlaidIndexBuilder
 from xpmir.rankers import Documents
 from xpm_torch.configuration import FabricConfiguration
@@ -118,3 +124,164 @@ def get_plaid_index(
         index = _indexes[cache_key]
 
     return index
+
+
+def get_path_size_mb(path: Path) -> float:
+    """Queries on-disk size of a directory or file in Megabytes using `du -sk` with Python fallback."""
+    if not path.exists():
+        raise FileNotFoundError(f"Index path does not exist: {path}")
+
+    try:
+        proc = subprocess.run(
+            ["du", "-sk", str(path)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        kb = int(proc.stdout.split()[0])
+        return kb / 1024.0
+    except Exception as e:
+        logger.warning(
+            f"`du -sk` failed on {path} ({e}); falling back to recursive file scan"
+        )
+        total_bytes = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+        return total_bytes / (1024.0 * 1024.0)
+
+
+def find_index_builders(
+    evaluation, builder_classes: Optional[Tuple[type, ...]] = None
+) -> List[Task]:
+    """Traverses the experimaestro dependency graph from an evaluation task or output
+    to find all upstream PlaidIndexBuilder and SparseRetrieverIndexBuilder instances."""
+    if builder_classes is None:
+        builder_classes = (PlaidIndexBuilder, AbstractSparseRetrieverIndexBuilder)
+
+    task = (
+        getattr(getattr(evaluation, "__xpm__", None), "task", None)
+        or getattr(evaluation, "task", None)
+        or evaluation
+    )
+    job = getattr(getattr(task, "__xpm__", None), "job", None) or getattr(
+        task, "job", None
+    )
+    if job is None:
+        logger.warning(
+            f"Could not locate experimaestro job for evaluation {evaluation}"
+        )
+        return []
+
+    visited_jobs = set()
+    builders: List[Task] = []
+    seen_builder_ids = set()
+
+    def dfs(current_job):
+        if id(current_job) in visited_jobs:
+            return
+        visited_jobs.add(id(current_job))
+
+        cfg = getattr(current_job, "config", None)
+        if cfg is not None and isinstance(cfg, builder_classes):
+            if id(cfg) not in seen_builder_ids:
+                seen_builder_ids.add(id(cfg))
+                builders.append(cfg)
+
+        for dep in getattr(current_job, "dependencies", []):
+            origin_job = getattr(dep, "origin", None)
+            if origin_job is not None:
+                dfs(origin_job)
+
+    dfs(job)
+    return builders
+
+
+def sync_index_size_metrics(
+    tests,
+    builder_classes: Optional[Tuple[type, ...]] = None,
+) -> None:
+    """Standalone function to query on-disk index sizes for all Plaid and Sparse
+    retriever index builders in the evaluate task dependencies, syncing <ClassName>_index_size
+    into each evaluation's aggregated.txt file before to_dataframe()."""
+    if not hasattr(tests, "collection"):
+        raise AttributeError(
+            f"Provided tests object ({type(tests)}) has no 'collection' attribute"
+        )
+
+    size_cache: Dict[str, float] = {}
+
+    for dataset_name, evaluations in tests.collection.items():
+        eval_list = getattr(evaluations, "results", [])
+        if not eval_list and hasattr(evaluations, "per_tags"):
+            eval_list = list(evaluations.per_tags.values())
+
+        for evaluation in eval_list:
+            results_path = getattr(evaluation, "results", None)
+            if results_path is None:
+                continue
+            results_path = Path(results_path)
+            if not results_path.exists():
+                logger.warning(
+                    f"Aggregated results file {results_path} not found for dataset {dataset_name}"
+                )
+                continue
+
+            builders = find_index_builders(evaluation, builder_classes=builder_classes)
+            if not builders:
+                logger.debug(
+                    f"No index builders found in dependencies for evaluation on dataset {dataset_name}"
+                )
+                continue
+
+            existing_text = results_path.read_text()
+            existing_lines = existing_text.splitlines()
+            metrics_to_write = {}
+
+            for builder in builders:
+                orig_type = getattr(
+                    getattr(builder, "__xpmtype__", None),
+                    "originaltype",
+                    builder.__class__,
+                )
+                class_name = orig_type.__name__
+                metric_name = f"{class_name}_index_size"
+
+                index_path = getattr(builder, "index_path", None)
+                if index_path is None:
+                    logger.warning(
+                        f"Builder {builder} ({class_name}) has no 'index_path' attribute"
+                    )
+                    continue
+
+                index_path = Path(index_path)
+                cache_key = str(index_path)
+                if cache_key not in size_cache:
+                    size_cache[cache_key] = get_path_size_mb(index_path)
+                    logger.info(
+                        f"Measured index size for {class_name} ({index_path}): {size_cache[cache_key]:.2f} MB"
+                    )
+
+                size_mb = size_cache[cache_key]
+                metrics_to_write[metric_name] = size_mb
+
+            # Update existing lines in-place, or append new metric lines
+            updated_lines = []
+            seen_metrics = set()
+            for line in existing_lines:
+                tokens = line.strip().split()
+                if tokens and tokens[0] in metrics_to_write:
+                    metric = tokens[0]
+                    size_mb = metrics_to_write[metric]
+                    updated_lines.append(f"{metric:40s} {'all':10s} {size_mb:.4f}")
+                    seen_metrics.add(metric)
+                elif line.strip():
+                    updated_lines.append(line)
+
+            for metric, size_mb in metrics_to_write.items():
+                if metric not in seen_metrics:
+                    updated_lines.append(f"{metric:40s} {'all':10s} {size_mb:.4f}")
+
+            new_text = "\n".join(updated_lines) + "\n"
+            if new_text != existing_text:
+                results_path.write_text(new_text)
+                logger.info(
+                    f"Updated {len(metrics_to_write)} index size metric(s) in {results_path}"
+                )

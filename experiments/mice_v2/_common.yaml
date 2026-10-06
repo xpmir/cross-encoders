@@ -63,4 +63,17 @@ preprocessing:
 
 indexation:
     # Running Splade to index the collections.
+    batch_size: 128
     requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
+
+# PLAID indexing
+
+plaid:
+  max_doc_length: 512
+  max_query_length: 32
+  n_bits: 2 #by default, we choose 4 for MICE
+  kmeans_niters: 4
+  n_ivf_probe: 8
+  buffer_size: 5000
+  fast_plaid_batch_size: 5000
+  n_samples_kmeans: 600
