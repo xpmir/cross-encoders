@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, Union
 
 # Ensure src is in python path
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -28,6 +28,7 @@ from flops import (
     compute_flops_model,
     get_hf_id,
     compute_flops_CrossEncoder,
+    compute_flops_colbert,
 )
 from xpm_torch.huggingface import TorchHFHub
 from transformers import AutoConfig
@@ -161,6 +162,17 @@ def fetch_remote_model_via_scp(
             cmd_readme = base_scp_cmd + [f"{host}:{remote_path_clean}/README.md", str(readme_file)]
             subprocess.run(cmd_readme, capture_output=True, text=True)
 
+        # Also attempt config_sentence_transformers.json and modules.json (for ColBERT / MultiVector detection)
+        st_cfg = target_dir / "config_sentence_transformers.json"
+        if not st_cfg.exists() or force_download:
+            cmd_st = base_scp_cmd + [f"{host}:{remote_path_clean}/config_sentence_transformers.json", str(st_cfg)]
+            subprocess.run(cmd_st, capture_output=True, text=True)
+
+        mod_cfg = target_dir / "modules.json"
+        if not mod_cfg.exists() or force_download:
+            cmd_mod = base_scp_cmd + [f"{host}:{remote_path_clean}/modules.json", str(mod_cfg)]
+            subprocess.run(cmd_mod, capture_output=True, text=True)
+
         # If neither worked, maybe remote_path is a direct file or needs directory scp
         if not scp_success:
             if remote_path.endswith(".json"):
@@ -186,29 +198,108 @@ def fetch_remote_model_via_scp(
     return target_dir
 
 
-def load_model_config(model_path: Path):
+def load_model_config(model_path_or_id: Union[str, Path]) -> Tuple[Any, str]:
     """
-    Loads model configuration from a local directory or file.
+    Loads model configuration from a local directory/file or HuggingFace Hub repo ID.
     Prefers experimaestro.json via TorchHFHub.pretrained_loader, falls back to config.json.
     """
-    if model_path.is_file():
-        model_path = model_path.parent
+    is_local = False
+    if isinstance(model_path_or_id, Path):
+        is_local = True
+        model_path = model_path_or_id.resolve()
+    elif isinstance(model_path_or_id, str):
+        if model_path_or_id.startswith("/") or Path(model_path_or_id).exists():
+            is_local = True
+            model_path = Path(model_path_or_id).resolve()
 
-    experimaestro_path = model_path / "experimaestro.json"
-    config_path = model_path / "config.json"
+    if is_local:
+        if model_path.is_file():
+            model_path = model_path.parent
 
-    if experimaestro_path.exists():
-        logger.info("Loading Experimaestro model config from %s", experimaestro_path)
-        loader_cfg = TorchHFHub.pretrained_loader(model_path, as_instance=False)
-        return loader_cfg.model, "experimaestro"
-    elif config_path.exists():
-        logger.info("Loading HuggingFace AutoConfig from %s", config_path)
-        hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        return hf_config, "huggingface"
+        experimaestro_path = model_path / "experimaestro.json"
+        config_path = model_path / "config.json"
+
+        if experimaestro_path.exists():
+            logger.info("Loading Experimaestro model config from %s", experimaestro_path)
+            loader_cfg = TorchHFHub.pretrained_loader(model_path, as_instance=False)
+            return loader_cfg.model, "experimaestro"
+        elif config_path.exists():
+            logger.info("Loading HuggingFace AutoConfig from %s", config_path)
+            hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+            return hf_config, "huggingface"
+        else:
+            raise FileNotFoundError(
+                f"No 'experimaestro.json' or 'config.json' found in model directory '{model_path}'."
+            )
     else:
-        raise FileNotFoundError(
-            f"No 'experimaestro.json' or 'config.json' found in model directory '{model_path}'."
-        )
+        repo_id = str(model_path_or_id)
+        logger.info("Loading model '%s' from Hugging Face Hub...", repo_id)
+        try:
+            loader_cfg = TorchHFHub.pretrained_loader(repo_id, as_instance=False)
+            logger.info("Successfully loaded Experimaestro model config from Hugging Face Hub: %s", repo_id)
+            return loader_cfg.model, "experimaestro"
+        except Exception:
+            pass
+
+        try:
+            hf_config = AutoConfig.from_pretrained(repo_id, trust_remote_code=True)
+            logger.info("Successfully loaded HuggingFace AutoConfig from Hugging Face Hub: %s", repo_id)
+            return hf_config, "huggingface"
+        except Exception as e:
+            raise RuntimeError(f"Failed to load model '{repo_id}' from Hugging Face Hub: {e}")
+
+
+def is_colbert_model(
+    model_dir: Optional[Path],
+    model_path_or_spec: str,
+    config_type: str,
+    config_obj: Any,
+    override_colbert: Optional[bool] = None,
+) -> bool:
+    """Check if model is a ColBERT / MultiVector architecture."""
+    if override_colbert is not None:
+        return override_colbert
+
+    # 1. Experimaestro config check
+    if config_type == "experimaestro":
+        return "colbert" in type(config_obj).__name__.lower()
+
+    # 2. Local config checks if model_dir is provided
+    if model_dir is not None:
+        st_cfg_file = model_dir / "config_sentence_transformers.json"
+        if st_cfg_file.exists():
+            try:
+                with open(st_cfg_file) as f:
+                    data = json.load(f)
+                if data.get("model_type") == "MultiVectorEncoder":
+                    return True
+                if data.get("similarity_fn_name") in ("maxsim", "meanmaxsim"):
+                    return True
+            except Exception:
+                pass
+
+        modules_file = model_dir / "modules.json"
+        if modules_file.exists():
+            try:
+                with open(modules_file) as f:
+                    mods = json.load(f)
+                for mod in mods:
+                    mod_type = str(mod.get("type", "")).lower()
+                    if "multivector" in mod_type or "colbert" in mod_type:
+                        return True
+            except Exception:
+                pass
+
+    # 3. Path / directory heuristics
+    path_lower = str(model_path_or_spec).lower()
+    if "colbert" in path_lower or "multivector" in path_lower:
+        return True
+
+    architectures = getattr(config_obj, "architectures", [])
+    if any("colbert" in str(a).lower() for a in architectures):
+        return True
+
+    return False
 
 
 def run_flops_benchmark(
@@ -219,9 +310,10 @@ def run_flops_benchmark(
     force_download: bool = False,
     include_weights: bool = False,
     port: Optional[int] = None,
+    is_colbert: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
-    Executes the FLOPs benchmark for a given model (local or remote).
+    Executes the FLOPs benchmark for a given model (local, remote scp, or Hugging Face Hub).
     """
     model_path_or_spec = normalize_model_path(model_path_or_spec)
     if is_remote_path(model_path_or_spec):
@@ -232,12 +324,16 @@ def run_flops_benchmark(
             force_download=force_download,
             port=port,
         )
-    else:
+        config_obj, config_type = load_model_config(local_dir)
+    elif model_path_or_spec.startswith("/") or Path(model_path_or_spec).exists():
         local_dir = Path(model_path_or_spec).resolve()
         if not local_dir.exists():
             raise FileNotFoundError(f"Local path does not exist: {local_dir}")
-
-    config_obj, config_type = load_model_config(local_dir)
+        config_obj, config_type = load_model_config(local_dir)
+    else:
+        # Does not start with '/' and is not remote: load directly from Hugging Face Hub
+        local_dir = None
+        config_obj, config_type = load_model_config(model_path_or_spec)
 
     if config_type == "experimaestro":
         model_class = type(config_obj).__name__
@@ -257,17 +353,32 @@ def run_flops_benchmark(
             n_inter = nlayers - n_ctx
 
     elif config_type == "huggingface":
-        model_class = "HFCrossEncoder"
-        hf_id = getattr(config_obj, "_name_or_path", local_dir.name)
-        d = config_obj.hidden_size
-        d_ff = config_obj.intermediate_size
-        nlayers = config_obj.num_hidden_layers
-        model_flops, baseline_flops = compute_flops_CrossEncoder(
-            d, d_ff, nlayers, seq_len=seq_len
-        )
-        model_flops_precomp = model_flops
-        n_ctx = 0
-        n_inter = nlayers
+        if is_colbert_model(local_dir, model_path_or_spec, config_type, config_obj, is_colbert):
+            model_class = "ColBERT"
+            hf_id = getattr(config_obj, "_name_or_path", str(model_path_or_spec))
+            d = config_obj.hidden_size
+            d_ff = config_obj.intermediate_size
+            nlayers = config_obj.num_hidden_layers
+            model_flops, baseline_flops = compute_flops_colbert(
+                d, d_ff, nlayers, seq_len=seq_len, query_len=query_len, precompute_docs=False
+            )
+            model_flops_precomp, _ = compute_flops_colbert(
+                d, d_ff, nlayers, seq_len=seq_len, query_len=query_len, precompute_docs=True
+            )
+            n_ctx = nlayers
+            n_inter = 0
+        else:
+            model_class = "HFCrossEncoder"
+            hf_id = getattr(config_obj, "_name_or_path", str(model_path_or_spec))
+            d = config_obj.hidden_size
+            d_ff = config_obj.intermediate_size
+            nlayers = config_obj.num_hidden_layers
+            model_flops, baseline_flops = compute_flops_CrossEncoder(
+                d, d_ff, nlayers, seq_len=seq_len
+            )
+            model_flops_precomp = model_flops
+            n_ctx = 0
+            n_inter = nlayers
     else:
         raise ValueError(f"Unknown config_type: {config_type}")
 
@@ -277,47 +388,73 @@ def run_flops_benchmark(
     )
 
     eval_results = {}
-    results_csv_file = local_dir / "results.csv"
-    if results_csv_file.exists():
-        try:
-            import pandas as pd
-            df_eval = pd.read_csv(results_csv_file)
-            eval_results = df_eval.set_index("dataset").to_dict(orient="index")
-            logger.info("Loaded evaluation metrics for %d datasets from %s", len(eval_results), results_csv_file)
-        except Exception as e:
-            logger.warning("Could not parse results.csv: %s", e)
+    if local_dir is not None:
+        results_csv_file = local_dir / "results.csv"
+        if results_csv_file.exists():
+            try:
+                import pandas as pd
+                df_eval = pd.read_csv(results_csv_file)
+                eval_results = df_eval.set_index("dataset").to_dict(orient="index")
+                logger.info("Loaded evaluation metrics for %d datasets from %s", len(eval_results), results_csv_file)
+            except Exception as e:
+                logger.warning("Could not parse results.csv: %s", e)
 
     n_params = None
-    readme_path = local_dir / "README.md"
-    if readme_path.exists():
-        try:
-            content = readme_path.read_text()
-            match = re.search(r"Total Parameters:\s*([^\n\(\)]+)\s*\(([^M\)]+M)\)", content, re.IGNORECASE)
-            if match:
-                n_params = match.group(2).strip()
-            else:
-                match2 = re.search(r"Total Parameters:\s*([^\n\(\)]+)", content, re.IGNORECASE)
-                if match2:
-                    n_params = match2.group(1).strip()
-        except Exception as e:
-            logger.debug("Could not parse README.md for n_params: %s", e)
-
-    if n_params is None:
-        st_path = local_dir / "model.safetensors"
-        if st_path.is_file():
+    if local_dir is not None:
+        readme_path = local_dir / "README.md"
+        if readme_path.exists():
             try:
-                from safetensors import safe_open
-                total_p = 0
-                with safe_open(str(st_path), framework="pt", device="cpu") as f:
-                    for key in f.keys():
-                        total_p += f.get_tensor(key).numel()
-                n_params = f"{total_p / 1e6:.2f}M"
+                content = readme_path.read_text()
+                match = re.search(r"Total Parameters:\s*([^\n\(\)]+)\s*\(([^M\)]+M)\)", content, re.IGNORECASE)
+                if match:
+                    n_params = match.group(2).strip()
+                else:
+                    match2 = re.search(r"Total Parameters:\s*([^\n\(\)]+)", content, re.IGNORECASE)
+                    if match2:
+                        n_params = match2.group(1).strip()
             except Exception as e:
-                logger.debug("Could not count parameters from safetensors: %s", e)
+                logger.debug("Could not parse README.md for n_params: %s", e)
+
+        if n_params is None:
+            st_path = local_dir / "model.safetensors"
+            if st_path.is_file():
+                try:
+                    from safetensors import safe_open
+                    total_p = 0
+                    with safe_open(str(st_path), framework="pt", device="cpu") as f:
+                        for key in f.keys():
+                            total_p += f.get_tensor(key).numel()
+                    n_params = f"{total_p / 1e6:.2f}M"
+                except Exception as e:
+                    logger.debug("Could not count parameters from safetensors: %s", e)
+    else:
+        # For Hugging Face Hub models, query model_info for exact parameter count
+        try:
+            from huggingface_hub import model_info
+            info = model_info(str(model_path_or_spec))
+            if getattr(info, "safetensors", None) and getattr(info.safetensors, "total", None):
+                n_params = f"{info.safetensors.total / 1e6:.2f}M"
+        except Exception as e:
+            logger.debug("Could not get safetensors info from Hugging Face Hub: %s", e)
+
+    # Fallback to analytical parameter count from config dimensions
+    if n_params is None:
+        try:
+            d_val = getattr(config_obj, "hidden_size", None)
+            d_ff_val = getattr(config_obj, "intermediate_size", None)
+            l_val = getattr(config_obj, "num_hidden_layers", None)
+            v_val = getattr(config_obj, "vocab_size", None)
+            if d_val and d_ff_val and l_val and v_val:
+                is_modernbert = "modernbert" in getattr(config_obj, "model_type", "").lower()
+                mlp_factor = 3 if is_modernbert else 2
+                total_est = (v_val * d_val) + l_val * ((4 * d_val * d_val) + (mlp_factor * d_val * d_ff_val))
+                n_params = f"{total_est / 1e6:.1f}M"
+        except Exception:
+            pass
 
     results = {
         "model_path": model_path_or_spec,
-        "local_path": str(local_dir),
+        "local_path": str(local_dir) if local_dir else None,
         "model_class": model_class,
         "hf_id": hf_id,
         "config_type": config_type,
@@ -448,6 +585,12 @@ def main():
         help="Output results as CSV line with FLOPs in GFLOPs",
     )
     parser.add_argument(
+        "--is-colbert",
+        action="store_true",
+        default=None,
+        help="Explicitly classify model as ColBERT / MultiVector architecture",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -474,6 +617,7 @@ def main():
         force_download=args.force_download,
         include_weights=args.include_weights,
         port=args.port,
+        is_colbert=args.is_colbert,
     )
 
     if args.csv:

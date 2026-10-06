@@ -1,11 +1,22 @@
 import argparse
 import logging
 import re
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import pandas as pd
+
+# Ensure src is in sys.path for format imports
+_src_path = str(Path(__file__).resolve().parent.parent / "src")
+if _src_path not in sys.path:
+    sys.path.insert(0, _src_path)
+
+try:
+    from format import DATASET_TO_ABB, escape_latex
+except ImportError:
+    from src.format import DATASET_TO_ABB, escape_latex
 
 logging.basicConfig(
     level=logging.INFO,
@@ -127,7 +138,7 @@ def fetch_sheet_as_df(
 
 
 def add_type_column(df: pd.DataFrame) -> pd.DataFrame:
-    """Adds a 'type' column detecting 'colbert', 'mice', and 'cross-encoder' in scorer."""
+    """Adds a 'type' column detecting 'colbert' (including 'lateon'), 'mice', and 'cross-encoder' in scorer."""
     if "scorer" not in df.columns:
         logging.warning("'scorer' column not found, skipping type detection.")
         return df
@@ -136,7 +147,7 @@ def add_type_column(df: pd.DataFrame) -> pd.DataFrame:
         if not isinstance(scorer_val, str):
             return "other"
         s = scorer_val.lower()
-        if "colbert" in s:
+        if "colbert" in s or "lateon" in s:
             return "colbert"
         if "mice" in s:
             return "mice"
@@ -481,6 +492,65 @@ def plot_pareto_frontier(
     logging.info("Saved Pareto plot to: %s", output_path)
 
 
+def format_beir_latex_table(
+    df: pd.DataFrame,
+    aggregation_col: str = "BEIR13 Decont",
+    aggregation_label: str = "Avg",
+) -> str:
+    """Formats DataFrame into a LaTeX table keeping only scorer and BEIR datasets.
+
+    BEIR datasets are mapped to abbreviations using DATASET_TO_ABB and sorted
+    alphabetically. The aggregation column is placed as the last column.
+    """
+    if "scorer" not in df.columns:
+        raise ValueError("DataFrame must contain 'scorer' column.")
+
+    # Identify individual BEIR columns using DATASET_TO_ABB
+    beir_cols: list[tuple[str, str]] = []
+    for c in df.columns:
+        if c in ["base", "scorer", aggregation_col]:
+            continue
+        norm = c.replace(" ", "_").lower()
+        if norm in DATASET_TO_ABB:
+            beir_cols.append((c, DATASET_TO_ABB[norm]))
+        elif c.lower() in DATASET_TO_ABB:
+            beir_cols.append((c, DATASET_TO_ABB[c.lower()]))
+
+    # Sort individual BEIR columns alphabetically by abbreviation
+    beir_cols.sort(key=lambda x: x[1])
+
+    # Build selected column list: scorer, sorted BEIR datasets, and aggregation
+    selected_cols = ["scorer"] + [c for c, _ in beir_cols]
+    rename_map = {"scorer": "Scorer"}
+    for c, abb in beir_cols:
+        rename_map[c] = abb
+
+    has_agg = aggregation_col in df.columns
+    if has_agg:
+        selected_cols.append(aggregation_col)
+        rename_map[aggregation_col] = aggregation_label
+
+    latex_df = df[selected_cols].copy()
+
+    # Escape LaTeX special characters in Scorer
+    latex_df["scorer"] = latex_df["scorer"].apply(escape_latex)
+
+    # Format numeric columns as 100 * x with 1 decimal place
+    for col, _ in beir_cols:
+        latex_df[col] = pd.to_numeric(latex_df[col], errors="coerce").apply(
+            lambda v: f"{100 * v:.1f}" if pd.notna(v) else "-"
+        )
+    if has_agg:
+        latex_df[aggregation_col] = pd.to_numeric(
+            latex_df[aggregation_col], errors="coerce"
+        ).apply(lambda v: f"{100 * v:.1f}" if pd.notna(v) else "-")
+
+    latex_df = latex_df.rename(columns=rename_map)
+
+    column_format = "l" + "c" * (len(beir_cols) + (1 if has_agg else 0))
+    return latex_df.to_latex(index=False, column_format=column_format)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Retrieve a Google Sheet as a pandas DataFrame and compute the Pareto frontier."
@@ -519,6 +589,13 @@ def main() -> None:
         type=str,
         default=None,
         help="Optional file path to save the Pareto plot (e.g. pareto.png or pareto.pdf).",
+    )
+    parser.add_argument(
+        "--latex",
+        nargs="?",
+        const="-",
+        default=None,
+        help="Export results as a LaTeX table. Specify a file path to save, or use '-' to print to stdout.",
     )
     parser.add_argument(
         "--head",
@@ -563,6 +640,17 @@ def main() -> None:
             y_col=args.metric,
             output_path=args.plot,
         )
+
+    if args.latex:
+        latex_code = format_beir_latex_table(df, aggregation_col=args.metric)
+        if args.latex == "-":
+            print("\n=== LATEX TABLE ===")
+            print(latex_code)
+        else:
+            out_file = Path(args.latex)
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(latex_code)
+            logging.info("Saved LaTeX table to: %s", out_file)
 
 
 if __name__ == "__main__":

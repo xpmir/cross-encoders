@@ -7,6 +7,9 @@ module: cross_encoders_training.experiment
 parent: ../_common.yaml
 nb_repetitions: 2
 
+export_trained_models: true
+pre_experiment: ""
+
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:
     loss: pearson_mixedbread_large
