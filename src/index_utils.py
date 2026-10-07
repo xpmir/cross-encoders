@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 import subprocess
 from typing import Optional, List, Dict, Tuple
-from experimaestro import Task
+from experimaestro import Launcher, Task
 from xpmir.index.sparse import (
     SparseRetrieverIndexBuilder,
     AbstractSparseRetrieverIndexBuilder,
@@ -26,10 +26,29 @@ def get_splade_index(
     indexation_cfg,
     launcher_index,
     init_tasks: list = [],
+    long_launcher_index: Optional[Launcher] = None,
+    long_evals: Optional[List[str]] = None,
+    key: Optional[str] = None,
 ):
     """Build an index for given documents, using a given Sparse retriever model
     Caches it to avoid submitting job twice.
     """
+    triggers = (
+        long_evals
+        if long_evals is not None
+        else (
+            getattr(indexation_cfg, "long_evals", None)
+            if indexation_cfg is not None
+            else None
+        )
+    ) or ["fever", "msmarco", "hotpotqa"]
+
+    target_key = key or documents.id
+    is_long = bool(
+        long_launcher_index is not None
+        and any(trigger in target_key for trigger in triggers)
+    )
+    launcher = long_launcher_index if is_long else launcher_index
 
     index_cfg = SparseRetrieverIndexBuilder.C(
         batch_size=indexation_cfg.batch_size,
@@ -44,13 +63,15 @@ def get_splade_index(
 
     if indexer_id not in _indexes:
         logger.info(
-            "Indexing %s (%s documents) with %s",
+            "Indexing %s (key=%s, %s documents) with %s: %s",
             documents.id,
+            key,
             documents.count,
-            launcher_index,
+            "long_launcher_index" if is_long else "launcher_index",
+            launcher,
         )
         index = index_cfg.tag("index_documents", documents.id).submit(
-            launcher=launcher_index, init_tasks=init_tasks
+            launcher=launcher, init_tasks=init_tasks
         )
         _indexes[indexer_id] = index
     else:
@@ -68,12 +89,32 @@ def get_plaid_index(
     batch_size: Optional[int] = None,
     init_tasks: list = None,
     seed: int = 42,
+    long_launcher_index: Optional[Launcher] = None,
+    long_evals: Optional[List[str]] = None,
+    key: Optional[str] = None,
 ):
     """Build a PLAID index for given documents using a given multi-vector/late-interaction encoder.
     Caches it to avoid submitting the job twice.
     """
     if init_tasks is None:
         init_tasks = []
+
+    triggers = (
+        long_evals
+        if long_evals is not None
+        else (
+            getattr(indexation_cfg, "long_evals", None)
+            if indexation_cfg is not None
+            else None
+        )
+    ) or ["fever", "msmarco", "hotpotqa"]
+
+    target_key = key or documents.id
+    is_long = bool(
+        long_launcher_index is not None
+        and any(trigger in target_key for trigger in triggers)
+    )
+    launcher = long_launcher_index if is_long else launcher_index
 
     # Document encoder batch size (GPU forward pass)
     if batch_size is not None and batch_size > 0:
@@ -111,13 +152,15 @@ def get_plaid_index(
 
     if cache_key not in _indexes:
         logger.info(
-            "Indexing %s (%s documents) with PLAID via %s",
+            "Indexing %s (key=%s, %s documents) with PLAID via %s: %s",
             documents.id,
+            key,
             getattr(documents, "count", "unknown"),
-            launcher_index,
+            "long_launcher_index" if is_long else "launcher_index",
+            launcher,
         )
         index = index_builder.tag("index_documents", documents.id).submit(
-            launcher=launcher_index, init_tasks=init_tasks
+            launcher=launcher, init_tasks=init_tasks
         )
         _indexes[cache_key] = index
     else:
@@ -242,7 +285,7 @@ def sync_index_size_metrics(
                     builder.__class__,
                 )
                 class_name = orig_type.__name__
-                metric_name = f"{class_name}_index_size"
+                metric_name = f"index_size_{class_name}"
 
                 index_path = getattr(builder, "index_path", None)
                 if index_path is None:

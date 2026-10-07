@@ -1,7 +1,7 @@
 """This file contains utilities for building Retrievers that can be used in various experiments"""
 
-from typing import Any, Dict, Optional
-from experimaestro import stop_tags
+from typing import Any, Dict, List, Optional
+from experimaestro import Launcher, stop_tags
 from datamaestro_ir.data import Documents
 from xpmir.rankers import Retriever
 import xpmir.interfaces.anserini as anserini
@@ -32,6 +32,9 @@ def plaid_retriever(
     topk: int = None,
     seed: int = 42,
     tags: Optional[Dict[str, Any]] = None,
+    long_launcher_index: Optional[Launcher] = None,
+    long_evals: Optional[List[str]] = None,
+    key: Optional[str] = None,
     **kwargs,
 ) -> Retriever.C:
     """Factory for PLAID Retriever, given the current configuration"""
@@ -48,6 +51,9 @@ def plaid_retriever(
                     indexation_cfg=getattr(cfg, "indexation", None),
                     init_tasks=init_tasks,
                     seed=seed,
+                    long_launcher_index=long_launcher_index,
+                    long_evals=long_evals,
+                    key=key,
                 )
             ),
             topk=topk or cfg.retrieval.k,
@@ -77,6 +83,9 @@ def splade_retriever(
     topk: int = None,
     in_memory: bool = False,
     tags: Optional[Dict[str, Any]] = None,
+    long_launcher_index: Optional[Launcher] = None,
+    long_evals: Optional[List[str]] = None,
+    key: Optional[str] = None,
     **kwargs,
 ) -> Retriever.C:
     """Factory for Splade Retriever, given the current configuration"""
@@ -89,6 +98,9 @@ def splade_retriever(
                 indexation_cfg=cfg.indexation,
                 launcher_index=launcher_index,
                 init_tasks=init_tasks,
+                long_launcher_index=long_launcher_index,
+                long_evals=long_evals,
+                key=key,
             )
         ),
         topk=topk or cfg.retrieval.k,
@@ -196,12 +208,21 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
         seed,
         launcher_index,
         init_tasks,
+        long_launcher_index: Optional[Launcher] = None,
+        long_evals: Optional[List[str]] = None,
     ):
         effective_max_doc = cfg.max_doc_length or self.max_doc_length
         if effective_max_doc is not None:
             self.doc_encoder = self.mice_model.get_document_encoder(
                 max_doc_length=effective_max_doc
             )
+
+        # Triggers default to evaluation's long_evals if not explicitly overridden for indexation
+        effective_long_evals = (
+            long_evals
+            if long_evals is not None
+            else getattr(evaluations, "long_evals", ["fever", "msmarco", "hotpotqa"])
+        )
 
         # 1) Build the index and retriever for this model
         for (
@@ -211,7 +232,15 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
             documents = collection.dataset.documents
 
             if documents.id not in self.indexes.keys():
-                logging.info(f"Building PLAID index for dataset {documents.id}")
+                is_long = bool(
+                    long_launcher_index is not None
+                    and any(trigger in dataset_key for trigger in effective_long_evals)
+                )
+                launcher = long_launcher_index if is_long else launcher_index
+                logging.info(
+                    f"Indexing dataset {documents.id} (key='{dataset_key}') using "
+                    f"{'long_launcher_index' if is_long else 'launcher_index'}: {launcher}"
+                )
                 self.indexes[dataset_key] = stop_tags(
                     PlaidIndexBuilder.C(
                         documents=documents,
@@ -230,7 +259,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
                     )
                     .tag("index_documents", documents.id)
                     .submit(
-                        launcher=launcher_index,
+                        launcher=launcher,
                         init_tasks=init_tasks,
                         # transient=TransientMode.REMOVE,
                     )

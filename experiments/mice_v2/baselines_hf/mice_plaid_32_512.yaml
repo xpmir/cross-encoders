@@ -25,8 +25,8 @@ evaluation:
   beir13: false
   beir13_decontaminated: false
   datasets:
-    - scidocs
-    - nfcorpus
+    - hotpotqa_decontaminated
+    # - nfcorpus
     # - scifact
     # - arguana
     # - fiqa

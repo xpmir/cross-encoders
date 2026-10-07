@@ -64,7 +64,9 @@ preprocessing:
 indexation:
     # Running Splade to index the collections.
     batch_size: 128
-    requirements: duration=8h & cpu(cores=5) & cuda(mem=10G)
+    requirements: duration=10h & cpu(cores=16, mem=20G) & cuda(mem=30G) # need H100
+    long_evals: ["fever", "dpbedia", "hotpotqa"]
+    long_requirements: duration=15h & cpu(cores=16, mem=20G) & cuda(mem=50G) # need H100
 
 # PLAID indexing
 

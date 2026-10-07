@@ -160,6 +160,7 @@ def build_first_stage_retrievers(
     cfg: BaselinesConfig,
     launcher_index,
     cfg_tags: Optional[Dict[str, Any]] = None,
+    long_launcher_index=None,
 ) -> List[Tuple[str, Any, List[Any]]]:
     """Instantiate the first-stage candidate retriever (SPLADE or BM25).
 
@@ -184,6 +185,8 @@ def build_first_stage_retrievers(
                     retriever_name,
                     splade_encoder,
                     launcher_index=launcher_index,
+                    long_launcher_index=long_launcher_index,
+                    long_evals=getattr(cfg.indexation, "long_evals", None),
                     topk=cfg.retrieval.k,
                     init_tasks=retriever_init_tasks,
                     tags=cfg_tags,
@@ -343,7 +346,6 @@ def tag_scorer(
     scorer.tag("scorer_type", resolved_type_str)
     if is_from_exp:
         exp_id, run_id = parse_experiment_ref(target_id)
-        scorer.tag("from_experiment", exp_id)
         if run_id:
             scorer.tag("from_run_id", run_id)
 
@@ -386,6 +388,7 @@ def evaluate_scorer(
     launcher_evaluate,
     launcher_index,
     fabric_config,
+    long_launcher_index=None,
 ):
     """Evaluates a single scorer configuration.
 
@@ -531,6 +534,8 @@ def evaluate_scorer(
             target_id,
             scorer,
             launcher_index=launcher_index,
+            long_launcher_index=long_launcher_index,
+            long_evals=getattr(cfg.indexation, "long_evals", None),
             topk=cfg.retrieval.k,
             init_tasks=ce_init_tasks,
             tags=cfg_tags,
@@ -624,6 +629,8 @@ def evaluate_scorer(
                 seed=0,
                 launcher_index=launcher_index,
                 init_tasks=ce_init_tasks,
+                long_launcher_index=long_launcher_index,
+                long_evals=getattr(cfg.indexation, "long_evals", None),
             )
             tests.evaluate_retriever(
                 retriever=mice_plaid_factory,
@@ -664,6 +671,8 @@ def evaluate_scorer(
                     seed=0,
                     launcher_index=launcher_index,
                     init_tasks=ce_init_tasks,
+                    long_launcher_index=long_launcher_index,
+                    long_evals=cfg.indexation.long_evals,
                 )
                 tests.evaluate_retriever(
                     retriever=mice_colbert_rerank_factory,
@@ -722,6 +731,8 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     base_config = all_configs[0]
     launcher_evaluate = find_launcher(base_config.retrieval.requirements)
     launcher_index = find_launcher(base_config.indexation.requirements)
+    long_reqs_index = getattr(base_config.indexation, "long_requirements", None)
+    long_launcher_index = find_launcher(long_reqs_index) if long_reqs_index else None
     launcher_preprocessing = find_launcher(base_config.preprocessing.requirements)
 
     fabric_config = (
@@ -787,8 +798,11 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         ] = {}
 
         if needs_first_stage:
-            # Build first-stage candidate retrievers (SPLADE or BM25)
-            all_retrievers = build_first_stage_retrievers(base_config, launcher_index)
+            all_retrievers = build_first_stage_retrievers(
+                base_config,
+                launcher_index,
+                long_launcher_index=long_launcher_index,
+            )
             logging.info(
                 f"Evaluating first-stage candidate retrievers: {[name for name, _, _ in all_retrievers]}"
             )
@@ -831,6 +845,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                 launcher_evaluate=launcher_evaluate,
                 launcher_index=launcher_index,
                 fabric_config=fabric_config,
+                long_launcher_index=long_launcher_index,
             )
 
     # Wait for all tasks to complete

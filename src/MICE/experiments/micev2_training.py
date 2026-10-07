@@ -373,6 +373,8 @@ def TrainEvaluateMiceV2(
 ) -> PaperResults:
     """Generic training and evaluation experiment for late interaction models."""
     launcher_index = find_launcher(cfg.indexation.requirements)
+    long_reqs_index = cfg.indexation.long_requirements
+    long_launcher_index = find_launcher(long_reqs_index) if long_reqs_index else None
     launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
@@ -844,6 +846,8 @@ def TrainEvaluateMiceV2(
                         seed=seed,
                         launcher_index=launcher_index,
                         init_tasks=[load_model],
+                        long_launcher_index=long_launcher_index,
+                        long_evals=getattr(cfg.indexation, "long_evals", None),
                     )
 
                     # 2) Run tests with the factory
@@ -912,6 +916,8 @@ def TrainEvaluateMiceV2(
                             seed=seed,
                             launcher_index=launcher_index,
                             init_tasks=[load_model],
+                            long_launcher_index=long_launcher_index,
+                            long_evals=getattr(cfg.indexation, "long_evals", None),
                         )
                         tests.evaluate_retriever(
                             retriever=mice_colbert_rerank_factory,

@@ -142,6 +142,12 @@ class Indexation(LauncherSpecification):
     requirements: str = "duration=2 days & cpu(cores=8)"
     sparse2bmp_requirements: str = "duration=1d & cuda(mem=24G)"
 
+    long_evals: Optional[List[str]] = None
+    """List of substrings. If a dataset name matches one, indexing will route to long_launcher_index. Defaults to None, inheriting evaluation's long_evals."""
+
+    long_requirements: Optional[str] = None
+    """Requirements string used to instantiate the specialized long_launcher_index for indexing."""
+
 
 @configuration()
 class Retrieval:

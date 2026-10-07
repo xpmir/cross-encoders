@@ -223,6 +223,8 @@ def get_ce_name(model_tags: dict) -> str:
 @learning_experiment()
 def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
     launcher_index = find_launcher(cfg.indexation.requirements)
+    long_reqs_index = getattr(cfg.indexation, "long_requirements", None)
+    long_launcher_index = find_launcher(long_reqs_index) if long_reqs_index else None
     launcher_learner = find_launcher(cfg.learner.requirements)
     launcher_evaluate = find_launcher(cfg.retrieval.requirements)
     launcher_preprocessing = find_launcher(cfg.preprocessing.requirements)
@@ -276,6 +278,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 retriever_tag,
                 splade_encoder,
                 launcher_index=launcher_index,
+                long_launcher_index=long_launcher_index,
+                long_evals=getattr(cfg.indexation, "long_evals", None),
                 topk=cfg.retrieval.k,
                 init_tasks=retriever_init_tasks,
             )
@@ -523,6 +527,8 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                             cfg.base,
                             scorer_model,
                             launcher_index=launcher_index,
+                            long_launcher_index=long_launcher_index,
+                            long_evals=getattr(cfg.indexation, "long_evals", None),
                             init_tasks=[plaid_load_model],
                             topk=cfg.retrieval.k,
                             seed=seed,
