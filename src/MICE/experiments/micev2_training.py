@@ -785,7 +785,7 @@ def TrainEvaluateMiceV2(
 
             # Shared evaluation execution loop (Standard & PLAID)
             for model_id, load_model, label, eval_model in models_to_evaluate:
-                if cfg.plaid.use_plaid:
+                if cfg.use_plaid:
                     load_model.tag("plaid_retriever", False)
 
                 eval_init_tasks = [load_model]
@@ -813,7 +813,7 @@ def TrainEvaluateMiceV2(
                     fabric_config=cfg.evaluation.fabric.get_config(),
                 )
 
-                if cfg.plaid.use_plaid:
+                if cfg.use_plaid:
                     load_model.tag("plaid_retriever", True)
                     logging.info(f"Running PLAID-style evaluation for: {label}")
                     if cfg.plaid.max_doc_length is not None:

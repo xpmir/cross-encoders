@@ -13,12 +13,13 @@ bottom_final_norm: false
 normalize_doc_embeds:
     values_list: [true, false]
 
+use_plaid: true
+
 plaid:
-    use_plaid: true
     buffer_size:
         values_list: [1000, 5000, 10000]
-    n_bits: 
-        values_list: [2, 4, 8] 
+    n_bits:
+        values_list: [2, 4, 8]
 
 evaluation: # Build Plaid index and Evaluate only on 3 small datasets
     eval_checkpoint: "last"

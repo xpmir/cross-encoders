@@ -307,9 +307,6 @@ class PlaidConfiguration:
     Configuration for PLAID integration in MICE retrieval pipeline.
     """
 
-    use_plaid: bool = False
-    """Whether to use PLAID for retrieval"""
-
     use_colbert_first_stage: bool = False
     """Whether to additionally evaluate a genuine ColBERT-style first-stage
     retriever using MICE's own bottom-layer contextualized embeddings
@@ -369,6 +366,9 @@ class PlaidConfiguration:
 
 @configuration()
 class CE_FineTuning(RerankerMSMarcoV1Configuration):
+    use_plaid: GridSearch[bool] = False
+    """Whether to evaluate with PLAID index and retriever."""
+
     nb_repetitions: int = field(default=1)
     """Number of repetitions of the training process"""
 

@@ -16,8 +16,9 @@ bottom_final_norm: false
 top_final_norm: false
 normalize_doc_embeds: true
 
+use_plaid: true
+
 plaid:
-    use_plaid: true
     use_colbert_first_stage: true
     buffer_size: 5000
     n_bits: 4

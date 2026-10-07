@@ -272,6 +272,10 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 in_memory=True,
             )
 
+            effective_long_evals = getattr(
+                cfg.indexation, "long_evals", None
+            ) or getattr(cfg.retrieval, "long_evals", None)
+
             test_retrievers_factory = partial(
                 splade_retriever,
                 cfg,
@@ -279,7 +283,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 splade_encoder,
                 launcher_index=launcher_index,
                 long_launcher_index=long_launcher_index,
-                long_evals=getattr(cfg.indexation, "long_evals", None),
+                long_evals=effective_long_evals,
                 topk=cfg.retrieval.k,
                 init_tasks=retriever_init_tasks,
             )
@@ -476,9 +480,13 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                     models_to_evaluate.append((model_id, load_model))
 
             # Shared evaluation execution loop
+            effective_long_evals = getattr(
+                cfg.indexation, "long_evals", None
+            ) or getattr(cfg.retrieval, "long_evals", None)
+
             for model_id, load_model in models_to_evaluate:
                 load_model.tag("scorer", cfg.base)
-                if cfg.plaid.use_plaid:
+                if cfg.use_plaid:
                     load_model.tag("plaid_retriever", False)
                 all_weights.append(load_model)
                 tests.evaluate_retriever(
@@ -500,10 +508,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                 )
 
                 # Option A: Standalone PLAID first-stage evaluation
-                if (
-                    cfg.plaid.use_plaid
-                    and scorer_type == ScorerType.stMultiVectorEncoder
-                ):
+                if cfg.use_plaid and scorer_type == ScorerType.stMultiVectorEncoder:
                     logging.info(
                         f"Scheduling PLAID first-stage evaluation for model {model_id}"
                     )
@@ -528,7 +533,7 @@ def run(helper: LearningExperimentHelper, cfg: CE_FineTuning) -> PaperResults:
                             scorer_model,
                             launcher_index=launcher_index,
                             long_launcher_index=long_launcher_index,
-                            long_evals=getattr(cfg.indexation, "long_evals", None),
+                            long_evals=effective_long_evals,
                             init_tasks=[plaid_load_model],
                             topk=cfg.retrieval.k,
                             seed=seed,

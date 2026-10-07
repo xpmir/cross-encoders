@@ -138,7 +138,7 @@ class BaselinesConfig(NeuralIRExperiment):
     retriever: str = ""
     """First-stage candidate retriever model (e.g. 'naver/splade-v3-distilbert' for SPLADE, or 'bm25'/empty for BM25)."""
 
-    use_plaid: bool = False
+    use_plaid: GridSearch[bool] = False
     """Whether to use PLAID multi-vector indexing and retrieval."""
 
     compare_with_baseline: bool = False
@@ -506,7 +506,7 @@ def evaluate_scorer(
     else:
         raise ValueError(f"Unsupported scorer_type: '{scorer_type_enum}'")
 
-    is_plaid = bool(cfg.use_plaid or (cfg.plaid and cfg.plaid.use_plaid))
+    is_plaid = bool(cfg.use_plaid)
     is_colbert = resolved_type_str == ScorerType.stMultiVectorEncoder.value
     is_mice = resolved_type_str == "mice_v2"
 
@@ -786,9 +786,9 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         needs_first_stage = False
         for c in all_configs:
             st_type = ScorerType.from_string(c.scorer_type) if c.scorer_type else None
-            is_colbert_plaid = (st_type == ScorerType.stMultiVectorEncoder) and (
-                c.use_plaid or c.plaid.use_plaid
-            )
+            is_colbert_plaid = (
+                st_type == ScorerType.stMultiVectorEncoder
+            ) and c.use_plaid
             if not is_colbert_plaid:
                 needs_first_stage = True
                 break
@@ -855,11 +855,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         sync_eval_sparsity_metrics(tests)
 
     # When use_plaid is True, sync on-disk index sizes from the dependency graph
-    is_plaid = any(
-        getattr(c, "use_plaid", False)
-        or (getattr(c, "plaid", None) and getattr(c.plaid, "use_plaid", False))
-        for c in all_configs
-    )
+    is_plaid = any(c.use_plaid for c in all_configs)
     if is_plaid:
         sync_index_size_metrics(tests)
 

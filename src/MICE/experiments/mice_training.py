@@ -401,7 +401,7 @@ def TrainEvaluateLateInteractionScorer(
 
             # Shared evaluation execution loop (Standard & PLAID)
             for model_id, load_model, label in models_to_evaluate:
-                if cfg.plaid.use_plaid:
+                if cfg.use_plaid:
                     load_model.tag("plaid_retriever", False)
 
                 all_weights.append(load_model)
@@ -419,7 +419,7 @@ def TrainEvaluateLateInteractionScorer(
                     fabric_config=cfg.evaluation.fabric.get_config(),
                 )
 
-                if cfg.plaid.use_plaid:
+                if cfg.use_plaid:
                     load_model.tag("plaid_retriever", True)
                     logging.info(f"Running PLAID-style evaluation for: {label}")
                     # 1) Build the Retriever factory for first stage + model + Plaid

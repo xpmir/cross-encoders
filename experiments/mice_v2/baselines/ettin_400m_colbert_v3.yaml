@@ -47,7 +47,6 @@ grid_search:
 # use_plaid: true # TODO when plaid params are fixed
 # include_recall_100: true
 # plaid:
-#   use_plaid: true
 #   max_doc_length: 512
 #   max_query_length: 32
 #   n_bits: 2

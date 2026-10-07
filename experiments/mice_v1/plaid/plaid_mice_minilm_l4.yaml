@@ -67,8 +67,9 @@ mask_cls_to_doc: false
 # global_cls_token: true
 base: microsoft/MiniLM-L12-H384-uncased
 
+use_plaid: true
+
 plaid:
-    use_plaid: true
     fast_plaid_batch_size: 25_000
     n_bits: 4
     kmeans_niters: 4

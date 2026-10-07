@@ -830,13 +830,8 @@ def process_experiment_results(
 
     # When use_plaid is True, sync on-disk index sizes from the dependency graph
     is_plaid = bool(
-        (getattr(cfg, "plaid", None) and getattr(cfg.plaid, "use_plaid", False))
-        or getattr(cfg, "use_plaid", False)
-        or any(
-            (getattr(c, "plaid", None) and getattr(c.plaid, "use_plaid", False))
-            or getattr(c, "use_plaid", False)
-            for c in config_map.values()
-        )
+        getattr(cfg, "use_plaid", False)
+        or any(getattr(c, "use_plaid", False) for c in config_map.values())
     )
     if is_plaid:
         from index_utils import sync_index_size_metrics

@@ -146,8 +146,8 @@ def test_sync_index_size_metrics_idempotency_and_formatting():
             sync_index_size_metrics(tests, builder_classes=builder_classes)
 
             content = agg_path.read_text()
-            assert "MockPlaidIndexBuilder_index_size" in content
-            assert "MockSparseRetrieverIndexBuilder_index_size" in content
+            assert "index_size_MockPlaidIndexBuilder" in content
+            assert "index_size_MockSparseRetrieverIndexBuilder" in content
             lines = [l for l in content.splitlines() if "index_size" in l]
             assert len(lines) == 2
 
@@ -169,10 +169,10 @@ def test_sync_index_size_metrics_idempotency_and_formatting():
             from xpmir.evaluation import TrecAdhocResults
             trec_results = TrecAdhocResults.C(id="test", results=agg_path, detailed=Path(tmpdir) / "detailed.dat")
             parsed = trec_results.get_results()
-            assert "MockPlaidIndexBuilder_index_size" in parsed
-            assert "MockSparseRetrieverIndexBuilder_index_size" in parsed
-            assert float(parsed["MockPlaidIndexBuilder_index_size"]) == pytest.approx(1.0, 0.01)
-            assert float(parsed["MockSparseRetrieverIndexBuilder_index_size"]) == pytest.approx(2.0, 0.01)
+            assert "index_size_MockPlaidIndexBuilder" in parsed
+            assert "index_size_MockSparseRetrieverIndexBuilder" in parsed
+            assert float(parsed["index_size_MockPlaidIndexBuilder"]) == pytest.approx(1.0, 0.01)
+            assert float(parsed["index_size_MockSparseRetrieverIndexBuilder"]) == pytest.approx(2.0, 0.01)
 
 
 def test_process_experiment_results_syncs_index_size_when_plaid(tmp_path):
@@ -200,7 +200,7 @@ def test_process_experiment_results_syncs_index_size_when_plaid(tmp_path):
     mock_helper = MagicMock()
     mock_helper.xp.resultspath = tmp_path
 
-    cfg = CE_FineTuning(plaid=PlaidConfiguration(use_plaid=True))
+    cfg = CE_FineTuning(use_plaid=True)
     all_tags = [{"base": "colbert-test"}]
     config_map = {frozenset([("base", "colbert-test")]): cfg}
 

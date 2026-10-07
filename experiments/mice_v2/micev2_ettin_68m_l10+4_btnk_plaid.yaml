@@ -27,8 +27,8 @@ evaluation: #default = Minified tests
     beir13: false
     beir13_decontaminated: true
 
-# plaid: #TODO when plaid params are fixed
-#     use_plaid: true
+# use_plaid: true #TODO when plaid params are fixed
+# plaid:
 #     buffer_size: 5000
 #     n_bits: 8
 #     max_doc_length: 512

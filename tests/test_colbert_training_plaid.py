@@ -182,7 +182,7 @@ def test_colbert_checkpoint_evaluation_dual_dispatch():
     """Verify that the checkpoint evaluation loop dispatches both 2-stage and PLAID evaluations with correct tagging."""
     cfg = CE_FineTuning()
     cfg.base = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    cfg.plaid.use_plaid = True
+    cfg.use_plaid = True
     scorer_type = ScorerType.stMultiVectorEncoder
 
     scorer = st_multivector_scorer(model_id=cfg.base)
@@ -198,7 +198,7 @@ def test_colbert_checkpoint_evaluation_dual_dispatch():
 
     # Simulate checkpoint loop from cross_encoders_training/experiment.py
     for model_id, lm in models_to_evaluate:
-        if cfg.plaid.use_plaid:
+        if cfg.use_plaid:
             lm.tag("plaid_retriever", False)
         all_weights.append(lm)
         mock_tests.evaluate_retriever(
@@ -208,7 +208,7 @@ def test_colbert_checkpoint_evaluation_dual_dispatch():
             init_tasks=[lm],
         )
 
-        if cfg.plaid.use_plaid and scorer_type == ScorerType.stMultiVectorEncoder:
+        if cfg.use_plaid and scorer_type == ScorerType.stMultiVectorEncoder:
             plaid_lm = scorer.loader_config(
                 lm.path,
                 settings=getattr(lm, "settings", None),
@@ -346,3 +346,66 @@ def test_plaid_batch_sizes_separation():
     assert captured_variant is not None
     assert captured_variant.fast_plaid_batch_size == 32
     assert captured_builder.__identifier__() == captured_variant.__identifier__()
+
+
+def test_colbert_training_routes_plaid_to_long_launcher_index():
+    """Verify that during ColBERT training evaluation with PLAID,
+    effective_long_evals routes matching datasets to long_launcher_index."""
+    from retrievers import plaid_retriever
+    from functools import partial
+
+    _indexes.clear()
+
+    launcher_default = MagicMock(name="default_launcher")
+    launcher_long = MagicMock(name="long_launcher")
+
+    cfg = CE_FineTuning(use_plaid=True)
+    cfg.base = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    cfg.retrieval.long_evals = ["fever", "arguana"]
+    # indexation.long_evals is None by default, should inherit retrieval.long_evals
+    assert cfg.indexation.long_evals is None
+
+    effective_long_evals = (
+        getattr(cfg.indexation, "long_evals", None)
+        or getattr(cfg.retrieval, "long_evals", None)
+    )
+    assert effective_long_evals == ["fever", "arguana"]
+
+    scorer = st_multivector_scorer(model_id=cfg.base)
+    loader = STModuleLoader.C(value=scorer, path=Path("/tmp/chk_test"))
+
+    factory = partial(
+        plaid_retriever,
+        cfg,
+        cfg.base,
+        scorer,
+        launcher_index=launcher_default,
+        long_launcher_index=launcher_long,
+        long_evals=effective_long_evals,
+        init_tasks=[loader],
+        topk=10,
+        seed=0,
+    )
+
+    doc_store_scifact = SampleDocumentStore.C(id="scifact", num_docs=2)
+    doc_store_fever = SampleDocumentStore.C(id="fever", num_docs=2)
+
+    submitted_launchers = []
+
+    def mock_submit(builder_self, launcher=None, **kwargs):
+        submitted_launchers.append(launcher)
+        return PlaidIndex.C(
+            documents=builder_self.documents,
+            index_path=Path("/tmp/fake_index"),
+        )
+
+    with patch("xpmir.index.plaid.PlaidIndexBuilder.C.submit", new=mock_submit):
+        # Non-matching key (scifact) -> default launcher
+        factory(doc_store_scifact, key="beir/scifact")
+        assert len(submitted_launchers) == 1
+        assert submitted_launchers[0] == launcher_default
+
+        # Matching key (fever) -> long launcher
+        factory(doc_store_fever, key="beir/fever")
+        assert len(submitted_launchers) == 2
+        assert submitted_launchers[1] == launcher_long

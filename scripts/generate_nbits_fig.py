@@ -14,8 +14,24 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+FONT_SIZE = 14
+
+plt.rcParams.update(
+    {
+        "font.family": "DejaVu Serif",
+        "font.serif": [""],
+        "font.size": FONT_SIZE,
+        "axes.labelsize": 11,
+        "axes.titlesize": FONT_SIZE,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+        "legend.fontsize": FONT_SIZE - 3,
+    }
+)
+plt.style.use("ggplot")
+
 DEFAULT_HOST = "JZ"
-DATA_FILE_PATH = "/lustre/fsn1/projects/rech/npl/commun/micev2/experiments/eval_lateon_plaid_abl_nbits/20261006_145108/results/results.csv"
+DATA_FILE_PATH = "/lustre/fsn1/projects/rech/npl/commun/micev2/experiments/eval_lateon_plaid_abl_nbits/20261007_113734/results/results.csv"
 
 
 def read_remote_csv(
@@ -120,11 +136,12 @@ def plot_nbits(
             d_df["norm_perf"] = d_df[metric] - ref_val
             norm_rows.append(d_df)
 
+            dataset_label = d.replace("_decontaminated", "")
             ax.plot(
                 d_df["n_bits"],
                 d_df["norm_perf"],
                 marker="o",
-                label=d,
+                label=dataset_label,
                 color=dataset_colors[d],
                 linewidth=1.8,
                 markersize=6,
@@ -155,20 +172,25 @@ def plot_nbits(
         ax.axhline(0, color="gray", linestyle=":", linewidth=1, alpha=0.7)
 
         scorer_display_map = {
-            "train_micev2_ettin68m_l10+4_v3_plaid_128": "Mice-ettin68m-l10p4-128",
+            "train_micev2_ettin68m_l10+4_v3_plaid_128": "Mice-ettin68m",
+            "train_micev2_ettin150m_l12+4_v3_plaid_128": "Mice-ettin150m",
             "lightonai/LateOn": "LateOn",
+        }
+        first_stage_display_map = {
+            "plaid": "PLAID",
+            "naver/splade-v3-distilbert": "SPLADE-v3",
         }
         model_name = scorer_display_map.get(scorer, scorer.split("/")[-1])
         first_stage = scorer_df["first_stage"].dropna().unique()
-        first_stage_str = f"\n(first stage: {first_stage[0]})" if len(first_stage) > 0 else ""
-        ax.set_title(f"{model_name}{first_stage_str}", fontsize=11, fontweight="bold")
-        ax.set_xlabel("nbits (PLAID)", fontsize=11)
+        first_stage_name = first_stage_display_map.get(first_stage[0].lower(), first_stage[0]) if len(first_stage) > 0 else ""
+        ax.set_title(f"{model_name}\n(first stage: {first_stage_name})", fontweight="bold", fontsize=FONT_SIZE)
+        ax.set_xlabel("nbits (PLAID)")
         ax.set_xticks(nbits_values)
         ax.set_xticklabels([str(int(b)) if b.is_integer() else str(b) for b in nbits_values])
         ax.grid(True, linestyle="--", alpha=0.5)
-        ax.legend(loc="lower right", frameon=True, fontsize=9)
+        ax.legend(loc="lower right", frameon=True)
 
-    axes[0].set_ylabel(f"Δ {metric} (relative to 8-bits)", fontsize=11)
+    axes[0].set_ylabel(f"Δ {metric} (relative to 8-bits)")
 
     plt.tight_layout()
     out = Path(output_path)
@@ -204,7 +226,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=str,
-        default="nbits_ablation.png",
+        default="figures/nbits_ablation.png",
         help="Output path for the generated plot (default: 'nbits_ablation.png').",
     )
     parser.add_argument(
