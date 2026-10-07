@@ -14,17 +14,17 @@ grid_search:
     - scorer_type: st
       scorer_id: cross-encoder/ettin-reranker-400m-v1
     - scorer_type: st
-      scorer_id: cross-encoder/ettin-reranker-150m-v1
-    - scorer_type: st
-      scorer_id: cross-encoder/ettin-reranker-68m-v1
-    - scorer_type: st
-      scorer_id: cross-encoder/ettin-reranker-32m-v1
-    # - scorer_type: miceV2
-    #   from_experiment: VictorMorand/MiceV2-l10p4-ettin-68m
-    - scorer_type: stMultiVectorEncoder
-      scorer_id: lightonai/LateOn
-    - scorer_type: stMultiVectorEncoder
-      scorer_id: lightonai/LateOn-unsupervised
+    #   scorer_id: cross-encoder/ettin-reranker-150m-v1
+    # - scorer_type: st
+    #   scorer_id: cross-encoder/ettin-reranker-68m-v1
+    # - scorer_type: st
+    #   scorer_id: cross-encoder/ettin-reranker-32m-v1
+    # # - scorer_type: miceV2
+    # #   from_experiment: VictorMorand/MiceV2-l10p4-ettin-68m
+    # - scorer_type: stMultiVectorEncoder
+    #   scorer_id: lightonai/LateOn
+    # - scorer_type: stMultiVectorEncoder
+    #   scorer_id: lightonai/LateOn-unsupervised
 
 max_query_length: 32
 max_doc_length: 512

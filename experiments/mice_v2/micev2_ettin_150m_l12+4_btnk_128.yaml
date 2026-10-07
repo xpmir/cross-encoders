@@ -28,7 +28,9 @@ n_contextualization_layers: 12
 n_interaction_layers: 4
 
 evaluation: #default = Minified tests
-    eval_checkpoint: "last"
+    eval_checkpoint:
+        - last
+        - best
     all_datasets: false
     in_domain: false
     beir13: false

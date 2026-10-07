@@ -62,11 +62,97 @@ def find_column(df: pd.DataFrame, target_name: str) -> str:
     raise ValueError(error_msg)
 
 
+def normalize_store_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalizes 'store' column to boolean (True/False)."""
+    if "store" in df.columns:
+        df["store"] = df["store"].apply(
+            lambda v: True
+            if (isinstance(v, bool) and v)
+            or str(v).strip().lower() in ("true", "1", "yes")
+            else False
+        )
+    else:
+        df["store"] = False
+    return df
+
+
+def find_precomp_column(df: pd.DataFrame) -> str | None:
+    """Finds the precomputed FLOPs column name if present."""
+    for candidate in [
+        "Flops_precomp",
+        "Flops_precompute",
+        "flops_precompute",
+        "flops_precomp",
+    ]:
+        for col in df.columns:
+            if col.lower() == candidate.lower():
+                return col
+    return None
+
+
+def add_effective_flops_column(
+    df: pd.DataFrame,
+    flops_col: str = "Flops",
+    precomp_col: str | None = None,
+) -> pd.DataFrame:
+    """Computes an 'effective_flops' column taking precomputed FLOPs when store is True.
+
+    For rows where store is True, uses precomputed FLOPs (Flops_precomp).
+    Otherwise, uses the baseline FLOPs.
+    """
+    try:
+        matched_flops = find_column(df, flops_col)
+    except ValueError:
+        matched_flops = None
+
+    matched_precomp = (
+        find_column(df, precomp_col) if precomp_col else find_precomp_column(df)
+    )
+
+    if matched_flops is None:
+        logging.warning("Flops column '%s' not found, skipping 'effective_flops'.", flops_col)
+        return df
+
+    def get_effective(row: pd.Series) -> float | None:
+        is_stored = bool(row.get("store", False))
+        if is_stored:
+            if matched_precomp is not None:
+                val = pd.to_numeric(row[matched_precomp], errors="coerce")
+                if pd.notna(val):
+                    return float(val)
+                logging.warning(
+                    "Model '%s' has store=True but '%s' is missing/invalid (%s). "
+                    "Falling back to '%s'.",
+                    row.get("scorer", "unknown"),
+                    matched_precomp,
+                    row[matched_precomp],
+                    matched_flops,
+                )
+            else:
+                logging.warning(
+                    "Model '%s' has store=True but no precompute FLOPs column found. "
+                    "Falling back to '%s'.",
+                    row.get("scorer", "unknown"),
+                    matched_flops,
+                )
+        base_val = pd.to_numeric(row[matched_flops], errors="coerce")
+        return float(base_val) if pd.notna(base_val) else None
+
+    df["effective_flops"] = df.apply(get_effective, axis=1)
+    logging.info(
+        "Computed 'effective_flops' column (using '%s' when store=True, else '%s').",
+        matched_precomp if matched_precomp else "N/A",
+        matched_flops,
+    )
+    return df
+
+
 def fetch_sheet_as_df(
     sheet_url: str,
     metric: str | None = "BEIR13 Decont",
     tok: str | None = "1024-1024",
     drop_empty_cols: bool = True,
+    flops_col: str = "Flops",
 ) -> pd.DataFrame:
     """Fetches a Google Sheet as a pandas DataFrame and applies filtering.
 
@@ -75,6 +161,7 @@ def fetch_sheet_as_df(
         metric: Column name to filter on. Rows with NaN in this column are removed.
         tok: Tokenizer configuration to filter on (e.g. '1024-1024', '32-512', or 'all').
         drop_empty_cols: Whether to drop columns containing only NaNs.
+        flops_col: Flops column name for computing effective FLOPs.
     """
     sheet_id, gid = parse_google_sheet_url(sheet_url)
     logging.info("Parsed Sheet ID: %s, gid: %s", sheet_id, gid)
@@ -93,6 +180,9 @@ def fetch_sheet_as_df(
 
     # Normalize column names (e.g. replace internal newlines from multi-line headers with space)
     df.columns = [normalize_column_name(str(c)) for c in df.columns]
+
+    # Normalize store column to boolean before empty column dropping
+    df = normalize_store_column(df)
 
     # Filter by tok if specified
     if tok and tok.lower() != "all":
@@ -134,6 +224,7 @@ def fetch_sheet_as_df(
 
     df = add_size_class_columns(df)
     df = add_type_column(df)
+    df = add_effective_flops_column(df, flops_col=flops_col)
     return df
 
 
@@ -167,30 +258,36 @@ def add_type_column(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_size_class_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Adds size class columns based on the 'scorer' column.
+    """Adds size class columns based on 'scorer' and 'base' columns.
 
-    Adds boolean columns for '68m', '150m', '400m', and a categorical 'size_class' column.
+    Adds boolean columns for '68m', '150m', '400m', 'lateOn-unsup', and a categorical 'size_class' column.
     """
     if "scorer" not in df.columns:
         logging.warning("'scorer' column not found, skipping size class detection.")
         return df
 
-    def get_size(scorer_val: object) -> str | None:
-        if not isinstance(scorer_val, str):
-            return None
-        s = scorer_val.lower()
-        for size in ["68m", "150m", "400m"]:
-            prefix = size[:-1]
-            pattern = rf"{size}|(?<![0-9]){prefix}(?![0-9])"
-            if re.search(pattern, s):
-                return size
-        return None
+    def get_size(row: pd.Series) -> str:
+        scorer_val = str(row.get("scorer", "")).lower()
+        base_val = str(row.get("base", "")).lower()
 
-    size_series = df["scorer"].apply(get_size)
-    df["size_class"] = size_series.fillna("other")
+        # Check for LateOn first
+        if "lateon" in scorer_val or "lateon" in base_val:
+            return "lateOn-unsup"
+
+        for s in [scorer_val, base_val]:
+            for size in ["68m", "150m", "400m"]:
+                prefix = size[:-1]
+                pattern = rf"{size}|(?<![0-9]){prefix}(?![0-9])"
+                if re.search(pattern, s):
+                    return size
+        return "other"
+
+    size_series = df.apply(get_size, axis=1)
+    df["size_class"] = size_series
 
     for size in ["68m", "150m", "400m"]:
         df[size] = size_series == size
+    df["lateOn-unsup"] = size_series == "lateOn-unsup"
 
     logging.info(
         "Identified size classes: %s",
@@ -300,6 +397,7 @@ def plot_pareto_frontier(
     y_col: str,
     output_path: str,
     title: str | None = None,
+    pareto_no_store_df: pd.DataFrame | None = None,
 ) -> None:
     """Plots all valid points and draws the step-post Pareto frontier."""
     matched_x = find_column(df, x_col)
@@ -312,7 +410,8 @@ def plot_pareto_frontier(
     # Convert Flops to GFLOPs if scale is large
     use_gflops = valid_df[matched_x].max() > 1e6
     scale = 1e9 if use_gflops else 1.0
-    x_label = f"{matched_x} (GFLOPs)" if use_gflops else matched_x
+    x_display_name = "FLOPs" if matched_x in ["effective_flops", "Flops"] else matched_x
+    x_label = f"{x_display_name} (GFLOPs)" if use_gflops else x_display_name
 
     fig, ax = plt.subplots(figsize=(8, 6), dpi=200)
 
@@ -320,6 +419,7 @@ def plot_pareto_frontier(
         "68m": "#f29f28",
         "150m": "#d6191b",
         "400m": "#221199",
+        "lateOn-unsup": "#16a085",
         "other": "#7f8c8d",
     }
 
@@ -337,23 +437,47 @@ def plot_pareto_frontier(
         "other": "Other",
     }
 
-    # Scatter points grouped by size_class and type
+    # Scatter points grouped by size_class, type, and store
     has_size = "size_class" in valid_df.columns
     has_type = "type" in valid_df.columns
+    has_store = "store" in valid_df.columns
 
     if has_size and has_type:
-        for (size_cls, mtype), subset in valid_df.groupby(["size_class", "type"]):
+        group_cols = ["size_class", "type"]
+        if has_store:
+            group_cols.append("store")
+
+        for group_keys, subset in valid_df.groupby(group_cols):
+            if has_store:
+                size_cls, mtype, is_stored = group_keys
+            else:
+                size_cls, mtype = group_keys
+                is_stored = False
+
             color = SIZE_COLORS.get(size_cls, "#7f8c8d")
             marker = TYPE_MARKERS.get(mtype, "o")
             marker_size = 140 if marker == "*" else 90
+
+            if is_stored:
+                facecolor = "none"
+                edgecolor = color
+                linewidth = 1.0
+                alpha = 1.0
+            else:
+                facecolor = color
+                edgecolor = "black"
+                linewidth = 1.0
+                alpha = 0.85
+
             ax.scatter(
                 subset[matched_x] / scale,
                 subset[matched_y],
-                color=color,
+                facecolors=facecolor,
+                edgecolors=edgecolor,
+                linewidths=linewidth,
                 marker=marker,
-                edgecolors="black",
                 s=marker_size,
-                alpha=0.85,
+                alpha=alpha,
                 zorder=3,
             )
     else:
@@ -394,7 +518,22 @@ def plot_pareto_frontier(
     except Exception:
         pass
 
-    # Draw frontier strictly as a dotted line without separate markers
+    # Draw solid frontier for models without document precomputation
+    if pareto_no_store_df is not None and not pareto_no_store_df.empty:
+        p_ns_x = (pd.to_numeric(pareto_no_store_df[matched_x]) / scale).tolist()
+        p_ns_y = pd.to_numeric(pareto_no_store_df[matched_y]).tolist()
+
+        ax.plot(
+            p_ns_x,
+            p_ns_y,
+            drawstyle="steps-post",
+            color="#2c3e50",
+            linestyle="-",
+            linewidth=1.8,
+            zorder=4,
+        )
+
+    # Draw dotted frontier for overall models (with doc precompute)
     if not pareto_df.empty:
         p_x = (pd.to_numeric(pareto_df[matched_x]) / scale).tolist()
         p_y = pd.to_numeric(pareto_df[matched_y]).tolist()
@@ -409,16 +548,25 @@ def plot_pareto_frontier(
             zorder=4,
         )
 
-    # --- Assemble Custom Legend with Backbone and Type sections ---
+    # --- Assemble Custom Legend with Backbone, Type, Doc Precompute, and Pareto sections ---
     legend_handles = []
 
     # Section A: Backbone Architectures
     legend_handles.append(Line2D([0], [0], color="none", label="Backbone", markersize=0))
     if has_size:
-        present_classes = [c for c in ["68m", "150m", "400m", "other"] if (valid_df["size_class"] == c).any()]
+        present_classes = [
+            c
+            for c in ["68m", "150m", "400m", "lateOn-unsup", "other"]
+            if (valid_df["size_class"] == c).any()
+        ]
         for size_cls in present_classes:
             color = SIZE_COLORS.get(size_cls, "#7f8c8d")
-            label = f"ettin-{size_cls}" if size_cls in ["68m", "150m", "400m"] else size_cls
+            if size_cls in ["68m", "150m", "400m"]:
+                label = f"ettin-{size_cls}"
+            elif size_cls == "lateOn-unsup":
+                label = "lateOn-unsup"
+            else:
+                label = size_cls
             legend_handles.append(
                 Line2D(
                     [0],
@@ -435,7 +583,11 @@ def plot_pareto_frontier(
     # Section B: Model Types & Family Shapes
     legend_handles.append(Line2D([0], [0], color="none", label="Type", markersize=0))
     if has_type:
-        present_types = [t for t in ["cross-encoder", "mice", "colbert", "other"] if (valid_df["type"] == t).any()]
+        present_types = [
+            t
+            for t in ["cross-encoder", "mice", "colbert", "other"]
+            if (valid_df["type"] == t).any()
+        ]
         for mtype in present_types:
             marker = TYPE_MARKERS.get(mtype, "o")
             label = TYPE_LABELS.get(mtype, mtype)
@@ -453,7 +605,49 @@ def plot_pareto_frontier(
                 )
             )
 
-    # Section C: Pareto Frontier
+    # Section C: Doc Precompute
+    legend_handles.append(
+        Line2D([0], [0], color="none", label="Doc Precompute", markersize=0)
+    )
+    legend_handles.append(
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor="#888888",
+            markeredgecolor="black",
+            markeredgewidth=1.0,
+            markersize=8,
+            label="No",
+        )
+    )
+    legend_handles.append(
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor="none",
+            markeredgecolor="#333333",
+            markeredgewidth=1.0,
+            markersize=8,
+            label="Yes",
+        )
+    )
+
+    # Section D: Pareto Frontier
+    if pareto_no_store_df is not None and not pareto_no_store_df.empty:
+        legend_handles.append(
+            Line2D(
+                [0],
+                [0],
+                color="#2c3e50",
+                linestyle="-",
+                linewidth=1.8,
+                label="Pareto (no precompute)",
+            )
+        )
     if not pareto_df.empty:
         legend_handles.append(
             Line2D(
@@ -462,13 +656,13 @@ def plot_pareto_frontier(
                 color="#2c3e50",
                 linestyle=":",
                 linewidth=2.0,
-                label="Pareto Frontier",
+                label="Pareto (w/ precompute)",
             )
         )
 
     ax.set_xlabel(x_label)
     ax.set_ylabel(matched_y)
-    ax.set_title(title or f"Pareto Frontier: {matched_y} vs {x_label}")
+    ax.set_title(title or f"Pareto Frontier: {matched_y} vs {x_display_name}")
     ax.grid(True, linestyle="--", alpha=0.5)
 
     leg = ax.legend(
@@ -481,7 +675,7 @@ def plot_pareto_frontier(
     )
     if leg:
         for text in leg.get_texts():
-            if text.get_text() in ["Backbone", "Type"]:
+            if text.get_text() in ["Backbone", "Type", "Doc Precompute"]:
                 text.set_fontweight("bold")
                 text.set_color("#333333")
 
@@ -610,6 +804,7 @@ def main() -> None:
         metric=args.metric,
         tok=args.tok,
         drop_empty_cols=not args.keep_empty_cols,
+        flops_col=args.flops_col,
     )
 
     print("\n=== FILTERED DATAFRAME ===")
@@ -618,17 +813,57 @@ def main() -> None:
     else:
         print(df.to_string())
 
-    # Compute Pareto frontier with all rows
-    pareto_df = compute_pareto_front(df, x_col=args.flops_col, y_col=args.metric)
+    pareto_x_col = (
+        "effective_flops"
+        if "effective_flops" in df.columns
+        else args.flops_col
+    )
 
-    print(f"\n=== PARETO FRONTIER (X: {args.flops_col}, Y: {args.metric}) ===")
+    # Compute overall Pareto frontier (including precomputed doc reps)
+    pareto_df = compute_pareto_front(df, x_col=pareto_x_col, y_col=args.metric)
+
+    # Compute Pareto frontier strictly for models without document precomputation
+    df_no_store = df[~df["store"]].copy() if "store" in df.columns else df.copy()
+    pareto_no_store_df = compute_pareto_front(
+        df_no_store, x_col=pareto_x_col, y_col=args.metric
+    )
+
     display_cols = [
         col
-        for col in ["scorer", "type", "size_class", "base", "tok", args.flops_col, args.metric]
-        if col in pareto_df.columns
+        for col in [
+            "scorer",
+            "type",
+            "size_class",
+            "store",
+            "base",
+            "tok",
+            args.flops_col,
+            "Flops_precomp",
+            "effective_flops",
+            args.metric,
+        ]
+        if col in df.columns
     ]
+
+    print(
+        f"\n=== PARETO FRONTIER (OVERALL / W/ PRECOMPUTE, X: {pareto_x_col}, Y: {args.metric}) ==="
+    )
     if not pareto_df.empty:
-        print(pareto_df[display_cols].to_string())
+        print(
+            pareto_df[[c for c in display_cols if c in pareto_df.columns]].to_string()
+        )
+    else:
+        print("No Pareto-optimal points found (insufficient valid data).")
+
+    print(
+        f"\n=== PARETO FRONTIER (NO DOC PRECOMPUTE, X: {pareto_x_col}, Y: {args.metric}) ==="
+    )
+    if not pareto_no_store_df.empty:
+        print(
+            pareto_no_store_df[
+                [c for c in display_cols if c in pareto_no_store_df.columns]
+            ].to_string()
+        )
     else:
         print("No Pareto-optimal points found (insufficient valid data).")
 
@@ -636,9 +871,10 @@ def main() -> None:
         plot_pareto_frontier(
             df=df,
             pareto_df=pareto_df,
-            x_col=args.flops_col,
+            x_col=pareto_x_col,
             y_col=args.metric,
             output_path=args.plot,
+            pareto_no_store_df=pareto_no_store_df,
         )
 
     if args.latex:

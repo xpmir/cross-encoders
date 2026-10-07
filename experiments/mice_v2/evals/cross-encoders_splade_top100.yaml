@@ -38,3 +38,4 @@ evaluation:
   in_domain: true
   beir13: true
   beir13_decontaminated: true
+  lotte: true

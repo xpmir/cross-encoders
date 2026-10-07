@@ -1,7 +1,7 @@
 id: train_micev2_ettin400m_l12+4_plaid_128_fast
 title: "Mice-Ettin-400m Training"
 description:
-    Long Training for Mice-l12+4
+    Long Training for Mice-l12+4 -faster variant with less steps and higher learning rate
 parent: ./_common_mice_v3.yaml
 
 # pre_experiment: "" #uncomment to save model
@@ -30,7 +30,9 @@ n_contextualization_layers: 18
 n_interaction_layers: 4
 
 evaluation: #default = Minified tests
-    eval_checkpoint: "last"
+    eval_checkpoint:
+        - "best"
+        - "last"
     all_datasets: false
     in_domain: false
     beir13: false
