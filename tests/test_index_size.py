@@ -173,3 +173,47 @@ def test_sync_index_size_metrics_idempotency_and_formatting():
             assert "MockSparseRetrieverIndexBuilder_index_size" in parsed
             assert float(parsed["MockPlaidIndexBuilder_index_size"]) == pytest.approx(1.0, 0.01)
             assert float(parsed["MockSparseRetrieverIndexBuilder_index_size"]) == pytest.approx(2.0, 0.01)
+
+
+def test_process_experiment_results_syncs_index_size_when_plaid(tmp_path):
+    """Verify that process_experiment_results automatically triggers sync_index_size_metrics when plaid is enabled."""
+    from unittest.mock import MagicMock, patch
+    import pandas as pd
+    from training_utils import process_experiment_results
+    from configuration import CE_FineTuning, PlaidConfiguration
+
+    columns = pd.MultiIndex.from_tuples([
+        ("dataset", ""),
+        ("tag", "base"),
+        ("tag", "plaid_retriever"),
+        ("metric", "RR@10"),
+    ])
+    eval_df = pd.DataFrame(
+        [["BEIR13", "colbert-test", True, 0.75]],
+        columns=columns,
+    )
+
+    mock_tests = MagicMock()
+    mock_tests.to_dataframe.return_value = eval_df
+    mock_tests.collection = {}
+
+    mock_helper = MagicMock()
+    mock_helper.xp.resultspath = tmp_path
+
+    cfg = CE_FineTuning(plaid=PlaidConfiguration(use_plaid=True))
+    all_tags = [{"base": "colbert-test"}]
+    config_map = {frozenset([("base", "colbert-test")]): cfg}
+
+    with patch("index_utils.sync_index_size_metrics") as mock_sync:
+        process_experiment_results(
+            tests=mock_tests,
+            all_tags=all_tags,
+            config_map=config_map,
+            cfg=cfg,
+            helper=mock_helper,
+            learners=[],
+            all_weights=[],
+            get_name_fn=lambda tags: "ColBERT-Test",
+        )
+        assert mock_sync.call_count == 1
+        assert mock_sync.call_args[0][0] is mock_tests

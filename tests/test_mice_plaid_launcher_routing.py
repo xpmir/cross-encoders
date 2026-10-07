@@ -183,6 +183,114 @@ def test_mice_plaid_explicit_long_evals_override():
         assert calls[1].kwargs["launcher"] == launcher_default
 
 
+def test_mice_plaid_enforces_compress_only_true_by_default():
+    """Verify that MicePlaidRetrieverFactory enforces compress_only=True even if cfg defaults to False."""
+    collections = {"beir/scifact": DummyCollection("scifact_docs")}
+    evaluations = DummyEvaluationsCollection(collections)
+
+    mock_model = MagicMock()
+    mock_model.get_document_encoder.return_value = MagicMock()
+
+    factory = MicePlaidRetrieverFactory(
+        mice_model=mock_model,
+        first_stage_factory=MagicMock(),
+        topk=100,
+        batchsize=32,
+    )
+
+    with patch("retrievers.PlaidIndexBuilder.C") as mock_builder_cls:
+        mock_builder_instance = MagicMock()
+        mock_builder_cls.return_value.tag.return_value = mock_builder_instance
+
+        # Default PlaidConfiguration has compress_only=False
+        cfg = PlaidConfiguration()
+        assert cfg.compress_only is False
+
+        factory.build_indexes(
+            evaluations=evaluations,
+            cfg=cfg,
+            batch_size=32,
+            seed=0,
+            launcher_index=DummyLauncher("default"),
+            init_tasks=[],
+        )
+
+        assert mock_builder_cls.call_count == 1
+        assert mock_builder_cls.call_args.kwargs["compress_only"] is True
+
+
+def test_mice_plaid_compress_only_false_when_use_colbert_first_stage():
+    """Verify that when use_colbert_first_stage=True, compress_only is set to False for IVF retrieval."""
+    collections = {"beir/scifact": DummyCollection("scifact_docs")}
+    evaluations = DummyEvaluationsCollection(collections)
+
+    mock_model = MagicMock()
+    mock_model.get_document_encoder.return_value = MagicMock()
+
+    factory = MicePlaidRetrieverFactory(
+        mice_model=mock_model,
+        first_stage_factory=MagicMock(),
+        topk=100,
+        batchsize=32,
+    )
+
+    with patch("retrievers.PlaidIndexBuilder.C") as mock_builder_cls:
+        mock_builder_instance = MagicMock()
+        mock_builder_cls.return_value.tag.return_value = mock_builder_instance
+
+        cfg = PlaidConfiguration(use_colbert_first_stage=True)
+
+        factory.build_indexes(
+            evaluations=evaluations,
+            cfg=cfg,
+            batch_size=32,
+            seed=0,
+            launcher_index=DummyLauncher("default"),
+            init_tasks=[],
+        )
+
+        assert mock_builder_cls.call_count == 1
+        assert mock_builder_cls.call_args.kwargs["compress_only"] is False
+
+
+def test_mice_plaid_warns_and_overrides_when_colbert_and_compress_only_true(caplog):
+    """Verify that if use_colbert_first_stage=True and compress_only=True, it warns and overrides to False."""
+    collections = {"beir/scifact": DummyCollection("scifact_docs")}
+    evaluations = DummyEvaluationsCollection(collections)
+
+    mock_model = MagicMock()
+    mock_model.get_document_encoder.return_value = MagicMock()
+
+    factory = MicePlaidRetrieverFactory(
+        mice_model=mock_model,
+        first_stage_factory=MagicMock(),
+        topk=100,
+        batchsize=32,
+    )
+
+    with patch("retrievers.PlaidIndexBuilder.C") as mock_builder_cls:
+        mock_builder_instance = MagicMock()
+        mock_builder_cls.return_value.tag.return_value = mock_builder_instance
+
+        cfg = PlaidConfiguration(use_colbert_first_stage=True, compress_only=True)
+
+        import logging
+        with caplog.at_level(logging.WARNING):
+            factory.build_indexes(
+                evaluations=evaluations,
+                cfg=cfg,
+                batch_size=32,
+                seed=0,
+                launcher_index=DummyLauncher("default"),
+                init_tasks=[],
+            )
+
+        assert mock_builder_cls.call_count == 1
+        assert mock_builder_cls.call_args.kwargs["compress_only"] is False
+        assert any("use_colbert_first_stage is enabled but compress_only is True" in r.message for r in caplog.records)
+
+
+
 def test_plaid_retriever_routes_to_long_launcher_index_for_hotpotqa():
     """Verify that plaid_retriever with key='hotpotqa_decontaminated' routes to long_launcher_index."""
     from retrievers import plaid_retriever

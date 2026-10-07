@@ -23,13 +23,11 @@ evaluation:
   #just for debugging
   in_domain: false
   beir13: false
-  beir13_decontaminated: false
-  datasets:
-    - hotpotqa_decontaminated
-    # - nfcorpus
-    # - scifact
-    # - arguana
-    # - fiqa
-    # - trec_covid
+  beir13_decontaminated: true
 
 use_plaid: true
+
+plaid: #override _common.yaml for mice values
+  max_doc_length: 512
+  max_query_length: 32
+  n_bits: 4

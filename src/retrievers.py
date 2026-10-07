@@ -224,6 +224,18 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
             else getattr(evaluations, "long_evals", ["fever", "msmarco", "hotpotqa"])
         )
 
+        use_colbert = cfg.use_colbert_first_stage
+        if use_colbert:
+            if cfg.compress_only:
+                logger.warning(
+                    "use_colbert_first_stage is enabled but compress_only is True; "
+                    "forcing compress_only=False to allow ColBERT first-stage search."
+                )
+            effective_compress_only = False
+        else:
+            effective_compress_only = True
+            logger.info("Enforcing compress_only=True for MICE PLAID indexation.")
+
         # 1) Build the index and retriever for this model
         for (
             dataset_key,
@@ -253,7 +265,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
                         n_samples_kmeans=cfg.n_samples_kmeans,
                         max_points_per_centroid=cfg.max_points_per_centroid,
                         seed=seed,
-                        compress_only=cfg.compress_only,
+                        compress_only=effective_compress_only,
                         force_cpu_indexing=cfg.force_cpu_indexing,
                         fabric_config=FabricConfiguration.C(precision="bf16-true"),
                     )

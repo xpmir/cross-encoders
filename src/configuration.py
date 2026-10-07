@@ -350,7 +350,9 @@ class PlaidConfiguration:
     """Maximum number of points (documents) per centroid. Controls the creation of new centroids."""
 
     compress_only: bool = False
-    """Whether to build a compress-only index (no IVF search)"""
+    """Whether to build a compress-only index (no IVF search). For MICE models,
+    compress_only is automatically enforced as True in MicePlaidRetrieverFactory
+    unless use_colbert_first_stage is enabled."""
 
     force_cpu_indexing: bool = False
     """When True, forces the use of CPU for indexing even if a GPU is available.

@@ -39,13 +39,12 @@ evaluation: #default = Minified tests
     in_domain: false
     beir13: false
     beir13_decontaminated: true
-    eval_checkpoint:
-        - last
+    eval_checkpoint: last
 
-# use_plaid: true # TODO when plaid params are fixed
-# include_recall_100: true
-# plaid:
-#   use_plaid: true
+use_plaid: true # TODO when plaid params are fixed
+include_recall_100: true
+plaid:
+  use_plaid: true
 #   max_doc_length: 512
 #   max_query_length: 32
 #   n_bits: 2
@@ -53,8 +52,3 @@ evaluation: #default = Minified tests
 #   n_ivf_probe: 8
 #   buffer_size: 1000
 #   fast_plaid_batch_size: 25000
-
-
-indexation:
-  batch_size: 256
-  requirements: duration=15h & cpu(cores=16, mem=20G) & cuda(mem=40G) # need H100

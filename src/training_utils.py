@@ -828,6 +828,21 @@ def process_experiment_results(
     # 0. Sync eval sparsity metrics into aggregated results files before building DataFrame
     sync_eval_sparsity_metrics(tests)
 
+    # When use_plaid is True, sync on-disk index sizes from the dependency graph
+    is_plaid = bool(
+        (getattr(cfg, "plaid", None) and getattr(cfg.plaid, "use_plaid", False))
+        or getattr(cfg, "use_plaid", False)
+        or any(
+            (getattr(c, "plaid", None) and getattr(c.plaid, "use_plaid", False))
+            or getattr(c, "use_plaid", False)
+            for c in config_map.values()
+        )
+    )
+    if is_plaid:
+        from index_utils import sync_index_size_metrics
+
+        sync_index_size_metrics(tests)
+
     # 1. Exctract data
     df = tests.to_dataframe()
 
