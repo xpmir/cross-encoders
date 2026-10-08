@@ -26,3 +26,4 @@ grid_search:
   scorer_id:
     - VictorMorand/Colbert-ettin-68m-mxbread-pearson
     - VictorMorand/Colbert-ettin-150m-mxbread-pearson
+    - lightonai/LateOn

@@ -29,6 +29,20 @@ DEFAULT_URL = (
     "103NSCbgBucaat2M8eQS7nrPYuFuBNIZKWme4ASNkUk0/edit?gid=1470966267#gid=1470966267"
 )
 
+FONT_SIZE = 14
+
+plt.rcParams.update(
+    {
+        "font.family": "DejaVu Serif",
+        "font.serif": [""],
+        "font.size": FONT_SIZE,
+        "axes.labelsize": 11,
+        "axes.titlesize": FONT_SIZE,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+        "legend.fontsize": FONT_SIZE - 3,
+    }
+)
 
 def parse_google_sheet_url(url: str) -> tuple[str, str | None]:
     """Extracts the spreadsheet ID and gid from a Google Sheets URL."""
@@ -437,7 +451,59 @@ def plot_pareto_frontier(
         "other": "Other",
     }
 
-    # Scatter points grouped by size_class, type, and store
+    # Color for Pareto curves
+    pareto_color = "#27ae60"
+
+    # Save data-based y-limits so extending to bottom does not squish the points to the top
+    y_data_min = valid_df[matched_y].min()
+    y_data_max = valid_df[matched_y].max()
+    y_margin = (y_data_max - y_data_min) * 0.08 if y_data_max > y_data_min else 0.01
+    y_plot_bottom = y_data_min - y_margin
+
+    # 1. Plot Pareto frontiers first (so lines stay behind scatter points)
+    # Draw solid frontier for models without document precomputation
+    if pareto_no_store_df is not None and not pareto_no_store_df.empty:
+        p_ns_x = (pd.to_numeric(pareto_no_store_df[matched_x]) / scale).tolist()
+        p_ns_y = pd.to_numeric(pareto_no_store_df[matched_y]).tolist()
+
+        # Link to bottom before the first node
+        if p_ns_x and p_ns_y:
+            p_ns_x = [p_ns_x[0]] + p_ns_x
+            p_ns_y = [y_plot_bottom] + p_ns_y
+
+        ax.plot(
+            p_ns_x,
+            p_ns_y,
+            drawstyle="steps-post",
+            color=pareto_color,
+            linestyle="-",
+            linewidth=1.8,
+            zorder=2,
+        )
+
+    # Draw dotted frontier for overall models (with doc precompute)
+    if not pareto_df.empty:
+        p_x = (pd.to_numeric(pareto_df[matched_x]) / scale).tolist()
+        p_y = pd.to_numeric(pareto_df[matched_y]).tolist()
+
+        # Link to bottom before the first node
+        if p_x and p_y:
+            p_x = [p_x[0]] + p_x
+            p_y = [y_plot_bottom] + p_y
+
+        ax.plot(
+            p_x,
+            p_y,
+            drawstyle="steps-post",
+            color=pareto_color,
+            linestyle=":",
+            linewidth=2.0,
+            zorder=2,
+        )
+
+    ax.set_ylim(bottom=y_plot_bottom, top=y_data_max + y_margin)
+
+    # 2. Scatter points grouped by size_class, type, and store (on top of frontier)
     has_size = "size_class" in valid_df.columns
     has_type = "type" in valid_df.columns
     has_store = "store" in valid_df.columns
@@ -459,7 +525,7 @@ def plot_pareto_frontier(
             marker_size = 140 if marker == "*" else 90
 
             if is_stored:
-                facecolor = "none"
+                facecolor = "white"
                 edgecolor = color
                 linewidth = 1.0
                 alpha = 1.0
@@ -478,7 +544,7 @@ def plot_pareto_frontier(
                 marker=marker,
                 s=marker_size,
                 alpha=alpha,
-                zorder=3,
+                zorder=4,
             )
     else:
         ax.scatter(
@@ -488,7 +554,7 @@ def plot_pareto_frontier(
             edgecolors="black",
             s=80,
             alpha=0.8,
-            zorder=3,
+            zorder=4,
         )
 
     # Label all points
@@ -517,36 +583,6 @@ def plot_pareto_frontier(
         adjust_text(texts, ax=ax)
     except Exception:
         pass
-
-    # Draw solid frontier for models without document precomputation
-    if pareto_no_store_df is not None and not pareto_no_store_df.empty:
-        p_ns_x = (pd.to_numeric(pareto_no_store_df[matched_x]) / scale).tolist()
-        p_ns_y = pd.to_numeric(pareto_no_store_df[matched_y]).tolist()
-
-        ax.plot(
-            p_ns_x,
-            p_ns_y,
-            drawstyle="steps-post",
-            color="#2c3e50",
-            linestyle="-",
-            linewidth=1.8,
-            zorder=4,
-        )
-
-    # Draw dotted frontier for overall models (with doc precompute)
-    if not pareto_df.empty:
-        p_x = (pd.to_numeric(pareto_df[matched_x]) / scale).tolist()
-        p_y = pd.to_numeric(pareto_df[matched_y]).tolist()
-
-        ax.plot(
-            p_x,
-            p_y,
-            drawstyle="steps-post",
-            color="#2c3e50",
-            linestyle=":",
-            linewidth=2.0,
-            zorder=4,
-        )
 
     # --- Assemble Custom Legend with Backbone, Type, Doc Precompute, and Pareto sections ---
     legend_handles = []
@@ -642,7 +678,7 @@ def plot_pareto_frontier(
             Line2D(
                 [0],
                 [0],
-                color="#2c3e50",
+                color=pareto_color,
                 linestyle="-",
                 linewidth=1.8,
                 label="Pareto (no precompute)",
@@ -653,7 +689,7 @@ def plot_pareto_frontier(
             Line2D(
                 [0],
                 [0],
-                color="#2c3e50",
+                color=pareto_color,
                 linestyle=":",
                 linewidth=2.0,
                 label="Pareto (w/ precompute)",
@@ -713,9 +749,26 @@ def format_beir_latex_table(
     # Sort individual BEIR columns alphabetically by abbreviation
     beir_cols.sort(key=lambda x: x[1])
 
-    # Build selected column list: scorer, sorted BEIR datasets, and aggregation
-    selected_cols = ["scorer"] + [c for c, _ in beir_cols]
+    # Build selected column list: scorer, optional 1st stage, optional store, sorted BEIR datasets, and aggregation
+    first_stage_col = next(
+        (c for c in df.columns if c.lower() in ["1st stage", "first stage", "1st_stage", "1st st"]),
+        None,
+    )
+    has_first_stage = first_stage_col is not None
+    has_store = "store" in df.columns
+
+    selected_cols = ["scorer"]
     rename_map = {"scorer": "Scorer"}
+
+    if has_first_stage:
+        selected_cols.append(first_stage_col)
+        rename_map[first_stage_col] = "1st St"
+
+    if has_store:
+        selected_cols.append("store")
+        rename_map["store"] = "Store"
+
+    selected_cols.extend([c for c, _ in beir_cols])
     for c, abb in beir_cols:
         rename_map[c] = abb
 
@@ -729,6 +782,26 @@ def format_beir_latex_table(
     # Escape LaTeX special characters in Scorer
     latex_df["scorer"] = latex_df["scorer"].apply(escape_latex)
 
+    # Format 1st stage column: "S" for splade, "P" for plaid
+    if has_first_stage:
+        def format_1st_stage(val: object) -> str:
+            if not isinstance(val, str) or pd.isna(val):
+                return "-"
+            v = val.lower()
+            if "splade" in v:
+                return "S"
+            if "plaid" in v:
+                return "P"
+            return escape_latex(str(val))
+
+        latex_df[first_stage_col] = latex_df[first_stage_col].apply(format_1st_stage)
+
+    # Format store column with \vmark or \xmark
+    if has_store:
+        latex_df["store"] = latex_df["store"].apply(
+            lambda v: r"\vmark" if bool(v) else r"\xmark"
+        )
+
     # Format numeric columns as 100 * x with 1 decimal place
     for col, _ in beir_cols:
         latex_df[col] = pd.to_numeric(latex_df[col], errors="coerce").apply(
@@ -741,7 +814,12 @@ def format_beir_latex_table(
 
     latex_df = latex_df.rename(columns=rename_map)
 
-    column_format = "l" + "c" * (len(beir_cols) + (1 if has_agg else 0))
+    column_format = (
+        "l"
+        + ("c" if has_first_stage else "")
+        + ("c" if has_store else "")
+        + "c" * (len(beir_cols) + (1 if has_agg else 0))
+    )
     return latex_df.to_latex(index=False, column_format=column_format)
 
 

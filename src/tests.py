@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import difflib
 from functools import lru_cache
 import logging
 from pathlib import Path
@@ -378,6 +379,7 @@ class TestRegistry:
         name: str,
         dataset_or_agg_names: list[str],
         display_name: Optional[str] = None,
+        aliases: Optional[list[str]] = None,
     ):
         """Register a named aggregation of datasets (or sub-aggregations)."""
         canonical = name.lower().replace(" ", "_").replace("-", "_")
@@ -387,6 +389,12 @@ class TestRegistry:
         if display_name:
             self._display_names[canonical] = display_name
             self._agg_aliases[display_name.lower()] = canonical
+        if aliases:
+            for alias in aliases:
+                self._agg_aliases[alias.lower()] = canonical
+                self._agg_aliases[alias.lower().replace(" ", "_").replace("-", "_")] = (
+                    canonical
+                )
 
     def resolve_dataset_name(self, name: str) -> Optional[str]:
         """Look up canonical dataset name from alias or exact match."""
@@ -438,8 +446,24 @@ class TestRegistry:
                     resolved.append(dyn_name)
                 return
 
+            all_known = (
+                list(self._datasets.keys())
+                + list(self._aggregations.keys())
+                + list(self._agg_aliases.keys())
+            )
+            suggestions = difflib.get_close_matches(item, all_known, n=3, cutoff=0.5)
+            sugg_str = (
+                f"\n   Did you mean: {', '.join(repr(s) for s in suggestions)}?"
+                if suggestions
+                else ""
+            )
+
             logger.warning(
-                f"Dataset or aggregation {item!r} not found in test registry"
+                "\n" + "!" * 80 + "\n"
+                f"⚠️  TEST REGISTRY WARNING: Target {item!r} not found in test registry!{sugg_str}\n"
+                f"   Available aggregations: {sorted(list(self._aggregations.keys()))}\n"
+                + "!" * 80
+                + "\n"
             )
 
         for target in targets:
@@ -544,6 +568,7 @@ test_registry.register_aggregation(
     "lotte",
     list(LOTTE_KEYS.keys()),
     display_name="Lotte-S",
+    aliases=["lotte_search", "lotte-search"],
 )
 test_registry.register_aggregation(
     "nano_beir",
@@ -785,7 +810,7 @@ def build_tests(
         targets.append("beir13_decontaminated")
     if cfg.robust04:
         targets.append("robust04")
-    if cfg.lotte_search:
+    if cfg.lotte_search or getattr(cfg, "lotte", False):
         targets.append("lotte")
     if cfg.nanobeir:
         targets.append("nano_beir")

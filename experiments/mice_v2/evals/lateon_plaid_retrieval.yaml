@@ -10,12 +10,14 @@ pre_experiment: pre_experiment
 max_query_length: 32
 max_doc_length: 512
 
-scorer_id: lightonai/LateOn
 scorer_type: stMultiVectorEncoder
 pref_attn_implementation: flash_attention_2
+scorer_id:
+  - lightonai/LateOn
+  - VictorMorand/Colbert-LateOn-Pearson
 
 use_plaid: true
-include_recall_100: true
+include_recall_100: true #only diff with other xp
 
 retrieval:
   k: 100

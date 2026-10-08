@@ -91,10 +91,17 @@ class TestRegistryResolution:
         # Should terminate safely and resolve ds1
         assert reg.resolve_names("agg_a") == ["ds1"]
 
-    def test_resolve_unknown_dataset_warns_gracefully(self, caplog):
-        resolved = test_registry.resolve_names(["fiqa", "non_existent_dataset_xyz"])
+    def test_resolve_lotte_aliases(self):
+        assert test_registry.resolve_names("lotte") == list(LOTTE_KEYS.keys())
+        assert test_registry.resolve_names("lotte_search") == list(LOTTE_KEYS.keys())
+        assert test_registry.resolve_names("lotte-search") == list(LOTTE_KEYS.keys())
+        assert test_registry.resolve_names("Lotte-S") == list(LOTTE_KEYS.keys())
+
+    def test_resolve_unknown_dataset_warns_loudly_with_suggestion(self, caplog):
+        resolved = test_registry.resolve_names(["fiqa", "lotte_typo"])
         assert resolved == ["fiqa"]
-        assert any("non_existent_dataset_xyz" in record.message for record in caplog.records)
+        assert any("TEST REGISTRY WARNING" in record.message for record in caplog.records)
+        assert any("Did you mean: 'lotte'" in record.message for record in caplog.records)
 
 
 class TestDisplayAggregations:
@@ -215,4 +222,30 @@ class TestLazyBuilding:
             collection = build_tests(cfg, check_docs=False)
             expected = ["msmarco_dev", "trec2019", "trec2020", "fiqa", "limit_small"]
             assert built_datasets == expected
+            assert list(collection.collection.keys()) == expected
+
+    def test_build_tests_with_lotte_flags(self):
+        mock_eval = MagicMock()
+        expected = list(LOTTE_KEYS.keys())
+
+        # Test lotte_search flag
+        built_search = []
+        def fake_build_search(self, *args, **kwargs):
+            built_search.append(self.name)
+            return mock_eval
+
+        with patch("tests.DatasetSpec.build", side_effect=fake_build_search, autospec=True):
+            collection = build_tests(Evaluation(lotte_search=True), check_docs=False)
+            assert built_search == expected
+            assert list(collection.collection.keys()) == expected
+
+        # Test lotte flag (alias)
+        built_lotte = []
+        def fake_build_lotte(self, *args, **kwargs):
+            built_lotte.append(self.name)
+            return mock_eval
+
+        with patch("tests.DatasetSpec.build", side_effect=fake_build_lotte, autospec=True):
+            collection = build_tests(Evaluation(lotte=True), check_docs=False)
+            assert built_lotte == expected
             assert list(collection.collection.keys()) == expected

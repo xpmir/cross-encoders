@@ -4,9 +4,8 @@ description:
     Long Training for Mice-l12+4 -faster variant with less steps and higher learning rate
 parent: ./_common_mice_v3.yaml
 
-# pre_experiment: "" #uncomment to save model
-# export_trained_models: true #by default, override to save best model among seeds / configs: ready for HF export
-
+pre_experiment: "" #uncomment to save model
+export_trained_models: true #by default, override to save best model among seeds / configs: ready for HF export
 
 from_experiment: train_micev2_ettin400m_l12+4_v3
 doc_bottleneck_dim: 128

@@ -14,8 +14,8 @@ grid_search:
   scorer_id:
     - cross-encoder/ettin-reranker-68m-v1
     - cross-encoder/ettin-reranker-150m-v1
-    # - cross-encoder/ettin-reranker-400m-v1
-    # - VictorMorand/cross-encoder-ettin-68m-mxbread
+    - cross-encoder/ettin-reranker-400m-v1
+    - VictorMorand/cross-encoder-ettin-68m-mxbread
     #
     # - /lustre/fsn1/projects/rech/npl/commun/micev2/experiments/baseline_ettin68m_long/20260930_214900/results/models/cross-encoder-ettin-68m
     # - cross-encoder/ettin-reranker-17m-v1
@@ -36,4 +36,4 @@ evaluation:
   in_domain: false
   beir13: false
   beir13_decontaminated: true
-  lotte: true
+  lotte_search: true
