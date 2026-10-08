@@ -5,7 +5,7 @@ from experimaestro import Launcher, stop_tags
 from datamaestro_ir.data import Documents
 from xpmir.rankers import Retriever
 import xpmir.interfaces.anserini as anserini
-from xpmir.index.sparse import SparseRetriever
+from xpmir.index.sparse import SparseRetriever, SeismicSparseRetriever
 from xpmir.rankers.standard import BM25, Model
 from xpmir.index.bow import BOWRetriever, BOWSparseRetrieverIndexBuilder
 from xpmir.evaluation import EvaluationsCollection, RetrieverFactory
@@ -88,26 +88,46 @@ def splade_retriever(
     key: Optional[str] = None,
     **kwargs,
 ) -> Retriever.C:
-    """Factory for Splade Retriever, given the current configuration"""
+    seismic_cfg = getattr(cfg, "seismic", None)
+    is_seismic = seismic_cfg is not None and getattr(seismic_cfg, "enabled", False)
 
-    retriever = SparseRetriever.C(
-        index=stop_tags(  # drop 'index_documents' tag that clutters eval.
-            get_splade_index(
-                documents,
-                splade_encoder=encoder,
-                indexation_cfg=cfg.indexation,
-                launcher_index=launcher_index,
-                init_tasks=init_tasks,
-                long_launcher_index=long_launcher_index,
-                long_evals=long_evals,
-                key=key,
+    index_obj = stop_tags(  # drop 'index_documents' tag that clutters eval.
+        get_splade_index(
+            documents,
+            splade_encoder=encoder,
+            indexation_cfg=cfg.indexation,
+            launcher_index=launcher_index,
+            init_tasks=init_tasks,
+            long_launcher_index=long_launcher_index,
+            long_evals=long_evals,
+            key=key,
+            seismic_cfg=seismic_cfg,
+        )
+    )
+
+    if is_seismic:
+        retriever = (
+            SeismicSparseRetriever.C(
+                index=index_obj,
+                topk=topk or cfg.retrieval.k,
+                batchsize=1,
+                encoder=encoder,
+                in_memory=in_memory,
+                query_cut=seismic_cfg.query_cut,
+                heap_factor=seismic_cfg.heap_factor,
+                n_knn=seismic_cfg.n_knn,
             )
-        ),
-        topk=topk or cfg.retrieval.k,
-        batchsize=1,
-        encoder=encoder,
-        in_memory=in_memory,
-    ).tag("first_stage", name)
+            .tag("first_stage", name)
+            .tag("approximate", "seismic")
+        )
+    else:
+        retriever = SparseRetriever.C(
+            index=index_obj,
+            topk=topk or cfg.retrieval.k,
+            batchsize=1,
+            encoder=encoder,
+            in_memory=in_memory,
+        ).tag("first_stage", name)
     if tags:
         for k, v in tags.items():
             if k != "first_stage":

@@ -56,6 +56,7 @@ from configuration import (
     Evaluation,
     ScorerType,
     PlaidConfiguration,
+    SeismicConfiguration,
 )
 from retrievers import (
     splade_retriever,
@@ -140,6 +141,13 @@ class BaselinesConfig(NeuralIRExperiment):
 
     use_plaid: GridSearch[bool] = False
     """Whether to use PLAID multi-vector indexing and retrieval."""
+
+    precompute_first_stage: bool = True
+    """If True, precomputes and saves candidate runs for first-stage retrievers to disk and reloads them for reranking.
+    If False, evaluates first-stage dynamically on-the-fly without saving intermediate candidate runs."""
+
+    seismic: SeismicConfiguration = Factory(SeismicConfiguration)
+    """Configuration for Seismic approximate search on SPLADE index."""
 
     compare_with_baseline: bool = False
     """If True and use_plaid=True with MICE, also evaluates standard reranking without PLAID."""
@@ -384,7 +392,7 @@ def evaluate_scorer(
     cfg: BaselinesConfig,
     cfg_tags: Dict[str, Any],
     tests: EvaluationsCollection,
-    first_stage_factories: Dict[str, Tuple[MultiRunRetrieverFactory, List[Any]]],
+    first_stage_factories: Dict[str, Tuple[Any, List[Any]]],
     launcher_evaluate,
     launcher_index,
     fabric_config,
@@ -728,12 +736,24 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
         new_all_tags.append(simple_tags)
     all_tags = new_all_tags
 
+    from experimaestro.launchers.direct import DirectLauncher
+    from experimaestro.connectors.local import LocalConnector
+
+    def safe_find_launcher(reqs):
+        if not reqs or not reqs.strip():
+            return DirectLauncher(connector=LocalConnector.instance())
+        return find_launcher(reqs) or DirectLauncher(
+            connector=LocalConnector.instance()
+        )
+
     base_config = all_configs[0]
-    launcher_evaluate = find_launcher(base_config.retrieval.requirements)
-    launcher_index = find_launcher(base_config.indexation.requirements)
+    launcher_evaluate = safe_find_launcher(base_config.retrieval.requirements)
+    launcher_index = safe_find_launcher(base_config.indexation.requirements)
     long_reqs_index = getattr(base_config.indexation, "long_requirements", None)
-    long_launcher_index = find_launcher(long_reqs_index) if long_reqs_index else None
-    launcher_preprocessing = find_launcher(base_config.preprocessing.requirements)
+    long_launcher_index = (
+        safe_find_launcher(long_reqs_index) if long_reqs_index else None
+    )
+    launcher_preprocessing = safe_find_launcher(base_config.preprocessing.requirements)
 
     fabric_config = (
         base_config.evaluation.fabric.get_config()
@@ -746,7 +766,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     )
 
     long_reqs = getattr(base_config.retrieval, "long_requirements", None)
-    long_launcher = find_launcher(long_reqs) if long_reqs else None
+    long_launcher = safe_find_launcher(long_reqs) if long_reqs else None
 
     if base_config.include_recall_100:
         base_config.evaluation.include_recall_100 = True
@@ -793,9 +813,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                 needs_first_stage = True
                 break
 
-        first_stage_factories: Dict[
-            str, Tuple[MultiRunRetrieverFactory, List[Any]]
-        ] = {}
+        first_stage_factories: Dict[str, Tuple[Any, List[Any]]] = {}
 
         if needs_first_stage:
             all_retrievers = build_first_stage_retrievers(
@@ -807,28 +825,39 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
                 f"Evaluating first-stage candidate retrievers: {[name for name, _, _ in all_retrievers]}"
             )
 
-            # Evaluate first-stage retrievers and cache their candidate runs
+            # Evaluate first-stage retrievers and prepare factories for downstream reranking
             for (
                 retriever_name,
                 retriever_factory,
                 retriever_init_tasks,
             ) in all_retrievers:
-                eval_results = tests.evaluate_retriever(
-                    retriever_factory,
-                    launcher=launcher_evaluate,
-                    init_tasks=retriever_init_tasks,
-                    with_run=True,
-                    fabric_config=fabric_config,
-                )
-                run_retriever_factory = MultiRunRetrieverFactory.from_results(
-                    retriever_name, eval_results
-                )
+                if base_config.precompute_first_stage:
+                    eval_results = tests.evaluate_retriever(
+                        retriever_factory,
+                        launcher=launcher_evaluate,
+                        init_tasks=retriever_init_tasks,
+                        with_run=True,
+                        fabric_config=fabric_config,
+                    )
+                    run_retriever_factory = MultiRunRetrieverFactory.from_results(
+                        retriever_name, eval_results
+                    )
+                else:
+                    eval_results = tests.evaluate_retriever(
+                        retriever_factory,
+                        launcher=launcher_evaluate,
+                        init_tasks=retriever_init_tasks,
+                        with_run=base_config.save_runs,
+                        fabric_config=fabric_config,
+                    )
+                    run_retriever_factory = retriever_factory
+
                 first_stage_factories[retriever_name] = (
                     run_retriever_factory,
                     retriever_init_tasks,
                 )
                 logging.info(
-                    f"First-stage candidate evaluation done for {retriever_name} on datasets {list(run_retriever_factory.runs.keys())}"
+                    f"First-stage candidate setup done for {retriever_name} (precompute={base_config.precompute_first_stage})"
                 )
         else:
             logging.info(
@@ -908,7 +937,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     metric_cols = [c for c in df.columns if c not in tag_cols]
     df = df[tag_cols + metric_cols]
 
-    logging.info(f"Final DataFrame:\n{df}")
+    logging.info(f"Final DataFrame:\n{df.to_csv(index=False)}")
 
     # save results
     if helper.xp.run_mode == RunMode.NORMAL:

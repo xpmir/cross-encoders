@@ -141,6 +141,7 @@ class Indexation(LauncherSpecification):
 
     requirements: str = "duration=2 days & cpu(cores=8)"
     sparse2bmp_requirements: str = "duration=1d & cuda(mem=24G)"
+    sparse2seismic_requirements: str = "duration=1d & cpu(cores=8)"
 
     long_evals: Optional[List[str]] = None
     """List of substrings. If a dataset name matches one, indexing will route to long_launcher_index. Defaults to None, inheriting evaluation's long_evals."""
@@ -365,9 +366,46 @@ class PlaidConfiguration:
 
 
 @configuration()
+class SeismicConfiguration:
+    """Configuration for Seismic approximate search on learned sparse indices (SPLADE)."""
+
+    enabled: GridSearch[bool] = False
+    """Whether to use Seismic approximate search instead of exact MaxScore."""
+
+    # Build / conversion parameters
+    n_postings: GridSearch[int] = 6000
+    """Average number of postings kept per term (global budget pruning)."""
+
+    centroid_fraction: float = 0.1
+    """Number of blocks (k-means centroids) per posting list, as a fraction of its length."""
+
+    summary_energy: float = 0.4
+    """Fraction of the L1 mass kept in each block summary."""
+
+    max_fraction: float = 1.5
+    """Maximum posting list length, as a multiple of n_postings."""
+
+    knn: int = 0
+    """Number of nearest neighbours stored per document (0 = no kNN graph)."""
+
+    # Query / retrieval parameters
+    query_cut: GridSearch[int] = 10
+    """Only the query_cut highest-weighted query terms are traversed."""
+
+    heap_factor: GridSearch[float] = 0.7
+    """Blocks scoring below heap_factor * current k-th score are skipped (1.0 = no summary pruning)."""
+
+    n_knn: int = 0
+    """Number of kNN neighbours used to refine the results (requires knn > 0 at build time)."""
+
+
+@configuration()
 class CE_FineTuning(RerankerMSMarcoV1Configuration):
     use_plaid: GridSearch[bool] = False
     """Whether to evaluate with PLAID index and retriever."""
+
+    seismic: SeismicConfiguration = Factory(SeismicConfiguration)
+    """Configuration for Seismic approximate search on SPLADE index."""
 
     nb_repetitions: int = field(default=1)
     """Number of repetitions of the training process"""

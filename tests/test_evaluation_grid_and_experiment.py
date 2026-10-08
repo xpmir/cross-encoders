@@ -615,3 +615,47 @@ def test_prepare_hf_model_local_directory(tmp_path):
     local_dir = tmp_path / "dummy_dir"
     local_dir.mkdir()
     assert prepare_hf_model(str(local_dir)) is True
+
+
+def test_baselines_config_precompute_first_stage():
+    """Verify that BaselinesConfig supports precompute_first_stage defaulting to True."""
+    cfg_default = BaselinesConfig()
+    assert cfg_default.precompute_first_stage is True
+
+    cfg_no_precompute = BaselinesConfig(precompute_first_stage=False)
+    assert cfg_no_precompute.precompute_first_stage is False
+
+
+def test_evaluate_scorer_with_live_retriever_factory_when_not_precomputed():
+    """Verify that evaluate_scorer works cleanly when first_stage_factories contains a live retriever factory."""
+    from unittest.mock import MagicMock
+    from xpmir.rankers.scorer import Scorer
+
+    mock_tests = MagicMock()
+    mock_retriever_factory = MagicMock()
+
+    cfg = BaselinesConfig(
+        scorer_id="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        scorer_type="stCrossEncoder",
+        use_plaid=False,
+        precompute_first_stage=False,
+    )
+    first_stage_factories = {
+        "bm25": (mock_retriever_factory, [])
+    }
+
+    evaluate_scorer(
+        cfg=cfg,
+        cfg_tags={},
+        tests=mock_tests,
+        first_stage_factories=first_stage_factories,
+        launcher_evaluate=None,
+        launcher_index=None,
+        fabric_config=None,
+    )
+
+    assert mock_tests.evaluate_retriever.call_count == 1
+    call_args = mock_tests.evaluate_retriever.call_args
+    retriever_partial = call_args[0][0]
+    # Check that retrievers passed to two_stage_reranker is indeed the live mock_retriever_factory
+    assert retriever_partial.keywords["retrievers"] is mock_retriever_factory

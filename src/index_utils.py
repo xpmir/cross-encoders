@@ -8,11 +8,12 @@ from experimaestro import Launcher, Task
 from xpmir.index.sparse import (
     SparseRetrieverIndexBuilder,
     AbstractSparseRetrieverIndexBuilder,
+    Sparse2SeismicConverter,
 )
 from xpmir.index.plaid import PlaidIndexBuilder
 from xpmir.rankers import Documents
 from xpm_torch.configuration import FabricConfiguration
-from configuration import Indexation, PlaidConfiguration
+from configuration import Indexation, PlaidConfiguration, SeismicConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,10 @@ def get_splade_index(
     long_launcher_index: Optional[Launcher] = None,
     long_evals: Optional[List[str]] = None,
     key: Optional[str] = None,
+    seismic_cfg: Optional[SeismicConfiguration] = None,
 ):
-    """Build an index for given documents, using a given Sparse retriever model
+    """Build an index for given documents, using a given Sparse retriever model.
+    If seismic_cfg is provided and enabled, converts the base index to a Seismic approximate index.
     Caches it to avoid submitting job twice.
     """
     triggers = (
@@ -70,14 +73,38 @@ def get_splade_index(
             "long_launcher_index" if is_long else "launcher_index",
             launcher,
         )
-        index = index_cfg.tag("index_documents", documents.id).submit(
+        base_index = index_cfg.tag("index_documents", documents.id).submit(
             launcher=launcher, init_tasks=init_tasks
         )
-        _indexes[indexer_id] = index
+        _indexes[indexer_id] = base_index
     else:
-        index = _indexes[indexer_id]
+        base_index = _indexes[indexer_id]
 
-    return index
+    if seismic_cfg is not None and getattr(seismic_cfg, "enabled", False):
+        seismic_task = Sparse2SeismicConverter.C(
+            index=base_index,
+            n_postings=seismic_cfg.n_postings,
+            centroid_fraction=seismic_cfg.centroid_fraction,
+            summary_energy=seismic_cfg.summary_energy,
+            max_fraction=seismic_cfg.max_fraction,
+            knn=seismic_cfg.knn,
+        )
+        seismic_id = seismic_task.__identifier__()
+        if seismic_id not in _indexes:
+            logger.info(
+                "Converting SPLADE index %s to Seismic approximate index (n_postings=%s)",
+                documents.id,
+                seismic_cfg.n_postings,
+            )
+            seismic_launcher = launcher_index
+            seismic_index = seismic_task.tag("index_documents", documents.id).submit(
+                launcher=seismic_launcher
+            )
+            _indexes[seismic_id] = seismic_index
+            return seismic_index
+        return _indexes[seismic_id]
+
+    return base_index
 
 
 def get_plaid_index(
@@ -197,7 +224,11 @@ def find_index_builders(
     """Traverses the experimaestro dependency graph from an evaluation task or output
     to find all upstream PlaidIndexBuilder and SparseRetrieverIndexBuilder instances."""
     if builder_classes is None:
-        builder_classes = (PlaidIndexBuilder, AbstractSparseRetrieverIndexBuilder)
+        builder_classes = (
+            PlaidIndexBuilder,
+            AbstractSparseRetrieverIndexBuilder,
+            Sparse2SeismicConverter,
+        )
 
     task = (
         getattr(getattr(evaluation, "__xpm__", None), "task", None)

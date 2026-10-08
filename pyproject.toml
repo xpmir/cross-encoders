@@ -25,6 +25,7 @@ dependencies = [
     "sentence-transformers>=6",
     "fast-plaid>=1.5.0",
     "datasets>=5.0.0",
+    "impact-index>=1.7.0",
 ]
 
 [tool.setuptools]
