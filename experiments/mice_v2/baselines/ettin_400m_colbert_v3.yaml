@@ -5,10 +5,10 @@ description:
 
 module: cross_encoders_training.experiment
 parent: ../_common.yaml
-nb_repetitions: 2
+nb_repetitions: 1
 
-# pre_experiment: ""
-# export_trained_models: true #by default, override to save best model among seeds / configs: ready for HF export
+pre_experiment: ""
+export_trained_models: true #by default, override to save best model among seeds / configs: ready for HF export
 
 # This set of hyperparameters follows https://huggingface.co/blog/ettin-reranker
 learner:

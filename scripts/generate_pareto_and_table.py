@@ -6,6 +6,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.legend_handler import HandlerTuple
+from matplotlib.ticker import FuncFormatter
 import pandas as pd
 
 # Ensure src is in sys.path for format imports
@@ -30,6 +32,7 @@ DEFAULT_URL = (
 )
 
 FONT_SIZE = 14
+FIG_SIZE = (8, 7)
 
 plt.rcParams.update(
     {
@@ -412,8 +415,9 @@ def plot_pareto_frontier(
     output_path: str,
     title: str | None = None,
     pareto_no_store_df: pd.DataFrame | None = None,
+    y_break: tuple[float, float] | None = (0.48, 0.56),
 ) -> None:
-    """Plots all valid points and draws the step-post Pareto frontier."""
+    """Plots all valid points and draws the step-post Pareto frontier, with optional Y-axis break."""
     matched_x = find_column(df, x_col)
     matched_y = find_column(df, y_col)
 
@@ -427,7 +431,47 @@ def plot_pareto_frontier(
     x_display_name = "FLOPs" if matched_x in ["effective_flops", "Flops"] else matched_x
     x_label = f"{x_display_name} (GFLOPs)" if use_gflops else x_display_name
 
-    fig, ax = plt.subplots(figsize=(8, 6), dpi=200)
+    # Determine if Y-axis break is applicable
+    y_data_min = float(valid_df[matched_y].min())
+    y_data_max = float(valid_df[matched_y].max())
+    y_margin = 0.005
+    y_plot_bottom = y_data_min - y_margin
+
+    use_break = False
+    if y_break is not None:
+        b_low, b_high = y_break
+        # Auto-scale break range if metric is 0-1 vs 0-100
+        if y_data_max <= 1.0:
+            if b_low > 1.0:
+                b_low /= 100.0
+            if b_high > 1.0:
+                b_high /= 100.0
+        else:
+            if b_low <= 1.0:
+                b_low *= 100.0
+            if b_high <= 1.0:
+                b_high *= 100.0
+
+        if (valid_df[matched_y] < b_low).any() and (valid_df[matched_y] > b_high).any():
+            use_break = True
+            break_low, break_high = b_low, b_high
+            logging.info("Applying Y-axis break between %g and %g", break_low, break_high)
+
+    if use_break:
+        fig, (ax_top, ax_bottom) = plt.subplots(
+            2,
+            1,
+            sharex=True,
+            figsize=(8, 7),
+            dpi=200,
+            gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08},
+        )
+        axes = [ax_top, ax_bottom]
+        primary_ax = ax_bottom
+    else:
+        fig, ax = plt.subplots(figsize=FIG_SIZE, dpi=200)
+        axes = [ax]
+        primary_ax = ax
 
     SIZE_COLORS = {
         "68m": "#f29f28",
@@ -454,135 +498,225 @@ def plot_pareto_frontier(
     # Color for Pareto curves
     pareto_color = "#27ae60"
 
-    # Save data-based y-limits so extending to bottom does not squish the points to the top
-    y_data_min = valid_df[matched_y].min()
-    y_data_max = valid_df[matched_y].max()
-    y_margin = (y_data_max - y_data_min) * 0.08 if y_data_max > y_data_min else 0.01
-    y_plot_bottom = y_data_min - y_margin
-
-    # 1. Plot Pareto frontiers first (so lines stay behind scatter points)
-    # Draw solid frontier for models without document precomputation
+    # Precompute frontier curve coordinates
+    p_ns_coords: tuple[list[float], list[float]] | None = None
     if pareto_no_store_df is not None and not pareto_no_store_df.empty:
         p_ns_x = (pd.to_numeric(pareto_no_store_df[matched_x]) / scale).tolist()
         p_ns_y = pd.to_numeric(pareto_no_store_df[matched_y]).tolist()
-
-        # Link to bottom before the first node
         if p_ns_x and p_ns_y:
             p_ns_x = [p_ns_x[0]] + p_ns_x
             p_ns_y = [y_plot_bottom] + p_ns_y
+        p_ns_coords = (p_ns_x, p_ns_y)
 
-        ax.plot(
-            p_ns_x,
-            p_ns_y,
-            drawstyle="steps-post",
-            color=pareto_color,
-            linestyle="-",
-            linewidth=1.8,
-            zorder=2,
-        )
-
-    # Draw dotted frontier for overall models (with doc precompute)
+    p_coords: tuple[list[float], list[float]] | None = None
     if not pareto_df.empty:
         p_x = (pd.to_numeric(pareto_df[matched_x]) / scale).tolist()
         p_y = pd.to_numeric(pareto_df[matched_y]).tolist()
-
-        # Link to bottom before the first node
         if p_x and p_y:
             p_x = [p_x[0]] + p_x
             p_y = [y_plot_bottom] + p_y
+        p_coords = (p_x, p_y)
 
-        ax.plot(
-            p_x,
-            p_y,
-            drawstyle="steps-post",
-            color=pareto_color,
-            linestyle=":",
-            linewidth=2.0,
-            zorder=2,
-        )
-
-    ax.set_ylim(bottom=y_plot_bottom, top=y_data_max + y_margin)
-
-    # 2. Scatter points grouped by size_class, type, and store (on top of frontier)
     has_size = "size_class" in valid_df.columns
     has_type = "type" in valid_df.columns
     has_store = "store" in valid_df.columns
+    adjust_text_kwargs = {
+        "force_text": (0.09, 0.06),   # gentler collision repulsion
+        "force_static": (0.05, 0.08),
+        "force_pull": (0.05, 0.05),   # pull labels back toward their points
+        "expand": (1.02, 1.04),       # modest label spacing
+        "max_move": (3, 3),           # smaller adjustment steps
+        "iter_lim": 100,
+        "min_arrow_len": 0,
+        "arrowprops": {
+            "arrowstyle": "-",
+            "color": "#777777",
+            "lw": 0.6,
+            "alpha": 0.7,
+        },
+    }
 
-    if has_size and has_type:
-        group_cols = ["size_class", "type"]
-        if has_store:
-            group_cols.append("store")
+    # Render curves and scatter points across active axes
+    for current_ax in axes:
+        # 1. Plot Pareto frontiers first (behind scatter points)
+        if p_ns_coords is not None:
+            current_ax.plot(
+                p_ns_coords[0],
+                p_ns_coords[1],
+                drawstyle="steps-post",
+                color=pareto_color,
+                linestyle="-",
+                linewidth=1.8,
+                zorder=2,
+            )
 
-        for group_keys, subset in valid_df.groupby(group_cols):
+        if p_coords is not None:
+            current_ax.plot(
+                p_coords[0],
+                p_coords[1],
+                drawstyle="steps-post",
+                color=pareto_color,
+                linestyle=":",
+                linewidth=2.0,
+                zorder=2,
+            )
+
+        # 2. Scatter points grouped by size_class, type, and store
+        if has_size and has_type:
+            group_cols = ["size_class", "type"]
             if has_store:
-                size_cls, mtype, is_stored = group_keys
-            else:
-                size_cls, mtype = group_keys
-                is_stored = False
+                group_cols.append("store")
 
-            color = SIZE_COLORS.get(size_cls, "#7f8c8d")
-            marker = TYPE_MARKERS.get(mtype, "o")
-            marker_size = 140 if marker == "*" else 90
+            for group_keys, subset in valid_df.groupby(group_cols):
+                if has_store:
+                    size_cls, mtype, is_stored = group_keys
+                else:
+                    size_cls, mtype = group_keys
+                    is_stored = False
 
-            if is_stored:
-                facecolor = "white"
-                edgecolor = color
-                linewidth = 1.0
-                alpha = 1.0
-            else:
-                facecolor = color
-                edgecolor = "black"
-                linewidth = 1.0
-                alpha = 0.85
+                color = SIZE_COLORS.get(size_cls, "#7f8c8d")
+                marker = TYPE_MARKERS.get(mtype, "o")
+                marker_size = 140 if marker == "*" else 90
 
-            ax.scatter(
-                subset[matched_x] / scale,
-                subset[matched_y],
-                facecolors=facecolor,
-                edgecolors=edgecolor,
-                linewidths=linewidth,
-                marker=marker,
-                s=marker_size,
-                alpha=alpha,
+                if is_stored:
+                    facecolor = "white"
+                    edgecolor = color
+                    linewidth = 1.0
+                    alpha = 1.0
+                else:
+                    facecolor = color
+                    edgecolor = "black"
+                    linewidth = 1.0
+                    alpha = 0.85
+
+                current_ax.scatter(
+                    subset[matched_x] / scale,
+                    subset[matched_y],
+                    facecolors=facecolor,
+                    edgecolors=edgecolor,
+                    linewidths=linewidth,
+                    marker=marker,
+                    s=marker_size,
+                    alpha=alpha,
+                    zorder=4,
+                )
+        else:
+            current_ax.scatter(
+                valid_df[matched_x] / scale,
+                valid_df[matched_y],
+                color="#3498db",
+                edgecolors="black",
+                s=80,
+                alpha=0.8,
                 zorder=4,
             )
+
+        current_ax.grid(True, linestyle="--", alpha=0.5)
+
+    # Label all points on their respective axes
+    if use_break:
+        texts_top = []
+        texts_bottom = []
+        for _, row in valid_df.iterrows():
+            lbl = str(row.get("scorer", "Model"))
+            px_val = float(row[matched_x]) / scale
+            py_val = float(row[matched_y])
+            target_ax = ax_top if py_val >= break_high else ax_bottom
+            txt = target_ax.text(
+                px_val,
+                py_val,
+                f" {lbl}",
+                fontsize=8,
+                bbox=dict(
+                    boxstyle="round,pad=0.2",
+                    facecolor="white",
+                    alpha=0.6,
+                    edgecolor="none",
+                ),
+            )
+            if py_val >= break_high:
+                texts_top.append(txt)
+            else:
+                texts_bottom.append(txt)
+
+        try:
+            from adjustText import adjust_text
+
+            if texts_top:
+                adjust_text(texts_top, ax=ax_top, **adjust_text_kwargs)
+            if texts_bottom:
+                adjust_text(texts_bottom, ax=ax_bottom, **adjust_text_kwargs)
+        except Exception:
+            pass
     else:
-        ax.scatter(
-            valid_df[matched_x] / scale,
-            valid_df[matched_y],
-            color="#3498db",
-            edgecolors="black",
-            s=80,
-            alpha=0.8,
-            zorder=4,
+        texts = []
+        for _, row in valid_df.iterrows():
+            lbl = str(row.get("scorer", "Model"))
+            px_val = float(row[matched_x]) / scale
+            py_val = float(row[matched_y])
+            txt = primary_ax.text(
+                px_val,
+                py_val,
+                f" {lbl}",
+                fontsize=8,
+                bbox=dict(
+                    boxstyle="round,pad=0.2",
+                    facecolor="white",
+                    alpha=0.6,
+                    edgecolor="none",
+                ),
+            )
+            texts.append(txt)
+
+        try:
+            from adjustText import adjust_text
+
+            adjust_text(texts, ax=primary_ax, **adjust_text_kwargs)
+        except Exception:
+            pass
+
+    # Configure axes limits and visual break marks
+    if use_break:
+        ax_top.set_ylim(bottom=break_high, top=y_data_max + y_margin)
+        ax_bottom.set_ylim(bottom=y_plot_bottom, top=break_low)
+
+        # Hide adjacent spines
+        ax_top.spines["bottom"].set_visible(False)
+        ax_bottom.spines["top"].set_visible(False)
+        ax_top.xaxis.tick_top()
+        ax_top.tick_params(top=False, labeltop=False)
+        ax_bottom.xaxis.tick_bottom()
+
+        # Add diagonal cut marks to indicate broken axis
+        # Standard matplotlib pattern for broken y-axis
+        d = 0.012
+        kwargs = dict(color="k", clip_on=False, linewidth=1.2)
+        # Top subplot bottom cut marks
+        ax_top.plot((-d, +d), (-d, +d), transform=ax_top.transAxes, **kwargs)
+        ax_top.plot((1 - d, 1 + d), (-d, +d), transform=ax_top.transAxes, **kwargs)
+
+        # Bottom subplot top cut marks
+        ax_bottom.plot((-d, +d), (1 - 3 * d, 1 + 3 * d), transform=ax_bottom.transAxes, **kwargs)
+        ax_bottom.plot((1 - d, 1 + d), (1 - 3 * d, 1 + 3 * d), transform=ax_bottom.transAxes, **kwargs)
+
+        ax_bottom.set_xlabel(x_label)
+        # Centered Y label between the two panels
+        fig.text(
+            0.03,
+            0.5,
+            "Avg. nDCG@10 on BEIR13 (decontaminated)",
+            va="center",
+            rotation="vertical",
+            fontsize=plt.rcParams["axes.labelsize"],
         )
+    else:
+        primary_ax.set_ylim(bottom=y_plot_bottom, top=y_data_max + y_margin)
+        primary_ax.set_xlabel(x_label)
+        primary_ax.set_ylabel("Avg. nDCG@10 on BEIR13 (decontaminated)")
 
-    # Label all points
-    texts = []
-    for _, row in valid_df.iterrows():
-        lbl = str(row.get("scorer", "Model"))
-        px_val = float(row[matched_x]) / scale
-        py_val = float(row[matched_y])
-        txt = ax.text(
-            px_val,
-            py_val,
-            f" {lbl}",
-            fontsize=8,
-            bbox=dict(
-                boxstyle="round,pad=0.2",
-                facecolor="white",
-                alpha=0.6,
-                edgecolor="none",
-            ),
-        )
-        texts.append(txt)
-
-    try:
-        from adjustText import adjust_text
-
-        adjust_text(texts, ax=ax)
-    except Exception:
-        pass
+    y_tick_formatter = FuncFormatter(lambda value, _: f"{100 * value:.1f}")
+    for current_ax in axes:
+        current_ax.yaxis.set_major_formatter(y_tick_formatter)
 
     # --- Assemble Custom Legend with Backbone, Type, Doc Precompute, and Pareto sections ---
     legend_handles = []
@@ -641,36 +775,40 @@ def plot_pareto_frontier(
                 )
             )
 
-    # Section C: Doc Precompute
+    # Section C: PLAID Store
     legend_handles.append(
-        Line2D([0], [0], color="none", label="Doc Precompute", markersize=0)
+        Line2D([0], [0], color="none", label="PLAID Store", markersize=0)
     )
     legend_handles.append(
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="w",
-            markerfacecolor="#888888",
-            markeredgecolor="black",
-            markeredgewidth=1.0,
-            markersize=8,
-            label="No",
+        (
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                markerfacecolor="none",
+                markeredgecolor="#333333",
+                markeredgewidth=1.0,
+                markersize=8,
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                markerfacecolor="#888888",
+                markeredgecolor="black",
+                markeredgewidth=1.0,
+                markersize=8,
+            ),
         )
     )
-    legend_handles.append(
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="w",
-            markerfacecolor="none",
-            markeredgecolor="#333333",
-            markeredgewidth=1.0,
-            markersize=8,
-            label="Yes",
-        )
-    )
+    legend_labels = [
+        handle.get_label()
+        if isinstance(handle, Line2D)
+        else "Yes / No"
+        for handle in legend_handles
+    ]
 
     # Section D: Pareto Frontier
     if pareto_no_store_df is not None and not pareto_no_store_df.empty:
@@ -696,13 +834,10 @@ def plot_pareto_frontier(
             )
         )
 
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(matched_y)
-    ax.set_title(title or f"Pareto Frontier: {matched_y} vs {x_display_name}")
-    ax.grid(True, linestyle="--", alpha=0.5)
-
-    leg = ax.legend(
+    leg = primary_ax.legend(
         handles=legend_handles,
+        labels=legend_labels,
+        handler_map={tuple: HandlerTuple(ndivide=None)},
         loc="lower right",
         frameon=True,
         facecolor="white",
@@ -711,11 +846,12 @@ def plot_pareto_frontier(
     )
     if leg:
         for text in leg.get_texts():
-            if text.get_text() in ["Backbone", "Type", "Doc Precompute"]:
+            if text.get_text() in ["Backbone", "Type", "PLAID Store"]:
                 text.set_fontweight("bold")
                 text.set_color("#333333")
 
-    plt.tight_layout()
+    if not use_break:
+        plt.tight_layout()
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
@@ -875,6 +1011,20 @@ def main() -> None:
         default=None,
         help="Number of rows to print for the filtered table (default prints all rows)",
     )
+    parser.add_argument(
+        "--y-break",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to insert a broken Y-axis between 48 and 56 (0.48 and 0.56) if data spans across. Default: True.",
+    )
+    parser.add_argument(
+        "--y-break-range",
+        type=float,
+        nargs=2,
+        default=[0.48, 0.56],
+        metavar=("LOW", "HIGH"),
+        help="Y-axis break range (default: 0.48 0.56).",
+    )
     args = parser.parse_args()
 
     df = fetch_sheet_as_df(
@@ -946,6 +1096,7 @@ def main() -> None:
         print("No Pareto-optimal points found (insufficient valid data).")
 
     if args.plot:
+        y_break_val = tuple(args.y_break_range) if args.y_break else None
         plot_pareto_frontier(
             df=df,
             pareto_df=pareto_df,
@@ -953,6 +1104,7 @@ def main() -> None:
             y_col=args.metric,
             output_path=args.plot,
             pareto_no_store_df=pareto_no_store_df,
+            y_break=y_break_val,
         )
 
     if args.latex:

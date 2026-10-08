@@ -11,17 +11,17 @@ import pandas as pd
 ## Values from experiment
 
 index_sizes = {
-    "Mice-Plaid (4bits)": {
+    "Mice (Plaid 4bits)": {
         "splade": 9868.8,
         "plaid": 90242.8,
     },
-    "LateOn-Plaid (2bits)": {
+    "LateOn (Plaid 2bits)": {
         "splade": 0,
         "plaid": 51768.945,
     }
 }
 
-FIG_SIZE = (3.5, 7)
+FIG_SIZE = (3.6, 7)
 FONT_SIZE = 14
 
 plt.rcParams.update(
@@ -86,7 +86,7 @@ for x, splade, plaid, total in zip(model_positions, splade_sizes, plaid_sizes, t
     ax.text(
         x,
         total + max(totals) * 0.015,
-        f"total\n{total:,.1f} Gb",
+        f"Total\n{total:,.1f} Gb",
         va="bottom",
         ha="center",
         fontsize=FONT_SIZE,
