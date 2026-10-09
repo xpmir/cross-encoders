@@ -199,6 +199,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
         n_full_scores: int = 0,
         max_query_length: Optional[int] = None,
         max_doc_length: Optional[int] = None,
+        chunk_size: Optional[int] = None,
     ):
         self.mice_model = mice_model
         self.topk = topk
@@ -208,6 +209,7 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
         self.n_full_scores = n_full_scores
         self.max_query_length = max_query_length
         self.max_doc_length = max_doc_length
+        self.chunk_size = chunk_size
         self.doc_encoder = mice_model.get_document_encoder(
             max_doc_length=max_doc_length
         )
@@ -326,10 +328,11 @@ class MicePlaidRetrieverFactory(RetrieverFactory):
             store=dataset,
             index=index,
             scorer=self.mice_model,
-            retriever=self.first_stage_factory(dataset=dataset, key=key),
+            retriever=self.first_stage_factory(dataset, key=key),
             top_k=self.topk,
             batchsize=self.batchsize,
             max_query_length=self.max_query_length,
+            chunk_size=self.chunk_size,
         ).tag("plaid_retriever", True)
 
     def colbert_retriever(self, dataset: Documents, key: str = None) -> PlaidRetriever:

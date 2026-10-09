@@ -154,6 +154,13 @@ class Indexation(LauncherSpecification):
 class Retrieval:
     k: GridSearch[int] = 1000
     batch_size: GridSearch[int] = 128
+    chunk_size: GridSearch[Optional[int]] = None
+    """Micro-batch chunk size for Stage 1 candidate retrieval and Stage 2 reranking.
+    If None, retrieves all candidates in one go before Stage 2 reranking."""
+
+    in_memory: bool = False
+    """Whether to load the sparse retriever index in memory instead of memory-mapping."""
+
     requirements: str = "duration=2 days & cuda(mem=24G)"
 
     long_evals: List[str] = Factory(list)

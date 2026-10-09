@@ -662,3 +662,38 @@ def test_evaluate_scorer_with_live_retriever_factory_when_not_precomputed():
     assert retriever_partial.keywords["retrievers"] is mock_retriever_factory
     # Check that retriever_init_tasks was passed to evaluate_retriever
     assert dummy_init_task in call_args.kwargs["init_tasks"]
+    assert retriever_partial.keywords["chunk_size"] is None
+
+
+def test_evaluate_scorer_forwards_custom_chunk_size():
+    """Verify that evaluate_scorer forwards a custom chunk_size from cfg.retrieval."""
+    from unittest.mock import MagicMock
+
+    mock_tests = MagicMock()
+    mock_retriever_factory = MagicMock()
+
+    cfg = BaselinesConfig(
+        scorer_id="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        scorer_type="stCrossEncoder",
+        use_plaid=False,
+        precompute_first_stage=False,
+    )
+    cfg.retrieval.chunk_size = 32
+    first_stage_factories = {
+        "splade": (mock_retriever_factory, [])
+    }
+
+    evaluate_scorer(
+        cfg=cfg,
+        cfg_tags={},
+        tests=mock_tests,
+        first_stage_factories=first_stage_factories,
+        launcher_evaluate=None,
+        launcher_index=None,
+        fabric_config=None,
+    )
+
+    assert mock_tests.evaluate_retriever.call_count == 1
+    call_args = mock_tests.evaluate_retriever.call_args
+    retriever_partial = call_args[0][0]
+    assert retriever_partial.keywords["chunk_size"] == 32

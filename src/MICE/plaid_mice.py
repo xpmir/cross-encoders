@@ -1,24 +1,28 @@
+import contextlib
+import logging
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 from MICE.modeling.mice import MICETokenizedTexts, QueryDocInput
 from datamaestro_ir.data.base import IDTextRecord, ScoredDocument
+from experimaestro import Param, field
 from experimaestro.core.arguments import Meta
 from lightning_fabric import Fabric
+import numpy as np
 import torch
-import logging
-
-from experimaestro import Param, field
-from tqdm import tqdm
+from torchdata.stateful_dataloader import StatefulDataLoader
 from xpm_torch.configuration import FabricConfiguration
-from xpm_torch.datasets import ShardedIterableDataset
 from xpmir.index.plaid import PlaidIndex
-from xpmir.rankers.retriever import Retriever
-from xpmir.rankers.scorer import RerankingInputs, TwoStageRetriever, reranking_collate
 from xpmir.letor.records import PointwiseItem
 from xpmir.rankers import AbstractModuleScorer
+from xpmir.rankers.retriever import Retriever
+from xpmir.rankers.scorer import (
+    ReRankingDataset,
+    RerankingInputs,
+    TwoStageRetriever,
+    reranking_collate,
+)
 from xpmir.text.encoders import TokenizerOptions
-from xpm_torch.utils import to_device
-from torchdata.stateful_dataloader import StatefulDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -105,33 +109,61 @@ class MicePlaidRetriever(Retriever):
         return out[: (self.top_k or len(out))]
 
 
-class PlaidReRankingDataset(ShardedIterableDataset):
-    """A dataset that yields PointwiseItem records for re-ranking"""
+class PlaidReRankingDataset(ReRankingDataset):
+    """A dataset that yields PointwiseItem records for re-ranking.
+    Inherits from ReRankingDataset for backwards compatibility.
+    """
 
-    def __init__(self, queries: Dict[str, IDTextRecord], retriever: Retriever):
-        super().__init__()
-        self.queries = list(queries.items())
-        self.retriever = retriever
+    def __init__(
+        self,
+        candidates: Union[
+            List[Tuple[IDTextRecord, List[ScoredDocument]]],
+            Dict[str, IDTextRecord],
+        ],
+        retriever: Optional[Retriever] = None,
+    ):
+        if isinstance(candidates, dict):
+            # Backwards compatibility: if queries dict was passed, retrieve sequentially
+            assert retriever is not None, (
+                "retriever must be provided if queries dict is passed"
+            )
+            retrieved_candidates = []
+            for _, query in candidates.items():
+                retrieved_candidates.append((query, retriever.retrieve(query)))
+            candidates = retrieved_candidates
+        super().__init__(candidates)
 
-    def iter_shard(self, shard_id: int, num_shards: int):
-        import os
 
-        rank = os.environ.get(
-            "SLURM_PROCID", os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0"))
-        )
-        logger.debug(
-            "ReRankingDataset (rank %s): shard %d/%d starting (total queries: %d)",
-            rank,
-            shard_id,
-            num_shards,
-            len(self.queries),
-        )
-        for i in range(shard_id, len(self.queries), num_shards):
-            qid, query = self.queries[i]
-            # Pull first-stage results on-the-fly to avoid materialising everything
-            scored_docs = self.retriever.retrieve(query)
-            for sd in scored_docs:
-                yield PointwiseItem(query, sd.document, sd.score)
+class MiceRerankingCollate:
+    """Picklable collate function for MICE-PLAID reranking DataLoader."""
+
+    def __init__(self, scorer, max_query_length: Optional[int] = None):
+        self.scorer = scorer.module if hasattr(scorer, "module") else scorer
+        self.max_query_length = max_query_length
+
+    def __call__(self, batch: List[PointwiseItem]) -> RerankingInputs:
+        inputs = reranking_collate(batch)
+        doc_list: list = []
+        queries_list: list = []
+        for record in inputs["records"]:
+            doc_list.append(record.document["id"])
+            queries_list.append(record.topic)
+
+        if issubclass(type(self.scorer), AbstractModuleScorer):
+            options = (
+                TokenizerOptions(max_length=self.max_query_length)
+                if self.max_query_length is not None
+                else None
+            )
+            tokenized_queries = self.scorer.batch_tokenize(
+                queries_list, options=options, input_nature=QueryDocInput.QUERY
+            )
+        else:
+            tokenized_queries = None
+
+        inputs["tokenized_queries"] = tokenized_queries
+        inputs["doc_ids"] = doc_list
+        return inputs
 
 
 class MicePlaidRetrieverv2(TwoStageRetriever):
@@ -141,42 +173,15 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
     max_query_length: Param[Optional[int]] = field(default=None, ignore_default=True)
     """Maximum query length for reranking. If None, uses scorer's default."""
 
-    def build_reranking_dataloader(self, queries: Dict[str, IDTextRecord]):
-        """Builds a dataloader for re-ranking all documents for a set of queries
-        Allows for efficient two-stage retrieval with cross-query batching on GPU when the scorer supports it (i.e. is an AbstractModuleScorer and batchsize > 0).
+    def build_reranking_dataloader(
+        self, candidates: List[Tuple[IDTextRecord, List[ScoredDocument]]]
+    ):
+        """Builds a dataloader for re-ranking all documents for pre-retrieved candidates.
+        Allows for efficient two-stage retrieval with cross-query batching on GPU when the scorer
+        supports it (i.e. is an AbstractModuleScorer and batchsize > 0).
         """
-        # We don't materialise everything, but iterate on the fly
-        dataset = PlaidReRankingDataset(queries, self.retriever)
-
-        # get underlying module if wrapped (e.g. Fabric)
-        scorer = self.scorer.module if hasattr(self.scorer, "module") else self.scorer
-
-        def tokenization_fn(
-            records: List[IDTextRecord],
-        ) -> Optional[MICETokenizedTexts]:
-            doc_list: list = []
-            queries_list: list = []
-            for record in records:
-                doc_list.append(record.document["id"])
-                queries_list.append(record.topic)
-
-            if issubclass(type(scorer), AbstractModuleScorer):
-                options = (
-                    TokenizerOptions(max_length=self.max_query_length)
-                    if self.max_query_length is not None
-                    else None
-                )
-                return scorer.batch_tokenize(
-                    queries_list, options=options, input_nature=QueryDocInput.QUERY
-                ), doc_list
-            return None
-
-        def collate_fn(batch: List[PointwiseItem]) -> RerankingInputs:
-            inputs = reranking_collate(batch)
-            inputs["tokenized_queries"], inputs["doc_ids"] = tokenization_fn(
-                inputs["records"]
-            )
-            return inputs
+        dataset = ReRankingDataset(candidates)
+        collate_fn = MiceRerankingCollate(self.scorer, self.max_query_length)
 
         dataloader = StatefulDataLoader(
             dataset,
@@ -186,82 +191,24 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
             collate_fn=collate_fn,
         )
 
-        fabric: Fabric = getattr(self, "fabric", None)
-        if fabric:
-            dataloader = fabric.setup_dataloaders(dataloader)
-
         return dataloader
 
-    @torch.no_grad()
-    def retrieve_all(
-        self, queries: Dict[str, IDTextRecord]
-    ) -> Dict[str, List[ScoredDocument]]:
-        """Retrieves documents for all queries in an efficient two - stage fashion:
-        - populate a `PointWiseItem` dataset with the documents from first stage
-        - reranks them on the fly with the scorer with given batch size
-        - if self.batchsize is 0, scores all documents from the same query at once (will cause OOM large top_k first stages)
-        """
-        # Scorer in evaluation mode
-        self.scorer.eval()
-
-        if self.batchsize == 0:
-            # Fallback to per-query retrieval if no batchsize
-            return super().retrieve_all(queries)
-
-        # get underlying module if wrapped (e.g. Fabric)
-        scorer = self.scorer.module if hasattr(self.scorer, "module") else self.scorer
-        scorer_type = type(scorer)
-
-        fabric: Fabric = getattr(self, "fabric", None)
-        dataloader = self.build_reranking_dataloader(queries)
-
-        # Process in batches
-        scored_results = {qid: [] for qid in queries}
-        seen_qids = set()
-
-        disable_tqdm = fabric is not None and not fabric.is_global_zero
-
-        # Calculate local total for the progress bar to reach 100% on rank 0
-        total_to_process = len(queries)
-        if fabric and fabric.world_size > 1:
-            # Number of queries this specific rank (0) will handle
-            total_to_process = len(
-                range(fabric.global_rank, len(queries), fabric.world_size)
-            )
-
-        batch_size_info = (
-            f"batch size {self.batchsize}"
-            if issubclass(scorer_type, AbstractModuleScorer)
-            else "rsv (one-by-one)"
+    def score_batch(
+        self, inputs: Dict[str, Any], scorer_type: type
+    ) -> Optional[np.ndarray]:
+        fabric: Optional[Fabric] = getattr(self, "fabric", None) or getattr(
+            self.scorer, "fabric", None
         )
-        logger.info(
-            f"Rank {fabric.global_rank if fabric else 0}: Re-Ranking with '{scorer_type.__name__}' using {batch_size_info}..."
-        )
-
-        pbar = (
-            tqdm(
-                total=total_to_process,
-                desc="Re-ranking",
-                unit="query",
-            )
-            if not disable_tqdm
-            else None
-        )
-
-        for inputs in dataloader:
-            batch_items = inputs["records"]
-            batch = inputs["batch"]
-            tokenized_queries = inputs.get("tokenized_queries")
-            doc_ids = inputs.get("doc_ids")
-            doc_token_embeddings = [
-                t.to(self.scorer.device)
-                for t in self.index.get_document_tokens(doc_ids)
-            ]
-
+        with fabric.autocast() if fabric else contextlib.nullcontext():
             if issubclass(scorer_type, AbstractModuleScorer):
-                # Use scorer.forward if it's an AbstractModuleScorer to batch across queries
-
-                scores = (
+                batch_items = inputs["records"]
+                tokenized_queries = inputs.get("tokenized_queries")
+                doc_ids = inputs.get("doc_ids")
+                doc_token_embeddings = [
+                    t.to(self.scorer.device)
+                    for t in self.index.get_document_tokens(doc_ids)
+                ]
+                return (
                     self.scorer(
                         batch_items,
                         tokenized=MICETokenizedTexts(
@@ -273,66 +220,4 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
                     .float()
                     .numpy()
                 )
-
-                for score, item in zip(scores, batch):
-                    qid = item.topic["id"]
-                    if qid not in seen_qids:
-                        seen_qids.add(qid)
-                        if pbar is not None:
-                            pbar.update(1)
-                    scored_results[qid].append(
-                        to_device(
-                            ScoredDocument(item.document, float(score.item())),
-                            "cpu",
-                        )
-                    )
-            else:
-                # Fallback: group by query and use rsv (score one by one)
-                by_query = {}
-                for item in batch:
-                    qid = item.topic["id"]
-                    if qid not in seen_qids:
-                        seen_qids.add(qid)
-                        if pbar is not None:
-                            pbar.update(1)
-                    by_query.setdefault(qid, []).append(
-                        to_device(
-                            ScoredDocument(item.document, item.relevance),
-                            "cpu",
-                        )
-                    )
-
-                for qid, docs in by_query.items():
-                    scored_results[qid].extend(self.scorer.rsv(queries[qid], docs))
-
-        if pbar is not None:
-            pbar.close()
-
-        if fabric and fabric.world_size > 1:
-            # Gather results from all GPUs
-            # We use a list of tuples and filter empty results to reduce
-            # communication overhead. Using torch.distributed directly for
-            # objects is more robust than fabric.all_gather which is tensor-oriented.
-            local_results = [
-                (qid, docs) for qid, docs in scored_results.items() if docs
-            ]
-            gathered_data = [None] * fabric.world_size
-            torch.distributed.all_gather_object(gathered_data, local_results)
-
-            if fabric.is_global_zero:
-                # Merge them back into one master dictionary
-                final_results = {qid: [] for qid in queries}
-                for rank_results in gathered_data:
-                    for qid, docs in rank_results:
-                        final_results[qid].extend(docs)
-                scored_results = final_results
-            else:
-                return {}
-
-        # Sort and truncate
-        for qid in scored_results:
-            scored_results[qid].sort(reverse=True)
-            if self.top_k:
-                scored_results[qid] = scored_results[qid][: self.top_k]
-
-        return scored_results
+            return None

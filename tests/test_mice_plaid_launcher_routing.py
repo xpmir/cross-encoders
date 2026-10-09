@@ -402,3 +402,30 @@ def test_get_splade_index_routes_to_long_launcher_index():
         calls = mock_builder_instance.submit.call_args_list
         assert len(calls) == 1
         assert calls[0].kwargs["launcher"] == launcher_long
+
+
+def test_mice_plaid_retriever_factory_call_accepts_splade_factory_with_documents_param():
+    """Verify that MicePlaidRetrieverFactory.__call__ passes dataset positionally so factories
+    expecting 'documents' (like splade_retriever partial) succeed without TypeError."""
+    mock_first_stage = MagicMock()
+
+    def splade_factory(documents, key=None):
+        mock_first_stage(documents, key=key)
+        return MagicMock()
+
+    mock_model = MagicMock()
+    factory = MicePlaidRetrieverFactory(
+        mice_model=mock_model,
+        first_stage_factory=splade_factory,
+        topk=100,
+        batchsize=32,
+    )
+    docs = DummyDocuments("scifact_docs")
+    factory.indexes = {"beir/scifact": MagicMock()}
+    factory.documents = {"beir/scifact": docs}
+
+    with patch("MICE.plaid_mice.MicePlaidRetrieverv2.C") as mock_mice_retriever:
+        mock_mice_retriever.return_value.tag.return_value = MagicMock()
+        factory(docs, key="beir/scifact")
+        assert mock_first_stage.call_count == 1
+        assert mock_first_stage.call_args[0][0] is docs

@@ -374,6 +374,7 @@ def two_stage_reranker(
     scorer: Scorer,
     retrievers: MultiRunRetrieverFactory,
     key: str = None,
+    chunk_size: Optional[int] = None,
     **kwargs,
 ):
     """Wraps scorer_retriever to tag the resulting two-stage retriever with plaid_retriever=False."""
@@ -383,6 +384,7 @@ def two_stage_reranker(
         scorer=scorer,
         retrievers=retrievers,
         key=key,
+        chunk_size=chunk_size,
         **kwargs,
     )
     return retriever.tag("plaid_retriever", False)
@@ -592,6 +594,7 @@ def evaluate_scorer(
             two_stage_retriever_factory = partial(
                 two_stage_reranker,
                 batch_size=cfg.retrieval.batch_size,
+                chunk_size=getattr(cfg.retrieval, "chunk_size", None),
                 scorer=scorer,
                 retrievers=run_retriever_factory,
             )
@@ -619,6 +622,7 @@ def evaluate_scorer(
                 two_stage_retriever_factory = partial(
                     two_stage_reranker,
                     batch_size=cfg.retrieval.batch_size,
+                    chunk_size=getattr(cfg.retrieval, "chunk_size", None),
                     scorer=scorer,
                     retrievers=run_retriever_factory,
                 )
@@ -643,6 +647,7 @@ def evaluate_scorer(
                 n_full_scores=cfg.plaid.n_full_scores,
                 max_query_length=cfg.plaid.max_query_length,
                 max_doc_length=cfg.plaid.max_doc_length,
+                chunk_size=getattr(cfg.retrieval, "chunk_size", None),
             )
             mice_plaid_factory.build_indexes(
                 evaluations=tests,
@@ -685,6 +690,7 @@ def evaluate_scorer(
                     n_full_scores=cfg.plaid.n_full_scores,
                     max_query_length=cfg.plaid.max_query_length,
                     max_doc_length=cfg.plaid.max_doc_length,
+                    chunk_size=getattr(cfg.retrieval, "chunk_size", None),
                 )
                 mice_colbert_rerank_factory.build_indexes(
                     evaluations=tests,
@@ -716,6 +722,7 @@ def evaluate_scorer(
         two_stage_retriever_factory = partial(
             two_stage_reranker,
             batch_size=cfg.retrieval.batch_size,
+            chunk_size=getattr(cfg.retrieval, "chunk_size", None),
             scorer=scorer,
             retrievers=run_retriever_factory,
         )

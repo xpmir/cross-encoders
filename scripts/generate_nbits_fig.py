@@ -35,6 +35,18 @@ DATA_FILE_PATH = "/lustre/fsn1/projects/rech/npl/commun/micev2/experiments/eval_
 DATA_FILE_PATH = "/lustre/fsn1/projects/rech/npl/commun/micev2/experiments/eval_lateon_plaid_abl_nbits/20261009_140850/results/results.csv"
 FIG_SIZE = (4, 4)
 
+
+scorer_display_map = {
+    "train_micev2_ettin68m_l10+4_v3_plaid_128": "Mice-ettin68m",
+    "train_micev2_ettin150m_l12+4_v3_plaid_128": "Mice-ettin150m",
+    # "train_micev2_ettin400m_l12+4_plaid_128_fast": "Mice-ettin400m",
+    "lightonai/LateOn": "LateOn",
+}
+first_stage_display_map = {
+    "plaid": "PLAID",
+    "naver/splade-v3-distilbert": "SPLADE-v3",
+}
+
 def read_remote_csv(
     host: str,
     remote_path: str,
@@ -84,7 +96,7 @@ def read_remote_csv(
 def plot_nbits(
     df: pd.DataFrame,
     metric: str = "nDCG@10",
-    output_path: str = "figures/ecir_nbits_ablation.png",
+    output_path: str = "figures/ecir_nbits_ablation.pdf",
     show: bool = False,
     ignore_arguana: bool = False,
 ) -> None:
@@ -103,7 +115,11 @@ def plot_nbits(
     valid_df["n_bits"] = pd.to_numeric(valid_df["n_bits"])
     valid_df[metric] = pd.to_numeric(valid_df[metric])
 
-    scorers = [s for s in valid_df["scorer"].dropna().unique()]
+    scorers = [s for s in valid_df["scorer"].dropna().unique() if s in scorer_display_map]
+    if not scorers:
+        raise ValueError(
+            f"No valid scorers found matching scorer_display_map keys: {list(scorer_display_map.keys())}"
+        )
     datasets = [d for d in valid_df["dataset"].unique() if d != "mean"]
     if ignore_arguana:
         logging.info("Ignoring ArguAna dataset from plots and mean calculation.")
@@ -188,16 +204,6 @@ def plot_nbits(
 
         ax.axhline(0, color="gray", linestyle=":", linewidth=1, alpha=0.7)
 
-        scorer_display_map = {
-            "train_micev2_ettin68m_l10+4_v3_plaid_128": "Mice-ettin68m",
-            "train_micev2_ettin150m_l12+4_v3_plaid_128": "Mice-ettin150m",
-            "train_micev2_ettin400m_l12+4_plaid_128_fast": "Mice-ettin400m",
-            "lightonai/LateOn": "LateOn",
-        }
-        first_stage_display_map = {
-            "plaid": "PLAID",
-            "naver/splade-v3-distilbert": "SPLADE-v3",
-        }
         model_name = scorer_display_map.get(scorer, scorer.split("/")[-1])
         first_stage = scorer_df[scorer_df["use_plaid"] == True]["first_stage"].dropna().unique()
         first_stage_name = first_stage_display_map.get(first_stage[0].lower(), first_stage[0]) if len(first_stage) > 0 else ""
@@ -244,8 +250,8 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=str,
-        default="figures/nbits_ablation.png",
-        help="Output path for the generated plot (default: 'nbits_ablation.png').",
+        default="figures/ecir_nbits_ablation.pdf",
+        help="Output path for the generated plot (default: 'nbits_ablation.pdf').",
     )
     parser.add_argument(
         "--ignore-arguana",
