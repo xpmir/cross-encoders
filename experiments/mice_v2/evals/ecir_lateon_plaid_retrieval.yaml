@@ -25,16 +25,12 @@ retrieval:
 
 indexation:
   batch_size: 128
-  requirements: duration=10h & cpu(cores=16, mem=20G) & cuda(mem=30G) # need H100
-  long_evals: ["fever", "dpbedia", "hotpotqa"]
+  requirements: duration=18h & cpu(cores=16, mem=20G) & cuda(mem=30G) # need H100
+  long_evals: ["fever", "dpbedia", "hotpotqa", "science"]
   long_requirements: duration=15h & cpu(cores=16, mem=20G) & cuda(mem=50G) # need H100
 
 evaluation:
   in_domain: false
   beir13: false
   beir13_decontaminated: true
-  # datasets:
-  #   - scidocs
-  #   - nfcorpus
-  #   - scifact
-    # - arguana
+  lotte_search: true

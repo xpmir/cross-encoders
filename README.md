@@ -71,7 +71,7 @@ The easiest way to install it is via the kernels community.
 
 ```bash
 uvx hf download kernels-community/flash-attn2
-````
+```
 
 ### Launching experiments
 If it is the first time using experimaestro, you may first setup your environment to be able to launch experiments. You can follow [the tutorial](https://experimaestro-python.readthedocs.io/en/latest/tutorial.html)

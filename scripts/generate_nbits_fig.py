@@ -32,7 +32,8 @@ plt.style.use("ggplot")
 
 DEFAULT_HOST = "JZ"
 DATA_FILE_PATH = "/lustre/fsn1/projects/rech/npl/commun/micev2/experiments/eval_lateon_plaid_abl_nbits/20261007_113734/results/results.csv"
-
+DATA_FILE_PATH = "/lustre/fsn1/projects/rech/npl/commun/micev2/experiments/eval_lateon_plaid_abl_nbits/20261009_140850/results/results.csv"
+FIG_SIZE = (4, 4)
 
 def read_remote_csv(
     host: str,
@@ -85,8 +86,9 @@ def plot_nbits(
     metric: str = "nDCG@10",
     output_path: str = "figures/ecir_nbits_ablation.png",
     show: bool = False,
+    ignore_arguana: bool = False,
 ) -> None:
-    """Plot nbits vs normalized nDCG (perf - perf_nbits_8) for each dataset with lines/colors,
+    """Plot nbits vs normalized nDCG (perf - perf_plaid_false) for each dataset with lines/colors,
     including error bars for the mean across datasets.
     """
     valid_df = df[df["n_bits"].notna()].copy()
@@ -103,6 +105,9 @@ def plot_nbits(
 
     scorers = [s for s in valid_df["scorer"].dropna().unique()]
     datasets = [d for d in valid_df["dataset"].unique() if d != "mean"]
+    if ignore_arguana:
+        logging.info("Ignoring ArguAna dataset from plots and mean calculation.")
+        datasets = [d for d in datasets if "arguana" not in d.lower()]
 
     # Distinct colors for each individual dataset
     colormap = plt.get_cmap("tab10")
@@ -112,7 +117,7 @@ def plot_nbits(
     fig, axes = plt.subplots(
         1,
         n_scorers,
-        figsize=(7 * n_scorers, 5.5),
+        figsize=(n_scorers * FIG_SIZE[0], FIG_SIZE[1]),
         sharey=True,
         dpi=150,
     )
@@ -121,25 +126,34 @@ def plot_nbits(
 
     for ax, scorer in zip(axes, scorers):
         scorer_df = valid_df[valid_df["scorer"] == scorer].copy()
-        nbits_values = sorted(scorer_df["n_bits"].unique())
+
+        # Candidates for plaid runs
+        plaid_df = scorer_df[scorer_df["use_plaid"] == True]
+        nbits_values = sorted(plaid_df["n_bits"].unique())
 
         norm_rows = []
-        # Plot line for each dataset normalized to 8-bits
+        # Plot line for each dataset normalized to use_plaid=False
         for d in datasets:
-            d_df = scorer_df[scorer_df["dataset"] == d].sort_values("n_bits").copy()
+            d_df = scorer_df[scorer_df["dataset"] == d].copy()
             if d_df.empty:
                 continue
-            ref_rows = d_df[d_df["n_bits"] == 8.0]
+
+            ref_rows = d_df[d_df["use_plaid"] == False]
             if ref_rows.empty:
                 continue
             ref_val = ref_rows[metric].iloc[0]
-            d_df["norm_perf"] = d_df[metric] - ref_val
-            norm_rows.append(d_df)
+
+            plaid_d_df = d_df[d_df["use_plaid"] == True].sort_values("n_bits").copy()
+            if plaid_d_df.empty:
+                continue
+
+            plaid_d_df["norm_perf"] = plaid_d_df[metric] - ref_val
+            norm_rows.append(plaid_d_df)
 
             dataset_label = d.replace("_decontaminated", "")
             ax.plot(
-                d_df["n_bits"],
-                d_df["norm_perf"],
+                plaid_d_df["n_bits"],
+                plaid_d_df["norm_perf"],
                 marker="o",
                 label=dataset_label,
                 color=dataset_colors[d],
@@ -147,6 +161,9 @@ def plot_nbits(
                 markersize=6,
                 alpha=0.9,
             )
+
+        if not norm_rows:
+            continue
 
         # Compute mean across datasets
         all_norm_df = pd.concat(norm_rows, ignore_index=True)
@@ -174,6 +191,7 @@ def plot_nbits(
         scorer_display_map = {
             "train_micev2_ettin68m_l10+4_v3_plaid_128": "Mice-ettin68m",
             "train_micev2_ettin150m_l12+4_v3_plaid_128": "Mice-ettin150m",
+            "train_micev2_ettin400m_l12+4_plaid_128_fast": "Mice-ettin400m",
             "lightonai/LateOn": "LateOn",
         }
         first_stage_display_map = {
@@ -181,7 +199,7 @@ def plot_nbits(
             "naver/splade-v3-distilbert": "SPLADE-v3",
         }
         model_name = scorer_display_map.get(scorer, scorer.split("/")[-1])
-        first_stage = scorer_df["first_stage"].dropna().unique()
+        first_stage = scorer_df[scorer_df["use_plaid"] == True]["first_stage"].dropna().unique()
         first_stage_name = first_stage_display_map.get(first_stage[0].lower(), first_stage[0]) if len(first_stage) > 0 else ""
         ax.set_title(f"{model_name}\n(first stage: {first_stage_name})", fontweight="bold", fontsize=FONT_SIZE)
         ax.set_xlabel("nbits (PLAID)")
@@ -190,7 +208,7 @@ def plot_nbits(
         ax.grid(True, linestyle="--", alpha=0.5)
         ax.legend(loc="lower right", frameon=True)
 
-    axes[0].set_ylabel(f"Δ {metric} (relative to 8-bits)")
+    axes[0].set_ylabel(f"Δ {metric} (relative to plaid=False)")
 
     plt.tight_layout()
     out = Path(output_path)
@@ -230,6 +248,11 @@ def main() -> None:
         help="Output path for the generated plot (default: 'nbits_ablation.png').",
     )
     parser.add_argument(
+        "--ignore-arguana",
+        action="store_true",
+        help="Exclude ArguAna dataset from plots and mean calculation.",
+    )
+    parser.add_argument(
         "--show",
         action="store_true",
         help="Display the plot window.",
@@ -241,7 +264,13 @@ def main() -> None:
     print("\n=== RESULTS DATAFRAME ===")
     print(df.to_string())
 
-    plot_nbits(df, metric=args.metric, output_path=args.output, show=args.show)
+    plot_nbits(
+        df,
+        metric=args.metric,
+        output_path=args.output,
+        show=args.show,
+        ignore_arguana=args.ignore_arguana,
+    )
 
 
 if __name__ == "__main__":

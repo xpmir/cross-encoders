@@ -105,12 +105,15 @@ def splade_retriever(
         )
     )
 
+    batch_size = cfg.retrieval.batch_size
+    in_memory = getattr(cfg.retrieval, "in_memory", False) or in_memory
+
     if is_seismic:
         retriever = (
             SeismicSparseRetriever.C(
                 index=index_obj,
                 topk=topk or cfg.retrieval.k,
-                batchsize=1,
+                batchsize=batch_size,
                 encoder=encoder,
                 in_memory=in_memory,
                 query_cut=seismic_cfg.query_cut,
@@ -124,7 +127,7 @@ def splade_retriever(
         retriever = SparseRetriever.C(
             index=index_obj,
             topk=topk or cfg.retrieval.k,
-            batchsize=1,
+            batchsize=batch_size,
             encoder=encoder,
             in_memory=in_memory,
         ).tag("first_stage", name)

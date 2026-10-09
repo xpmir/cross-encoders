@@ -1,4 +1,4 @@
-id: eval_mice_plaid
+id: eval_scorer_latency
 title: cross_scorer_evaluation
 description: Evaluation of MICE v2 Models
 

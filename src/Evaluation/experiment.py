@@ -564,7 +564,21 @@ def evaluate_scorer(
             "retriever, but none was configured. Please specify 'retriever: ...' in your config."
         )
 
-    for retriever_name, (run_retriever_factory, _) in first_stage_factories.items():
+    for retriever_name, (
+        run_retriever_factory,
+        retriever_init_tasks,
+    ) in first_stage_factories.items():
+        # Build unified init_tasks for downstream evaluation
+        eval_init_tasks = list(ce_init_tasks)
+        if not cfg.precompute_first_stage and retriever_init_tasks:
+            for task in retriever_init_tasks:
+                if task not in eval_init_tasks:
+                    eval_init_tasks.append(task)
+            logging.info(
+                f"Attached {len(retriever_init_tasks)} live first-stage retriever init tasks to evaluation: "
+                f"{[type(t).__name__ for t in retriever_init_tasks]}"
+            )
+
         # ---------------------------------------------------------------------
         # Branch 2: ColBERT without PLAID (Second-Stage Reranker over Candidates)
         # Evaluates ColBERT by re-ranking first-stage candidate runs.
@@ -584,7 +598,7 @@ def evaluate_scorer(
             tests.evaluate_retriever(
                 two_stage_retriever_factory,
                 launcher=launcher_evaluate,
-                init_tasks=ce_init_tasks,
+                init_tasks=eval_init_tasks,
                 fabric_config=fabric_config,
                 with_run=cfg.save_runs,
             )
@@ -611,7 +625,7 @@ def evaluate_scorer(
                 tests.evaluate_retriever(
                     two_stage_retriever_factory,
                     launcher=launcher_evaluate,
-                    init_tasks=ce_init_tasks,
+                    init_tasks=eval_init_tasks,
                     fabric_config=fabric_config,
                     with_run=cfg.save_runs,
                 )
@@ -643,7 +657,7 @@ def evaluate_scorer(
             tests.evaluate_retriever(
                 retriever=mice_plaid_factory,
                 launcher=launcher_evaluate,
-                init_tasks=ce_init_tasks,
+                init_tasks=eval_init_tasks,
                 fabric_config=fabric_config,
                 with_run=cfg.save_runs,
             )
@@ -708,7 +722,7 @@ def evaluate_scorer(
         tests.evaluate_retriever(
             two_stage_retriever_factory,
             launcher=launcher_evaluate,
-            init_tasks=ce_init_tasks,
+            init_tasks=eval_init_tasks,
             fabric_config=fabric_config,
             with_run=cfg.save_runs,
         )

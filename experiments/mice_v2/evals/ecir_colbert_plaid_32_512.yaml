@@ -19,6 +19,7 @@ evaluation:
   in_domain: false
   beir13: false
   beir13_decontaminated: true
+  lotte_search: true
 
 use_plaid: true
 

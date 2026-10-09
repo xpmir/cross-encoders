@@ -19,6 +19,7 @@ evaluation:
   in_domain: false
   beir13: false
   beir13_decontaminated: true
+  lotte_search: true
 
 grid_search:
   from_experiment:
@@ -27,5 +28,3 @@ grid_search:
   - train_micev2_ettin150m_l12+4_v3_plaid_128 #Version Ft with 128 bottlenexk
   - train_micev2_ettin400m_l12+4_v3
   - train_micev2_ettin400m_l12+4_plaid_128_fast
-  # TODO mice 400m
-  # - baseline_ettin68m_long

@@ -1,4 +1,4 @@
-id: eval_colbert_plaid
+id: eval_scorers_latency
 title: cross_scorer_evaluation
 description: Evaluation of MICE v2 Models
 
@@ -22,13 +22,18 @@ evaluation:
   datasets:
     - dbpedia_decontaminated
 
+
+indexation:
+  batch_size: 128
+  requirements: duration=2h & cpu(cores=16, mem=20G) & cuda(mem=30G)
+
 use_plaid: true
 precompute_first_stage: false
-# include_recall_100: true
+include_recall_100: true
 
 grid_search:
   config_dicts:
-    - {scorer_id: "cross-encoder/ettin-reranker-400m-v1", scorer_type: stCrossEncoder}
-    - {scorer_id: "VictorMorand/Colbert-ettin-68m-mxbread-pearson", scorer_type: stMultiVectorEncoder}
+    - {scorer_id: "cross-encoder/ettin-reranker-150m-v1", scorer_type: stCrossEncoder}
     - {scorer_id: "VictorMorand/Colbert-ettin-150m-mxbread-pearson", scorer_type: stMultiVectorEncoder}
+    - {scorer_id: "VictorMorand/Colbert-ettin-68m-mxbread-pearson", scorer_type: stMultiVectorEncoder}
     # - lightonai/LateOn
