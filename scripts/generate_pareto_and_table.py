@@ -32,7 +32,35 @@ DEFAULT_URL = (
 )
 
 FONT_SIZE = 14
-FIG_SIZE = (8, 7)
+FIG_SIZE = (8, 6)
+
+SIZE_CLASSES = ["32m", "68m", "150m", "400m", "lateOn-unsup", "other"]
+
+SIZE_COLORS = {
+    "32m": "#f29f28",
+    "68m": "#d6191b",
+    "150m": "#221199",
+    "400m": "#dfb428",
+    "lateOn-unsup": "#16a085",
+    "other": "#7f8c8d",
+}
+
+TYPE_MARKERS = {
+    "cross-encoder": "o",
+    "mice": "*",
+    "colbert": "^",
+    "other": "s",
+}
+
+TYPE_LABELS = {
+    "cross-encoder": "Cross-Encoder",
+    "mice": "MICE",
+    "colbert": "ColBERT",
+    "other": "Other",
+}
+
+# Color for Pareto curves
+pareto_color = "#27ae60"
 
 plt.rcParams.update(
     {
@@ -170,6 +198,7 @@ def fetch_sheet_as_df(
     tok: str | None = "1024-1024",
     drop_empty_cols: bool = True,
     flops_col: str = "Flops",
+    keep_cols: list[str] | None = None,
 ) -> pd.DataFrame:
     """Fetches a Google Sheet as a pandas DataFrame and applies filtering.
 
@@ -179,6 +208,7 @@ def fetch_sheet_as_df(
         tok: Tokenizer configuration to filter on (e.g. '1024-1024', '32-512', or 'all').
         drop_empty_cols: Whether to drop columns containing only NaNs.
         flops_col: Flops column name for computing effective FLOPs.
+        keep_cols: Optional list of column names that should never be dropped even if empty.
     """
     sheet_id, gid = parse_google_sheet_url(sheet_url)
     logging.info("Parsed Sheet ID: %s, gid: %s", sheet_id, gid)
@@ -234,7 +264,10 @@ def fetch_sheet_as_df(
         )
 
     if drop_empty_cols:
-        all_nan_cols = df.columns[df.isna().all()].tolist()
+        protected = [c.lower() for c in (keep_cols or [])]
+        all_nan_cols = [
+            c for c in df.columns if df[c].isna().all() and c.lower() not in protected
+        ]
         if all_nan_cols:
             logging.info("Dropping columns with 100%% NaNs: %s", all_nan_cols)
             df = df.drop(columns=all_nan_cols)
@@ -292,7 +325,7 @@ def add_size_class_columns(df: pd.DataFrame) -> pd.DataFrame:
             return "lateOn-unsup"
 
         for s in [scorer_val, base_val]:
-            for size in ["68m", "150m", "400m"]:
+            for size in ["32m", "68m", "150m", "400m"]:
                 prefix = size[:-1]
                 pattern = rf"{size}|(?<![0-9]){prefix}(?![0-9])"
                 if re.search(pattern, s):
@@ -425,11 +458,17 @@ def plot_pareto_frontier(
     valid_df[matched_x] = pd.to_numeric(valid_df[matched_x])
     valid_df[matched_y] = pd.to_numeric(valid_df[matched_y])
 
-    # Convert Flops to GFLOPs if scale is large
-    use_gflops = valid_df[matched_x].max() > 1e6
-    scale = 1e9 if use_gflops else 1.0
-    x_display_name = "FLOPs" if matched_x in ["effective_flops", "Flops"] else matched_x
-    x_label = f"{x_display_name} (GFLOPs)" if use_gflops else x_display_name
+    # Convert Flops to GFLOPs if scale is large; format latency as ms/query
+    is_latency = any(k in matched_x.lower() for k in ["latency", "ms", "time"])
+    if is_latency:
+        scale = 1.0
+        x_display_name = "Latency (ms/query)"
+        x_label = "Latency (ms/query)"
+    else:
+        use_gflops = valid_df[matched_x].max() > 1e6
+        scale = 1e9 if use_gflops else 1.0
+        x_display_name = "FLOPs" if matched_x in ["effective_flops", "Flops"] else matched_x
+        x_label = f"{x_display_name} (GFLOPs)" if use_gflops else x_display_name
 
     # Determine if Y-axis break is applicable
     y_data_min = float(valid_df[matched_y].min())
@@ -462,7 +501,7 @@ def plot_pareto_frontier(
             2,
             1,
             sharex=True,
-            figsize=(8, 7),
+            figsize=FIG_SIZE,
             dpi=200,
             gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08},
         )
@@ -472,31 +511,6 @@ def plot_pareto_frontier(
         fig, ax = plt.subplots(figsize=FIG_SIZE, dpi=200)
         axes = [ax]
         primary_ax = ax
-
-    SIZE_COLORS = {
-        "68m": "#f29f28",
-        "150m": "#d6191b",
-        "400m": "#221199",
-        "lateOn-unsup": "#16a085",
-        "other": "#7f8c8d",
-    }
-
-    TYPE_MARKERS = {
-        "cross-encoder": "o",
-        "mice": "*",
-        "colbert": "^",
-        "other": "s",
-    }
-
-    TYPE_LABELS = {
-        "cross-encoder": "Cross-Encoder",
-        "mice": "MICE",
-        "colbert": "ColBERT",
-        "other": "Other",
-    }
-
-    # Color for Pareto curves
-    pareto_color = "#27ae60"
 
     # Precompute frontier curve coordinates
     p_ns_coords: tuple[list[float], list[float]] | None = None
@@ -521,11 +535,11 @@ def plot_pareto_frontier(
     has_type = "type" in valid_df.columns
     has_store = "store" in valid_df.columns
     adjust_text_kwargs = {
-        "force_text": (0.09, 0.06),   # gentler collision repulsion
+        "force_text": (0.09, 0.03),   # gentler collision repulsion
         "force_static": (0.05, 0.08),
-        "force_pull": (0.05, 0.05),   # pull labels back toward their points
+        "force_pull": (0.05, 0.08),   # pull labels back toward their points
         "expand": (1.02, 1.04),       # modest label spacing
-        "max_move": (3, 3),           # smaller adjustment steps
+        "max_move": (3, 2),           # smaller adjustment steps
         "iter_lim": 100,
         "min_arrow_len": 0,
         "arrowprops": {
@@ -726,7 +740,7 @@ def plot_pareto_frontier(
     if has_size:
         present_classes = [
             c
-            for c in ["68m", "150m", "400m", "lateOn-unsup", "other"]
+            for c in SIZE_CLASSES
             if (valid_df["size_class"] == c).any()
         ]
         for size_cls in present_classes:
@@ -863,29 +877,50 @@ def format_beir_latex_table(
     aggregation_col: str = "BEIR13 Decont",
     aggregation_label: str = "Avg",
 ) -> str:
-    """Formats DataFrame into a LaTeX table keeping only scorer and BEIR datasets.
+    """Formats DataFrame into a LaTeX table keeping scorer, BEIR datasets, and LoTTE datasets.
 
     BEIR datasets are mapped to abbreviations using DATASET_TO_ABB and sorted
-    alphabetically. The aggregation column is placed as the last column.
+    alphabetically. LoTTE sub-datasets and Lotte-S aggregate are appended before Avg.
+    The aggregation column is placed as the last column.
     """
     if "scorer" not in df.columns:
         raise ValueError("DataFrame must contain 'scorer' column.")
 
-    # Identify individual BEIR columns using DATASET_TO_ABB
+    # Identify individual BEIR and LoTTE columns using DATASET_TO_ABB
+    lotte_keys = {
+        "lotte_lifestyle",
+        "lotte_recreation",
+        "lotte_science",
+        "lotte_technology",
+        "lotte_writing",
+    }
+
     beir_cols: list[tuple[str, str]] = []
+    lotte_cols: list[tuple[str, str]] = []
+
     for c in df.columns:
-        if c in ["base", "scorer", aggregation_col]:
+        if c in ["base", "scorer", aggregation_col, "Lotte-S"]:
             continue
         norm = c.replace(" ", "_").lower()
-        if norm in DATASET_TO_ABB:
+        if norm in lotte_keys:
+            lotte_cols.append((c, DATASET_TO_ABB.get(norm, c)))
+        elif c.lower() in lotte_keys:
+            lotte_cols.append((c, DATASET_TO_ABB.get(c.lower(), c)))
+        elif norm in DATASET_TO_ABB:
             beir_cols.append((c, DATASET_TO_ABB[norm]))
         elif c.lower() in DATASET_TO_ABB:
             beir_cols.append((c, DATASET_TO_ABB[c.lower()]))
 
-    # Sort individual BEIR columns alphabetically by abbreviation
+    # Sort BEIR columns alphabetically by abbreviation
     beir_cols.sort(key=lambda x: x[1])
 
-    # Build selected column list: scorer, optional 1st stage, optional store, sorted BEIR datasets, and aggregation
+    # Sort LoTTE detail columns alphabetically by abbreviation
+    lotte_cols.sort(key=lambda x: x[1])
+
+    # Check for Lotte-S aggregate column
+    lotte_s_col = next((c for c in df.columns if c.lower() in ["lotte-s", "lotte_s"]), None)
+
+    # Build selected column list: scorer, optional 1st stage, optional store, sorted BEIR, LoTTE details, Lotte-S, and aggregation
     first_stage_col = next(
         (c for c in df.columns if c.lower() in ["1st stage", "first stage", "1st_stage", "1st st"]),
         None,
@@ -904,9 +939,20 @@ def format_beir_latex_table(
         selected_cols.append("store")
         rename_map["store"] = "Store"
 
+    # BEIR columns
     selected_cols.extend([c for c, _ in beir_cols])
     for c, abb in beir_cols:
         rename_map[c] = abb
+
+    # LoTTE detail columns
+    selected_cols.extend([c for c, _ in lotte_cols])
+    for c, abb in lotte_cols:
+        rename_map[c] = abb
+
+    # Lotte-S column
+    if lotte_s_col is not None:
+        selected_cols.append(lotte_s_col)
+        rename_map[lotte_s_col] = "Lotte-S"
 
     has_agg = aggregation_col in df.columns
     if has_agg:
@@ -939,7 +985,11 @@ def format_beir_latex_table(
         )
 
     # Format numeric columns as 100 * x with 1 decimal place
-    for col, _ in beir_cols:
+    all_numeric_dataset_cols = [c for c, _ in beir_cols] + [c for c, _ in lotte_cols]
+    if lotte_s_col is not None:
+        all_numeric_dataset_cols.append(lotte_s_col)
+
+    for col in all_numeric_dataset_cols:
         latex_df[col] = pd.to_numeric(latex_df[col], errors="coerce").apply(
             lambda v: f"{100 * v:.1f}" if pd.notna(v) else "-"
         )
@@ -950,11 +1000,12 @@ def format_beir_latex_table(
 
     latex_df = latex_df.rename(columns=rename_map)
 
+    num_data_cols = len(beir_cols) + len(lotte_cols) + (1 if lotte_s_col is not None else 0) + (1 if has_agg else 0)
     column_format = (
         "l"
         + ("c" if has_first_stage else "")
         + ("c" if has_store else "")
-        + "c" * (len(beir_cols) + (1 if has_agg else 0))
+        + "c" * num_data_cols
     )
     return latex_df.to_latex(index=False, column_format=column_format)
 
@@ -982,10 +1033,16 @@ def main() -> None:
         help="Tokenizer filter (e.g. '1024-1024', '32-512', or 'all' to disable). Default: '1024-1024'.",
     )
     parser.add_argument(
+        "--x-col",
+        type=str,
+        default="latency_ms_per_query",
+        help="Column name for X axis (e.g. 'latency_ms_per_query', 'Flops', 'effective_flops'). Default: 'latency_ms_per_query'.",
+    )
+    parser.add_argument(
         "--flops-col",
         type=str,
         default="Flops",
-        help="Column name for Flops in X. Default: 'Flops'.",
+        help="Column name for Flops in X (fallback/alternate). Default: 'Flops'.",
     )
     parser.add_argument(
         "--keep-empty-cols",
@@ -994,9 +1051,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--plot",
-        type=str,
+        nargs="?",
+        const="",
         default=None,
-        help="Optional file path to save the Pareto plot (e.g. pareto.png or pareto.pdf).",
+        help="Optional file path to save the Pareto plot (e.g. pareto.png). If specified without value, auto-generates a filename with metric and x-col.",
     )
     parser.add_argument(
         "--latex",
@@ -1027,12 +1085,25 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Determine x_col and dataset columns to protect and use
+    requested_x = args.x_col
+    lotte_cols = [
+        "lotte_lifestyle",
+        "lotte_recreation",
+        "lotte_science",
+        "lotte_technology",
+        "lotte_writing",
+        "Lotte-S",
+    ]
+    keep_cols = [requested_x, args.flops_col] + lotte_cols
+
     df = fetch_sheet_as_df(
         args.url,
         metric=args.metric,
         tok=args.tok,
         drop_empty_cols=not args.keep_empty_cols,
         flops_col=args.flops_col,
+        keep_cols=keep_cols,
     )
 
     print("\n=== FILTERED DATAFRAME ===")
@@ -1041,11 +1112,31 @@ def main() -> None:
     else:
         print(df.to_string())
 
-    pareto_x_col = (
-        "effective_flops"
-        if "effective_flops" in df.columns
-        else args.flops_col
-    )
+    # Resolve pareto x column
+    matched_x_col = None
+    try:
+        matched_x_col = find_column(df, requested_x)
+    except ValueError:
+        # If requested x_col was Flops/effective_flops or missing
+        if requested_x.lower() in ["flops", "effective_flops"]:
+            matched_x_col = (
+                "effective_flops"
+                if "effective_flops" in df.columns
+                else args.flops_col
+            )
+        else:
+            logging.warning(
+                "Requested X column '%s' not found. Available: %s. Falling back to effective_flops.",
+                requested_x,
+                list(df.columns),
+            )
+            matched_x_col = (
+                "effective_flops"
+                if "effective_flops" in df.columns
+                else args.flops_col
+            )
+
+    pareto_x_col = matched_x_col
 
     # Compute overall Pareto frontier (including precomputed doc reps)
     pareto_df = compute_pareto_front(df, x_col=pareto_x_col, y_col=args.metric)
@@ -1065,6 +1156,7 @@ def main() -> None:
             "store",
             "base",
             "tok",
+            pareto_x_col,
             args.flops_col,
             "Flops_precomp",
             "effective_flops",
@@ -1095,14 +1187,21 @@ def main() -> None:
     else:
         print("No Pareto-optimal points found (insufficient valid data).")
 
-    if args.plot:
+    if args.plot is not None:
+        plot_path = args.plot
+        if not plot_path:
+            tok_slug = f"_{args.tok}" if args.tok else ""
+            x_slug = "latency" if "lat" in pareto_x_col.lower() else "flops"
+            metric_slug = re.sub(r"[^a-zA-Z0-9]+", "_", args.metric).strip("_").lower()
+            plot_path = f"pareto_{metric_slug}_{x_slug}{tok_slug}.png"
+
         y_break_val = tuple(args.y_break_range) if args.y_break else None
         plot_pareto_frontier(
             df=df,
             pareto_df=pareto_df,
             x_col=pareto_x_col,
             y_col=args.metric,
-            output_path=args.plot,
+            output_path=plot_path,
             pareto_no_store_df=pareto_no_store_df,
             y_break=y_break_val,
         )

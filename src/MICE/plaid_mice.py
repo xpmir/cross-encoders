@@ -137,8 +137,14 @@ class PlaidReRankingDataset(ReRankingDataset):
 class MiceRerankingCollate:
     """Picklable collate function for MICE-PLAID reranking DataLoader."""
 
-    def __init__(self, scorer, max_query_length: Optional[int] = None):
+    def __init__(
+        self,
+        scorer,
+        index: Optional[PlaidIndex] = None,
+        max_query_length: Optional[int] = None,
+    ):
         self.scorer = scorer.module if hasattr(scorer, "module") else scorer
+        self.index = index
         self.max_query_length = max_query_length
 
     def __call__(self, batch: List[PointwiseItem]) -> RerankingInputs:
@@ -163,6 +169,12 @@ class MiceRerankingCollate:
 
         inputs["tokenized_queries"] = tokenized_queries
         inputs["doc_ids"] = doc_list
+
+        if self.index is not None and doc_list:
+            inputs["doc_token_embeddings"] = self.index.get_document_tokens(
+                doc_list, device="cpu"
+            )
+
         return inputs
 
 
@@ -181,7 +193,9 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
         supports it (i.e. is an AbstractModuleScorer and batchsize > 0).
         """
         dataset = ReRankingDataset(candidates)
-        collate_fn = MiceRerankingCollate(self.scorer, self.max_query_length)
+        collate_fn = MiceRerankingCollate(
+            self.scorer, self.index, self.max_query_length
+        )
 
         dataloader = StatefulDataLoader(
             dataset,
@@ -204,9 +218,19 @@ class MicePlaidRetrieverv2(TwoStageRetriever):
                 batch_items = inputs["records"]
                 tokenized_queries = inputs.get("tokenized_queries")
                 doc_ids = inputs.get("doc_ids")
+                doc_token_embeddings = inputs.get("doc_token_embeddings")
+                if doc_token_embeddings is None and doc_ids:
+                    doc_token_embeddings = self.index.get_document_tokens(doc_ids)
+
+                if doc_token_embeddings is None:
+                    raise RuntimeError(
+                        f"MicePlaidRetrieverv2 could not obtain document token embeddings "
+                        f"for batch of size {len(batch_items)}"
+                    )
+
                 doc_token_embeddings = [
-                    t.to(self.scorer.device)
-                    for t in self.index.get_document_tokens(doc_ids)
+                    t.to(self.scorer.device, non_blocking=True)
+                    for t in doc_token_embeddings
                 ]
                 return (
                     self.scorer(

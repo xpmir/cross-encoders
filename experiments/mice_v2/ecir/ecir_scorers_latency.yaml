@@ -15,6 +15,8 @@ max_query_length: 32
 max_doc_length: 512
 
 evaluation:
+  fabric:
+    precision: bf16-mixed
   #just for debugging
   in_domain: false
   beir13: false
@@ -28,21 +30,44 @@ indexation:
   requirements: duration=2h & cpu(cores=16, mem=20G) & cuda(mem=30G)
 
 retrieval:
-  batch_size: 256
+  batch_size: 100
   chunk_size: null #retrieve all candidates in one go before Stage 2 reranking
   in_memory: true #load the sparse retriever index in memory instead of memory-mapping
-  requirements: duration=2h & cpu(cores=16, mem=20G) & cuda(mem=30G)
+  requirements: duration=3h & cpu(cores=16, mem=20G) & cuda(mem=30G)
+
+seismic:
+  enabled: false
+  n_postings: 1000
+  query_cut: 10
+  heap_factor: 0.9
 
 use_plaid: true
 precompute_first_stage: false
 include_recall_100: true
+get_latency: true
 
 
 grid_search:
   config_dicts:
-    - {plaid.n_bits: 2, scorer_id: "cross-encoder/ettin-reranker-150m-v1", scorer_type: stCrossEncoder}
-    - {plaid.n_bits: 2, scorer_id: "VictorMorand/Colbert-ettin-150m-mxbread-pearson", scorer_type: stMultiVectorEncoder}
-    - {plaid.n_bits: 2, scorer_id: "VictorMorand/Colbert-ettin-68m-mxbread-pearson", scorer_type: stMultiVectorEncoder}
-    - {plaid.n_bits: 4, scorer_id: "train_micev2_ettin150m_l12+4_v3_plaid_128", scorer_type: miceV2}
-    - {plaid.n_bits: 4, scorer_id: "train_micev2_ettin68m_l10+4_v3_plaid_128", scorer_type: miceV2}
-    # - lightonai/LateOn
+    #scorers without Plaid
+    - {plaid.n_bits: 2, use_plaid: false, scorer_id: "cross-encoder/ettin-reranker-32m-v1", scorer_type: stCrossEncoder}
+    - {plaid.n_bits: 2, use_plaid: false, scorer_id: "cross-encoder/ettin-reranker-68m-v1", scorer_type: stCrossEncoder}
+    - {plaid.n_bits: 2, use_plaid: false, scorer_id: "cross-encoder/ettin-reranker-150m-v1", scorer_type: stCrossEncoder}
+
+    #Colbert models (with Plaid)
+    - {plaid.n_bits: 2, use_plaid: true, scorer_id: "VictorMorand/Colbert-ettin-150m-mxbread-pearson", scorer_type: stMultiVectorEncoder}
+    - {plaid.n_bits: 2, use_plaid: true, scorer_id: "VictorMorand/Colbert-ettin-68m-mxbread-pearson", scorer_type: stMultiVectorEncoder}
+    - {plaid.n_bits: 2, use_plaid: true, scorer_id: "lightonai/LateOn", scorer_type: stMultiVectorEncoder}
+    - {plaid.n_bits: 2, use_plaid: true, scorer_id: "VictorMorand/Colbert-LateOn-Pearson", scorer_type: stMultiVectorEncoder}
+
+    #Colbert models (without Plaid)
+    - {plaid.n_bits: 2, use_plaid: false, scorer_id: "VictorMorand/Colbert-ettin-150m-mxbread-pearson", scorer_type: stMultiVectorEncoder}
+    - {plaid.n_bits: 2, use_plaid: false, scorer_id: "VictorMorand/Colbert-ettin-68m-mxbread-pearson", scorer_type: stMultiVectorEncoder}
+    - {plaid.n_bits: 2, use_plaid: false, scorer_id: "lightonai/LateOn", scorer_type: stMultiVectorEncoder}
+    - {plaid.n_bits: 2, use_plaid: false, scorer_id: "VictorMorand/Colbert-LateOn-Pearson", scorer_type: stMultiVectorEncoder}
+
+    #Mice models (with and without Plaid)
+    - {plaid.n_bits: 4, use_plaid: true, scorer_id: "train_micev2_ettin150m_l12+4_v3_plaid_128", scorer_type: miceV2}
+    - {plaid.n_bits: 4, use_plaid: false, scorer_id: "train_micev2_ettin150m_l12+4_v3_plaid_128", scorer_type: miceV2}
+    - {plaid.n_bits: 4, use_plaid: true, scorer_id: "train_micev2_ettin68m_l10+4_v3_plaid_128", scorer_type: miceV2}
+    - {plaid.n_bits: 4, use_plaid: false, scorer_id: "train_micev2_ettin68m_l10+4_v3_plaid_128", scorer_type: miceV2}

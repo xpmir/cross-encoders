@@ -23,6 +23,9 @@ evaluation:
 
 use_plaid: true
 
+indexation:
+  requirements: duration=5h & cpu(cores=16, mem=20G) & cuda(mem=40G)
+
 grid_search:
   scorer_id:
     - VictorMorand/Colbert-ettin-68m-mxbread-pearson

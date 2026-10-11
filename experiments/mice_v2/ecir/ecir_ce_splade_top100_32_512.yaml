@@ -12,6 +12,7 @@ retriever: naver/splade-v3-distilbert
 scorer_type: "stCrossEncoder"
 grid_search:
   scorer_id:
+    - cross-encoder/ettin-reranker-32m-v1
     - cross-encoder/ettin-reranker-68m-v1
     - cross-encoder/ettin-reranker-150m-v1
     - cross-encoder/ettin-reranker-400m-v1

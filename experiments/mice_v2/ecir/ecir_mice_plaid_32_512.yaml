@@ -11,13 +11,6 @@ retriever: naver/splade-v3-distilbert
 
 scorer_type: miceV2
 
-grid_search:
-  from_experiment:
-  - train_micev2_ettin68m_l10+4_v3_plaid_128 #Version Ft with 128 bottlenexk
-  - train_micev2_ettin150m_l12+4_v3_plaid_128
-  - train_micev2_ettin400m_l12+4_plaid_128_fast
-
-
 max_query_length: 32
 max_doc_length: 512
 
@@ -34,3 +27,13 @@ plaid: #override _common.yaml for mice values
   max_doc_length: 512
   max_query_length: 32
   n_bits: 4
+
+indexation:
+  requirements: duration=5h & cpu(cores=16, mem=20G) & cuda(mem=40G)
+
+
+grid_search:
+  from_experiment:
+  - train_micev2_ettin68m_l10+4_v3_plaid_128 #Version Ft with 128 bottlenexk
+  - train_micev2_ettin150m_l12+4_v3_plaid_128
+  - train_micev2_ettin400m_l12+4_plaid_128_fast

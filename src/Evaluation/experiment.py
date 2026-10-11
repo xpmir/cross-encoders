@@ -65,6 +65,7 @@ from retrievers import (
     MicePlaidRetrieverFactory,
 )
 from index_utils import sync_index_size_metrics
+from latency_utils import sync_latency_metrics
 from training_utils import (
     add_dataset_aggregations,
     resolve_trained_model_loader,
@@ -132,6 +133,9 @@ class BaselinesConfig(NeuralIRExperiment):
 
     eval_sparsity: bool = False
     """Whether to compute token sparsity and retention ratio during evaluation benchmarks."""
+
+    get_latency: GridSearch[bool] = False
+    """Whether to extract evaluation query latency from task logs and sync into aggregated.txt"""
 
     save_runs: bool = False
     """Whether to save the evaluation runs in the resultspath."""
@@ -908,6 +912,9 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     is_plaid = any(c.use_plaid for c in all_configs)
     if is_plaid:
         sync_index_size_metrics(tests)
+
+    if any(c.get_latency for c in all_configs):
+        sync_latency_metrics(tests)
 
     df = tests.to_dataframe()
 

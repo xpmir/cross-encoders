@@ -488,6 +488,9 @@ class CE_FineTuning(RerankerMSMarcoV1Configuration):
     eval_sparsity: bool = False
     """Whether to compute token sparsity, mean utility, and token retention ratio during evaluation benchmarks"""
 
+    get_latency: bool = False
+    """Whether to extract evaluation query latency from task logs and sync into aggregated.txt"""
+
     export_trained_models: bool = True
     """Whether to export the best models to the models/ folder"""
 

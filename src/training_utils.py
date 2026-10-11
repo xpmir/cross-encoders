@@ -838,6 +838,16 @@ def process_experiment_results(
 
         sync_index_size_metrics(tests)
 
+    # When get_latency is True, sync query latency metrics from task logs
+    is_latency = bool(
+        getattr(cfg, "get_latency", False)
+        or any(getattr(c, "get_latency", False) for c in config_map.values())
+    )
+    if is_latency:
+        from latency_utils import sync_latency_metrics
+
+        sync_latency_metrics(tests)
+
     # 1. Exctract data
     df = tests.to_dataframe()
 
