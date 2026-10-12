@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>MICE to Meet You: \\From Re-ranking Only to End-to-End Retrieval</h1>
+<h1>MICE to Meet You: From Re-ranking Only to End-to-End Retrieval</h1>
 
 <div>
     Anonymous ECIR Submission&emsp;<br>
