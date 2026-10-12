@@ -1,0 +1,33 @@
+id: train_micev2_ettin68m_l10+4_plaid
+title: "Mice-Ettin-68m Training"
+description:
+    From an already trained Mice model,
+    add a PLAID indexation and compare the results with and without PLAID
+
+module: MICE.experiments.micev2_training
+parent: ./micev2_ettin_68m_l10+4.yaml
+
+
+nb_repetitions: 1
+
+use_plaid: true
+
+plaid:
+    buffer_size: 5000
+    n_bits: 8
+
+evaluation: # Build Plaid index and Evaluate only on 3 small datasets
+    eval_checkpoint: "last"
+    all_datasets: false
+    in_domain: false
+    beir13: false
+    datasets:
+        - nfcorpus
+        - scifact
+        - msmarco_dev
+
+indexation:
+    requirements: duration=2h & cpu(cores=16) & cuda(mem=40G)
+
+grid_search:
+    learner.optimization.lr: 7e-5 # best value for Mice-Ettin-68m (v1)

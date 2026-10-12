@@ -1,0 +1,21 @@
+id: baseline_ettin68m_long_hf
+title: "Training Ettin-68m Reranker with MSE"
+description:
+    Same training as ST CrossEncoder but using raw HF SequenceClassification model (jhu-clsp/ettin-encoder-68m)
+    (MSE loss on cross_encoder.ettin_reranker_v1_data.)
+
+module: cross_encoders_training.experiment
+parent: ./ettin_68m.yaml
+
+scorer_type:
+    - stCrossEncoder # baseline: Use STCrossEncoder
+    - hfCrossScorer # Use HFCrossScorer
+
+
+evaluation: #default = Minified tests
+    all_datasets: false
+    in_domain: true
+    beir13: false
+    eval_checkpoint:
+        - last
+        - 3000

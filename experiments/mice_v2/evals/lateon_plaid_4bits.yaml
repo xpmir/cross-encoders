@@ -1,0 +1,45 @@
+id: eval_lateon_plaid_retrieval
+title: lateon_plaid_retrieval_evaluation
+description: Evaluation of LateOn multi-vector models with PLAID indexing and retrieval
+
+parent: ../_common.yaml
+module: Evaluation.experiment
+pre_experiment: pre_experiment
+
+
+max_query_length: 32
+max_doc_length: 512
+
+scorer_id: lightonai/LateOn
+scorer_type: stMultiVectorEncoder
+pref_attn_implementation: flash_attention_2
+
+use_plaid: true
+include_recall_100: true
+plaid:
+  max_doc_length: 512
+  max_query_length: 32
+  n_samples_kmeans: 800
+  n_bits: 4
+  kmeans_niters: 4
+  n_ivf_probe: 8
+  buffer_size: 5000
+  fast_plaid_batch_size: 5000
+
+retrieval:
+  k: 100
+  requirements: duration=4h & cpu(cores=8, mem=16G) & cuda(mem=30G)
+
+indexation:
+  batch_size: 128
+  requirements: duration=15h & cpu(cores=16, mem=20G) & cuda(mem=40G) # need H100
+
+evaluation:
+  in_domain: false
+  beir13: false
+  beir13_decontaminated: true
+  datasets:
+    - scidocs
+    - nfcorpus
+    - scifact
+    # - arguana

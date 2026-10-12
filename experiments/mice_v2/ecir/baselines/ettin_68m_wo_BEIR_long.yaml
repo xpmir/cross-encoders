@@ -1,0 +1,32 @@
+id: baseline_ettin68_wo_BEIR_long
+title: "Training Ettin-68m Reranker with MSE"
+description:
+    Comparing results of ettin68m MSE baseline when omitting BEIR data from the training set.
+
+parent: ./ettin_68m_wo_BEIR.yaml
+# pre_experiment: pre_experiment
+nb_repetitions: 2
+
+evaluation:
+    eval_last_checkpoint: true
+
+
+# This set of hyperparameters follows: https://github.com/huggingface/sentence-transformers/blob/9f76b5790fa8f0175ccdc27e41f9ae348f557144/examples/training/ms_marco/train_cross-encoder-v2.py
+learner:
+    loss: MSE_mixedbread_large
+    optimization:
+        steps_per_epoch: 100
+        batch_size: 256
+        max_epochs: 5000 #  x 256 x 100 = ~128M Samples < 145M in full dataset
+        num_warmup_steps: 40000 # Fo
+    checkpoint_interval: 100
+    validation_interval: 25
+    requirements: duration=20h & cpu(cores=16, mem=10G) & cuda(mem=80G) * 2
+
+
+#### Params that are grid searched
+grid_search:
+    learner.optimization.batch_size:
+        values_list:
+            - 128
+            - 256

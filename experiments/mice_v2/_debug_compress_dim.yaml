@@ -1,0 +1,41 @@
+id: debug_micev2_compress_dim_ettin68m_l10+4
+title: "Mice-Ettin-68m compress_dim debug sweep"
+description:
+    Debug sweep of compress_dim x compress_init_option for the top interaction
+    layers, Phase 1 only (no pruning, no PLAID), to see how compression
+    affects training before a full-scale ablation.
+
+module: MICE.experiments.micev2_training
+parent: _ettin68m_abl.yaml
+nb_repetitions: 1 # single seed for debug
+
+top_layers_doc_ln: true
+bottom_final_norm: false
+top_final_norm: false
+normalize_doc_embeds: true
+
+learner:
+    # For the first debug version first try shorter things.
+    optimization:
+        max_epochs: 1500
+    requirements: duration=10h & cpu(cores=16, mem=10G) & cuda(mem=50G) * 2
+
+evaluation:
+    eval_checkpoint: "last"
+    all_datasets: false
+    in_domain: false
+    beir13: false
+    datasets:
+        - nfcorpus
+
+retrieval:
+    requirements: duration=3h & cpu(cores=16) & cuda(mem=20G)
+
+
+grid_search:
+    config_dicts:
+        - {compress_dim: 1.0, compress_init_option: "seed"}
+        - {compress_dim: 1.0, compress_init_option: "random"}
+        - {compress_dim: 1.333333333, compress_init_option: "random"}
+        - {compress_dim: 2.0, compress_init_option: "random"}
+        - {compress_dim: 4.0, compress_init_option: "random"}
