@@ -13,11 +13,13 @@ import pandas as pd
 index_sizes = {
     "Mice (Plaid 4bits)": {
         "splade": 9868.8,
-        "plaid": 90242.8,
+        "Plaid Store": 90242.8,
+        "plaid index": 0,
     },
     "LateOn (Plaid 2bits)": {
         "splade": 0,
-        "plaid": 51768.945,
+        "Plaid Store":48536.281,
+        "plaid index": 3232.664,
     }
 }
 
@@ -41,42 +43,76 @@ plt.rcParams.update(
 models = list(index_sizes)
 mb_to_gb = 1_000
 splade_sizes = [index_sizes[model]["splade"] / mb_to_gb for model in models]
-plaid_sizes = [index_sizes[model]["plaid"] / mb_to_gb for model in models]
-totals = [splade + plaid for splade, plaid in zip(splade_sizes, plaid_sizes)]
+plaid_store_sizes = [
+    index_sizes[model]["Plaid Store"] / mb_to_gb for model in models
+]
+plaid_index_sizes = [
+    index_sizes[model]["plaid index"] / mb_to_gb for model in models
+]
+totals = [
+    store + idx + splade
+    for store, idx, splade in zip(
+        plaid_store_sizes, plaid_index_sizes, splade_sizes
+    )
+]
 
 fig, ax = plt.subplots(figsize=FIG_SIZE)
 model_positions = range(len(models))
 ax.bar(
     model_positions,
-    plaid_sizes,
+    plaid_store_sizes,
     width=0.55,
     color="#e76f51",
-    label="PLAID",
+    label="PLAID-Store",
+)
+ax.bar(
+    model_positions,
+    plaid_index_sizes,
+    bottom=plaid_store_sizes,
+    width=0.55,
+    color="#f4a261",
+    label="PLAID-index",
 )
 ax.bar(
     model_positions,
     splade_sizes,
-    bottom=plaid_sizes,
+    bottom=[
+        store + idx
+        for store, idx in zip(plaid_store_sizes, plaid_index_sizes)
+    ],
     width=0.55,
     color="#2a9d8f",
     label="SPLADE",
 )
 
-for x, splade, plaid, total in zip(model_positions, splade_sizes, plaid_sizes, totals):
-    if plaid > 0:
+for x, splade, store, idx, total in zip(
+    model_positions, splade_sizes, plaid_store_sizes, plaid_index_sizes, totals
+):
+    if store > 0:
         ax.text(
             x,
-            plaid / 2,
-            f"{plaid:,.1f}",
+            store / 2,
+            f"{store:,.1f}",
             ha="center",
             va="center",
             color="white",
             fontsize=FONT_SIZE - 3,
         )
+    if idx > 0:
+        ax.text(
+            x,
+            store + idx / 2,
+            f"{idx:,.1f}",
+            ha="center",
+            va="center",
+            color="#264653",
+            fontweight="bold",
+            fontsize=FONT_SIZE - 3,
+        )
     if splade > 0:
         ax.text(
             x,
-            plaid + splade / 2,
+            store + idx + splade / 2,
             f"{splade:,.1f}",
             ha="center",
             va="center",
@@ -86,7 +122,7 @@ for x, splade, plaid, total in zip(model_positions, splade_sizes, plaid_sizes, t
     ax.text(
         x,
         total + max(totals) * 0.015,
-        f"Total\n{total:,.1f} Gb",
+        f"Total\n{total:,.1f} GB",
         va="bottom",
         ha="center",
         fontsize=FONT_SIZE,
@@ -98,9 +134,9 @@ ax.set_xticks(
     labels=[model.replace(" (", "\n(") for model in models],
 )
 ax.set_ylabel("Index size (GB)", fontsize=FONT_SIZE)
-ax.set_title(f"Index size")
+ax.set_title("Index size")
 ax.legend(loc="upper right", frameon=True)
-ax.set_ylim(0, max(totals) * 1.2)
+ax.set_ylim(0, max(totals) * 1.3)
 ax.grid(axis="y", linestyle="--", alpha=0.5)
 ax.grid(axis="x", visible=False)
 fig.tight_layout()
