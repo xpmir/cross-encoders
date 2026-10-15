@@ -467,7 +467,18 @@ def evaluate_scorer(
         if not Path(target_id).is_dir():
             prepare_hf_model(target_id)
         st_tok = None
-        if cfg.max_query_length is not None or cfg.max_doc_length is not None:
+        has_chat_template = False
+        try:
+            from transformers import AutoTokenizer
+
+            tok = AutoTokenizer.from_pretrained(target_id, trust_remote_code=True)
+            has_chat_template = bool(tok.chat_template)
+        except Exception as e:
+            logging.debug(f"Could not inspect chat_template for {target_id}: {e}")
+
+        if not has_chat_template and (
+            cfg.max_query_length is not None or cfg.max_doc_length is not None
+        ):
             from xpmir.neural.huggingface import HFQueryDocTokenizer
 
             st_tok = HFQueryDocTokenizer.C(
@@ -475,6 +486,11 @@ def evaluate_scorer(
                 max_query_length=cfg.max_query_length,
                 max_doc_length=cfg.max_doc_length,
                 max_length=cfg.max_length,
+            )
+        elif has_chat_template:
+            logging.info(
+                f"Model '{target_id}' defines a chat template; using native SentenceTransformers "
+                "tokenization to preserve chat template formatting."
             )
         scorer = st_cross_scorer(
             model_id=target_id,
@@ -965,7 +981,7 @@ def run(helper: IRExperimentHelper, cfg: BaselinesConfig) -> PaperResults:
     metric_cols = [c for c in df.columns if c not in tag_cols]
     df = df[tag_cols + metric_cols]
 
-    logging.info(f"Final DataFrame:\n{df.to_csv(index=False)}")
+    logging.info(f"Final DataFrame:\n{df}")
 
     # save results
     if helper.xp.run_mode == RunMode.NORMAL:

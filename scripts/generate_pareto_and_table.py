@@ -534,12 +534,13 @@ def plot_pareto_frontier(
     has_size = "size_class" in valid_df.columns
     has_type = "type" in valid_df.columns
     has_store = "store" in valid_df.columns
+    label_size = FONT_SIZE - 4
     adjust_text_kwargs = {
-        "force_text": (0.09, 0.03),   # gentler collision repulsion
+        "force_text": (0.09, 0.05),   # gentler collision repulsion
         "force_static": (0.05, 0.08),
         "force_pull": (0.05, 0.08),   # pull labels back toward their points
         "expand": (1.02, 1.04),       # modest label spacing
-        "max_move": (3, 2),           # smaller adjustment steps
+        "max_move": (2, 1.5),           # smaller adjustment steps
         "iter_lim": 100,
         "min_arrow_len": 0,
         "arrowprops": {
@@ -640,7 +641,7 @@ def plot_pareto_frontier(
                 px_val,
                 py_val,
                 f" {lbl}",
-                fontsize=8,
+                fontsize=label_size,
                 bbox=dict(
                     boxstyle="round,pad=0.2",
                     facecolor="white",
@@ -672,7 +673,7 @@ def plot_pareto_frontier(
                 px_val,
                 py_val,
                 f" {lbl}",
-                fontsize=8,
+                fontsize=label_size,
                 bbox=dict(
                     boxstyle="round,pad=0.2",
                     facecolor="white",

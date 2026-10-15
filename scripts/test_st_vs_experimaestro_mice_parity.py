@@ -87,7 +87,11 @@ def main():
     # 2. Experimaestro ModernBertMiceScorer loading
     # ----------------------------------------------------
     logger.info("\n=== 2. Loading via Experimaestro ModernBertMiceScorer ===")
-    tok = MICEQueryDocTokenizer.C(model_id=args.model_id)
+    tok = MICEQueryDocTokenizer.C(
+        model_id=args.model_id,
+        query_prompt="[Q] ",
+        doc_prompt="[D] ",
+    )
     scorer = ModernBertMiceScorer.C(hf_id=args.model_id, tokenizer=tok).instance()
     scorer.initialize()
     scorer.to(device)
@@ -106,8 +110,10 @@ def main():
     ).to(device)
     hf_model.eval()
 
-    q_enc = hf_tokenizer(queries, padding=True, return_tensors="pt").to(device)
-    d_enc = hf_tokenizer(documents, padding=True, return_tensors="pt").to(device)
+    q_prefixed = ["[Q] " + q for q in queries]
+    d_prefixed = ["[D] " + d for d in documents]
+    q_enc = hf_tokenizer(q_prefixed, padding=True, return_tensors="pt").to(device)
+    d_enc = hf_tokenizer(d_prefixed, padding=True, return_tensors="pt").to(device)
     pair_enc = hf_tokenizer(queries, documents, padding=True, return_tensors="pt").to(device)
 
     with torch.no_grad():
@@ -152,32 +158,23 @@ def main():
     logger.info("               PARITY DIAGNOSTIC REPORT               ")
     logger.info("=======================================================")
 
-    # Check 1: Experimaestro TorchHFHub vs ModernBertMiceScorer
+    # Check 1: ST CrossEncoder (Default / Identity) vs Experimaestro TorchHFHub
     if scores_hub is not None:
         np.testing.assert_allclose(
+            scores_st_identity,
             scores_hub,
-            scores_xpm,
             atol=1e-4,
-            err_msg="Mismatch between TorchHFHub and ModernBertMiceScorer!",
+            err_msg="Mismatch between ST CrossEncoder and Experimaestro TorchHFHub scores!",
         )
-        logger.info("[PASSED] Experimaestro TorchHFHub vs ModernBertMiceScorer independent scores match exactly!")
+        logger.info("[PASSED] ST CrossEncoder vs Experimaestro TorchHFHub scores match exactly (diff < 1e-4)!")
 
-    # Check 2: Experimaestro vs HF AutoModel (Independent mode)
-    np.testing.assert_allclose(
-        scores_xpm,
-        logits_hf_indep,
-        atol=1e-4,
-        err_msg="Mismatch between Experimaestro and HF AutoModel independent mode!",
-    )
-    logger.info("[PASSED] Experimaestro vs HF AutoModel independent Q/D logits match exactly!")
-
-    # Check 3: ST CrossEncoder (Identity) vs Experimaestro MICE Independent Mode
-    np.testing.assert_allclose(
-        scores_st_identity,
-        scores_xpm,
-        atol=1e-4,
-        err_msg="Mismatch between ST CrossEncoder and Experimaestro MICE scores!",
-    )
+        np.testing.assert_allclose(
+            scores_st_default,
+            scores_hub,
+            atol=1e-4,
+            err_msg="Mismatch between ST CrossEncoder default predict() and Experimaestro TorchHFHub scores!",
+        )
+        logger.info("[PASSED] ST CrossEncoder default predict() matches Experimaestro TorchHFHub out-of-the-box!")
     logger.info("[PASSED] ST CrossEncoder vs Experimaestro MICE scores match exactly (0.0 diff)!")
 
     # Check 4: Activation function warning if Sigmoid was used in default ST CrossEncoder

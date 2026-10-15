@@ -1846,9 +1846,11 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         # 2. Separate Evaluations Section (positioned after model_card)
         results_md = metadata.get("results")
         if results_md:
-            retriever = metadata.get("retriever") or "bm25"
-            k = metadata.get("k", "N/A")
-            eval_content = f"## Evaluations\n\nWe provide evaluations of this cross-encoder re-ranking top `{k}` documents retrieved by `{retriever}`:\n\n{results_md}"
+            retriever = metadata.get("retriever") or "naver/splade-v3-distilbert"
+            k = metadata.get("k") or 100
+            if k == "N/A":
+                k = 100
+            eval_content = f"## Evaluations\n\nWe provide evaluations of this cross-encoder re-ranking top {k} of `{retriever}`:\n\n{results_md}"
             sections.append(
                 ReadmeSection(
                     key="evaluations",
@@ -1869,6 +1871,7 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         save_path = Path(save_directory)
         self._last_export_dir = save_path
         self.save_model(save_path)
+        self._write_st_metadata(save_path)
 
         # Copy TensorBoard log directory if available
         tb_dir = (
@@ -1922,26 +1925,66 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             "activation_fn": "torch.nn.modules.linear.Identity",
             "default_prompt_name": None,
             "model_type": "CrossEncoder",
-            "prompts": {},
+            "prompts": {
+                "query": "[Q] ",
+                "document": "[D] ",
+            },
         }
         (save_directory / "config_sentence_transformers.json").write_text(
             json.dumps(st_config, indent=2)
         )
 
         # 3. sentence_bert_config.json
+        # Both "text" and "message" modalities must be declared:
+        # "text" allows ST's CrossEncoder input validator to accept raw text pair inputs,
+        # while "message" causes ST's Transformer.preprocess to automatically route
+        # (query, document) pairs into structured messages formatted by chat_template.jinja.
         sb_config = {
             "transformer_task": "sequence-classification",
             "modality_config": {
                 "text": {
                     "method": "forward",
                     "method_output_name": "logits",
-                }
+                },
+                "message": {
+                    "method": "forward",
+                    "method_output_name": "logits",
+                    "format": "flat",
+                },
             },
             "module_output_name": "scores",
         }
         (save_directory / "sentence_bert_config.json").write_text(
             json.dumps(sb_config, indent=2)
         )
+
+        # 4. chat_template.jinja
+        # ModernBERT BPE whitespace rules:
+        # Do not include leading spaces before '[CLS]' or '[Q]' or trailing spaces before '[SEP]',
+        # otherwise ModernBERT tokenizes ' [Q]' as token 544 instead of 60 ('['), altering representations.
+        chat_template = (
+            "{%- set instruction = messages | selectattr('role', 'eq', 'system') | map(attribute='content') | first | default('') -%}\n"
+            "{%- set query_text = messages | selectattr('role', 'eq', 'query') | map(attribute='content') | first -%}\n"
+            "{%- set document_text = messages | selectattr('role', 'eq', 'document') | map(attribute='content') | first -%}\n"
+            "{{- '[CLS]' -}}\n"
+            "{%- if instruction -%}{{ instruction }} {%- endif -%}\n"
+            "{{- '[Q] ' + query_text + '[SEP][D] ' + document_text + '[SEP]' -}}"
+        )
+        (save_directory / "chat_template.jinja").write_text(
+            chat_template, encoding="utf-8"
+        )
+
+        # 5. Update tokenizer_config.json with chat_template if present
+        tok_cfg_path = save_directory / "tokenizer_config.json"
+        if tok_cfg_path.is_file():
+            try:
+                tok_cfg = json.loads(tok_cfg_path.read_text(encoding="utf-8"))
+                tok_cfg["chat_template"] = chat_template
+                tok_cfg_path.write_text(json.dumps(tok_cfg, indent=2), encoding="utf-8")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to update tokenizer_config.json with chat_template: {e}"
+                )
 
     def export_to_st(
         self,

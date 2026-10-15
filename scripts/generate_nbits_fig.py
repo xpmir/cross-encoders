@@ -37,14 +37,14 @@ FIG_SIZE = (4, 4)
 
 
 scorer_display_map = {
-    "train_micev2_ettin68m_l10+4_v3_plaid_128": "Mice-ettin68m",
-    "train_micev2_ettin150m_l12+4_v3_plaid_128": "Mice-ettin150m",
+    "train_micev2_ettin68m_l10+4_v3_plaid_128": "Mice-P-61m",
+    "train_micev2_ettin150m_l12+4_v3_plaid_128": "Mice-P-130m",
     # "train_micev2_ettin400m_l12+4_plaid_128_fast": "Mice-ettin400m",
     "lightonai/LateOn": "LateOn",
 }
 first_stage_display_map = {
     "plaid": "PLAID",
-    "naver/splade-v3-distilbert": "SPLADE-v3",
+    "naver/splade-v3-distilbert": "SPLADEv3",
 }
 
 def read_remote_csv(
