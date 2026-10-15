@@ -476,25 +476,46 @@ def evaluate_scorer(
         except Exception as e:
             logging.debug(f"Could not inspect chat_template for {target_id}: {e}")
 
-        if not has_chat_template and (
-            cfg.max_query_length is not None or cfg.max_doc_length is not None
-        ):
+        effective_max_length = cfg.max_length
+        if cfg.max_query_length is not None and cfg.max_doc_length is not None:
+            combined_bound = cfg.max_query_length + cfg.max_doc_length + 3
+            if effective_max_length is None or effective_max_length > combined_bound:
+                effective_max_length = combined_bound
+        elif (cfg.max_query_length is not None) ^ (cfg.max_doc_length is not None):
+            if effective_max_length is None:
+                raise ValueError(
+                    f"Incomplete sequence length configuration for '{target_id}': "
+                    f"both 'max_query_length' ({cfg.max_query_length}) and 'max_doc_length' ({cfg.max_doc_length}) "
+                    "must be specified when 'max_length' is not provided."
+                )
+
+        if cfg.max_query_length is not None or cfg.max_doc_length is not None:
             from xpmir.neural.huggingface import HFQueryDocTokenizer
 
             st_tok = HFQueryDocTokenizer.C(
                 model_id=target_id,
                 max_query_length=cfg.max_query_length,
                 max_doc_length=cfg.max_doc_length,
-                max_length=cfg.max_length,
+                max_length=effective_max_length,
+                query_prompt=cfg.query_prompt,
+                doc_prompt=cfg.doc_prompt,
+                pref_attn_implementation=cfg.pref_attn_implementation,
+            )
+            logging.info(
+                f"Configured HFQueryDocTokenizer for '{target_id}' with max_query_length={cfg.max_query_length}, "
+                f"max_doc_length={cfg.max_doc_length}, max_length={effective_max_length}"
             )
         elif has_chat_template:
             logging.info(
                 f"Model '{target_id}' defines a chat template; using native SentenceTransformers "
-                "tokenization to preserve chat template formatting."
+                f"tokenization with max_length={effective_max_length}."
             )
+
         scorer = st_cross_scorer(
             model_id=target_id,
-            max_length=cfg.max_length,
+            max_length=effective_max_length,
+            max_query_length=cfg.max_query_length,
+            max_doc_length=cfg.max_doc_length,
             pref_attn_implementation=cfg.pref_attn_implementation,
             tokenizer=st_tok,
         )
