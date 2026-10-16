@@ -556,6 +556,120 @@ def _concat_query_doc_padded(
     return joint_hidden, joint_mask
 
 
+def _pack_pair_inputs_padded(
+    query_ids: torch.Tensor,
+    query_mask: torch.Tensor,
+    doc_ids: torch.Tensor,
+    doc_mask: torch.Tensor,
+    pad_token_id: int = 50283,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    """Packs valid query and doc tokens contiguously per batch row without middle padding:
+    [CLS] q ... [SEP] [CLS] d ... [SEP] [PAD] ...
+    Fully vectorized across batch dimensions.
+    Returns:
+        (unified_ids, q_lens, d_lens, max_joint_len)
+    """
+    B = query_ids.shape[0]
+    device = query_ids.device
+    q_lens = query_mask.sum(dim=1)
+    d_lens = doc_mask.sum(dim=1)
+    joint_lens = q_lens + d_lens
+    max_joint_len = int(joint_lens.max().item()) if len(joint_lens) > 0 else 0
+
+    unified_ids = torch.full(
+        (B, max_joint_len), pad_token_id, dtype=query_ids.dtype, device=device
+    )
+
+    # Vectorized query token placement
+    valid_q = query_mask.bool()
+    if valid_q.any():
+        batch_idx_q = torch.arange(B, device=device).unsqueeze(1).expand_as(query_ids)
+        dest_cols_q = (
+            torch.arange(query_ids.shape[1], device=device)
+            .unsqueeze(0)
+            .expand_as(query_ids)
+        )
+        unified_ids[batch_idx_q[valid_q], dest_cols_q[valid_q]] = query_ids[valid_q]
+
+    # Vectorized doc token placement immediately following query tokens
+    valid_d = doc_mask.bool()
+    if valid_d.any():
+        batch_idx_d = torch.arange(B, device=device).unsqueeze(1).expand_as(doc_ids)
+        dest_cols_d = q_lens.unsqueeze(1) + torch.arange(
+            doc_ids.shape[1], device=device
+        ).unsqueeze(0)
+        unified_ids[batch_idx_d[valid_d], dest_cols_d[valid_d]] = doc_ids[valid_d]
+
+    return unified_ids, q_lens, d_lens, max_joint_len
+
+
+def _create_mice_block_masks(
+    q_lens: torch.Tensor,
+    d_lens: torch.Tensor,
+    seq_len: int,
+    local_attention: Optional[int] = 128,
+    device: Optional[torch.device] = None,
+) -> dict:
+    """Constructs 4D block-diagonal attention masks isolating Query and Document tokens:
+    - Query tokens (col < q_len) attend ONLY to Query tokens.
+    - Doc tokens (q_len <= col < q_len + d_len) attend ONLY to Doc tokens.
+    - Padding rows (row >= q_len + d_len) attend to their own diagonal position to prevent NaN in softmax.
+    Returns:
+        {"full_attention": 4D boolean mask [B, 1, S, S], "sliding_attention": 4D boolean mask [B, 1, S, S]}
+    """
+    if device is None:
+        device = q_lens.device
+    B = q_lens.shape[0]
+    row_idx = torch.arange(seq_len, device=device).view(1, seq_len, 1)  # [1, S, 1]
+    col_idx = torch.arange(seq_len, device=device).view(1, 1, seq_len)  # [1, 1, S]
+    q_l = q_lens.view(B, 1, 1)
+    d_l = d_lens.view(B, 1, 1)
+
+    is_row_q = row_idx < q_l
+    is_col_q = col_idx < q_l
+    is_row_d = (row_idx >= q_l) & (row_idx < (q_l + d_l))
+    is_col_d = (col_idx >= q_l) & (col_idx < (q_l + d_l))
+
+    block_mask = (is_row_q & is_col_q) | (is_row_d & is_col_d)
+    is_row_pad = ~(is_row_q | is_row_d)
+    diag = row_idx == col_idx
+    full_mask = (block_mask | (is_row_pad & diag)).unsqueeze(1)
+
+    if local_attention is not None and local_attention > 0:
+        half_window = local_attention // 2
+        band_mask = (row_idx - col_idx).abs() <= half_window
+        sw_mask = ((block_mask & band_mask) | (is_row_pad & diag)).unsqueeze(1)
+    else:
+        sw_mask = full_mask
+
+    return {"full_attention": full_mask, "sliding_attention": sw_mask}
+
+
+def _create_block_position_ids(
+    q_lens: torch.Tensor,
+    d_lens: torch.Tensor,
+    seq_len: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Computes Rotary Position IDs resetting to 0 at the document boundary:
+    - Query tokens: 0 .. q_lens[b] - 1
+    - Doc tokens:   0 .. d_lens[b] - 1
+    - Padding tokens: 0
+    Returns: [B, seq_len] int64 tensor.
+    """
+    col_idx = torch.arange(seq_len, device=device).unsqueeze(0)  # [1, S]
+    q_l = q_lens.unsqueeze(1)  # [B, 1]
+    d_l = d_lens.unsqueeze(1)  # [B, 1]
+
+    is_q = col_idx < q_l
+    is_d = (col_idx >= q_l) & (col_idx < (q_l + d_l))
+
+    pos_q = col_idx
+    pos_d = col_idx - q_l
+
+    return torch.where(is_q, pos_q, torch.where(is_d, pos_d, torch.zeros_like(col_idx)))
+
+
 class ModernBertMiceConfig(ModernBertConfig):
     model_type = "modernbert_mice"
 
@@ -574,6 +688,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         top_layers_doc_ln: bool = False,
         bottom_final_norm: bool = True,
         top_final_norm: bool = False,
+        unified_bottom_pass: bool = True,
         utility_temp: float = 1.0,
         utility_bias: float = 5.0,
         gate_target: str = "h",
@@ -605,6 +720,7 @@ class ModernBertMiceConfig(ModernBertConfig):
         self.top_layers_doc_ln = top_layers_doc_ln
         self.bottom_final_norm = bottom_final_norm
         self.top_final_norm = top_final_norm
+        self.unified_bottom_pass = unified_bottom_pass
         self.utility_temp = utility_temp
         self.utility_bias = utility_bias
         if gate_target not in ("h", "v"):
@@ -1522,6 +1638,197 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
             return last_hidden, pos_emb_top
 
+    def _forward_bottom_unified(
+        self,
+        query_ids: torch.LongTensor,
+        query_mask: torch.Tensor,
+        doc_ids: torch.LongTensor,
+        doc_mask: torch.Tensor,
+        use_unpadded: bool = False,
+        **kwargs,
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[int],
+        Optional[int],
+        torch.Tensor,
+        torch.Tensor,
+        Optional[torch.Tensor],
+        Any,
+    ]:
+        """Process both query and document tokens simultaneously through bottom encoder layers
+        using a block-diagonal attention mask (for SDPA / Eager) or 2B-sequence varlen batch (for FA2).
+
+        Returns:
+            (q_hidden, d_hidden, cu_seqlens_q, cu_seqlens_d, max_seqlen_q, max_seqlen_d, q_mask, doc_mask, d_pos_ids, q_pos_emb_top)
+        """
+        rotary_for_top = (
+            self.top_rotary_emb
+            if self.top_rotary_emb is not None
+            else self.model.rotary_emb
+        )
+
+        if use_unpadded:
+            # 1. Unpadded FlashAttention-2 Path: concatenate 1D varlen sequences into 2B total sequences
+            q_embeds = self.model.embeddings(input_ids=query_ids)
+            (
+                q_unpadded,
+                cu_seqlens_q,
+                max_seqlen_q,
+                indices_q,
+                q_pos_ids,
+            ) = _unpad_input_with_posids(q_embeds, query_mask)
+
+            d_embeds = self.model.embeddings(input_ids=doc_ids)
+            (
+                d_unpadded,
+                cu_seqlens_d,
+                max_seqlen_d,
+                indices_d,
+                d_pos_ids,
+            ) = _unpad_input_with_posids(d_embeds, doc_mask)
+
+            total_q = q_unpadded.shape[1]
+
+            unified_tokens = torch.cat([q_unpadded, d_unpadded], dim=1)
+            unified_pos_ids = torch.cat([q_pos_ids, d_pos_ids], dim=1)
+            cu_seqlens_unified = torch.cat([cu_seqlens_q, cu_seqlens_d[1:] + total_q])
+            max_seqlen = max(max_seqlen_q, max_seqlen_d)
+
+            unified_hidden, _ = self._forward_bottom(
+                unified_tokens,
+                cu_seqlens=cu_seqlens_unified,
+                max_seqlen=max_seqlen,
+                pos_ids=unified_pos_ids,
+                **kwargs,
+            )
+
+            q_hidden = unified_hidden[:, :total_q, :]
+            d_hidden = unified_hidden[:, total_q:, :]
+
+            if getattr(self.config, "use_upper_rope", True):
+                q_pos_emb_top = rotary_for_top(
+                    q_hidden, q_pos_ids, layer_type="full_attention"
+                )
+            else:
+                q_pos_emb_top = None
+
+            return (
+                q_hidden,
+                d_hidden,
+                cu_seqlens_q,
+                cu_seqlens_d,
+                max_seqlen_q,
+                max_seqlen_d,
+                query_mask,
+                doc_mask,
+                d_pos_ids,
+                q_pos_emb_top,
+            )
+
+        else:
+            # 2. Padded SDPA / Eager Path: pack contiguously, compute block mask and block position IDs
+            pad_id = getattr(self.config, "pad_token_id", 50283)
+            unified_ids, q_lens, d_lens, max_joint_len = _pack_pair_inputs_padded(
+                query_ids, query_mask, doc_ids, doc_mask, pad_token_id=pad_id
+            )
+
+            local_attn = getattr(self.config, "local_attention", 128)
+            attn_mask_mapping = _create_mice_block_masks(
+                q_lens=q_lens,
+                d_lens=d_lens,
+                seq_len=max_joint_len,
+                local_attention=local_attn,
+                device=unified_ids.device,
+            )
+
+            pos_ids = _create_block_position_ids(
+                q_lens=q_lens,
+                d_lens=d_lens,
+                seq_len=max_joint_len,
+                device=unified_ids.device,
+            )
+
+            if getattr(self.config, "bottom_final_norm", True):
+                outputs = self.model(
+                    input_ids=unified_ids,
+                    attention_mask=attn_mask_mapping,
+                    position_ids=pos_ids,
+                    **kwargs,
+                )
+                unified_hidden = outputs.last_hidden_state
+            else:
+                inputs_embeds = self.model.embeddings(input_ids=unified_ids)
+                position_embeddings = {}
+                for layer_type in set(self.config.layer_types):
+                    position_embeddings[layer_type] = self.model.rotary_emb(
+                        inputs_embeds, pos_ids, layer_type
+                    )
+                hidden = inputs_embeds
+                for encoder_layer in self.model.layers:
+                    layer_type = getattr(
+                        encoder_layer,
+                        "attention_type",
+                        getattr(encoder_layer.attn, "layer_type", "full_attention"),
+                    )
+                    hidden = encoder_layer(
+                        hidden,
+                        attention_mask=attn_mask_mapping[layer_type],
+                        position_embeddings=position_embeddings[layer_type],
+                        **kwargs,
+                    )
+                unified_hidden = hidden
+
+            B = unified_ids.shape[0]
+            max_q_len = int(q_lens.max().item())
+            max_d_len = int(d_lens.max().item())
+
+            col_idx_q = torch.arange(max_q_len, device=unified_ids.device).unsqueeze(0)
+            new_q_mask = (col_idx_q < q_lens.unsqueeze(1)).long()
+            q_hidden = unified_hidden[:, :max_q_len, :] * new_q_mask.unsqueeze(-1)
+
+            col_idx_d = torch.arange(max_d_len, device=unified_ids.device).unsqueeze(0)
+            new_d_mask = (col_idx_d < d_lens.unsqueeze(1)).long()
+            source_cols = q_lens.unsqueeze(1) + col_idx_d
+            valid_d = new_d_mask.bool()
+            batch_idx = (
+                torch.arange(B, device=unified_ids.device)
+                .unsqueeze(1)
+                .expand_as(source_cols)
+            )
+
+            d_hidden = torch.zeros(
+                (B, max_d_len, unified_hidden.shape[-1]),
+                dtype=unified_hidden.dtype,
+                device=unified_hidden.device,
+            )
+            d_hidden[valid_d] = unified_hidden[batch_idx[valid_d], source_cols[valid_d]]
+
+            if getattr(self.config, "use_upper_rope", True):
+                q_position_ids = torch.arange(
+                    q_hidden.shape[1], device=q_hidden.device
+                ).unsqueeze(0)
+                q_pos_emb_top = rotary_for_top(
+                    q_hidden, q_position_ids, layer_type="full_attention"
+                )
+            else:
+                q_pos_emb_top = None
+
+            return (
+                q_hidden,
+                d_hidden,
+                None,
+                None,
+                None,
+                None,
+                new_q_mask,
+                new_d_mask,
+                None,
+                q_pos_emb_top,
+            )
+
     def freeze_utility(self):
         """Freezes utility predictor parameters."""
         if self.utility_predictor is not None:
@@ -1746,56 +2053,58 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 cls_token_id=self.config.cls_token_id,
             )
 
+        if query_mask is None and query_ids is not None:
+            query_mask = torch.ones_like(query_ids, dtype=torch.long)
+        if doc_mask is None and doc_ids is not None:
+            doc_mask = torch.ones_like(doc_ids, dtype=torch.long)
+
         attn_impl = getattr(self.config, "_attn_implementation", "sdpa")
         is_flash_impl = "flash" in str(attn_impl).lower()
         use_unpadded = (
             is_flash_impl
-            and query_ids.is_cuda
+            and (query_ids.is_cuda if query_ids is not None else False)
             and is_fa2_available()
             and _unpad_input is not None
         )
 
-        # 1. Query Bottom Layers
-        if use_unpadded:
-            q_embeds = self.model.embeddings(input_ids=query_ids)
-            (
-                q_unpadded,
-                cu_seqlens_q,
-                max_seqlen_q,
-                indices_q,
-                q_pos_ids,
-            ) = _unpad_input_with_posids(q_embeds, query_mask)
-            q_hidden, q_pos_emb_top = self._forward_bottom(
-                q_unpadded,
-                cu_seqlens=cu_seqlens_q,
-                max_seqlen=max_seqlen_q,
-                pos_ids=q_pos_ids,
-                **kwargs,
-            )
-        else:
-            if (
-                getattr(self.config, "_attn_implementation", "sdpa")
-                == "flash_attention_2"
-                and not query_ids.is_cuda
-            ):
-                logger.warning(
-                    "[MICE v2] Flash Attention 2 requested but inputs are not on CUDA. "
-                    "Falling back to standard 3D padded pipeline."
-                )
-            q_hidden, q_pos_emb_top = self._forward_bottom(
-                query_ids, mask=query_mask, **kwargs
-            )
-            cu_seqlens_q = max_seqlen_q = None
-
-        if not getattr(self.config, "use_upper_rope", True):
-            q_pos_emb_top = None
-
-        # 2. Document Representation Pipeline
         if doc_hidden is not None:
             # Path A: Pre-encoded document embeddings (from index / cache / encode_documents).
-            # These are ALREADY normalized, utility-gated/pruned, and compressed (if doc_bottleneck_dim is set).
-            # We ONLY decompress them (d -> H_top) if a bottleneck is configured;
-            # otherwise they are already in H_top space ready for top cross-attention.
+            # 1. Query Bottom Layers
+            if use_unpadded:
+                q_embeds = self.model.embeddings(input_ids=query_ids)
+                (
+                    q_unpadded,
+                    cu_seqlens_q,
+                    max_seqlen_q,
+                    indices_q,
+                    q_pos_ids,
+                ) = _unpad_input_with_posids(q_embeds, query_mask)
+                q_hidden, q_pos_emb_top = self._forward_bottom(
+                    q_unpadded,
+                    cu_seqlens=cu_seqlens_q,
+                    max_seqlen=max_seqlen_q,
+                    pos_ids=q_pos_ids,
+                    **kwargs,
+                )
+            else:
+                if (
+                    getattr(self.config, "_attn_implementation", "sdpa")
+                    == "flash_attention_2"
+                    and not query_ids.is_cuda
+                ):
+                    logger.warning(
+                        "[MICE v2] Flash Attention 2 requested but inputs are not on CUDA. "
+                        "Falling back to standard 3D padded pipeline."
+                    )
+                q_hidden, q_pos_emb_top = self._forward_bottom(
+                    query_ids, mask=query_mask, **kwargs
+                )
+                cu_seqlens_q = max_seqlen_q = None
+
+            if not getattr(self.config, "use_upper_rope", True):
+                q_pos_emb_top = None
+
+            # 2. Document Representation Pipeline
             if doc_mask is None:
                 doc_mask = torch.ones(
                     (doc_hidden.shape[0], doc_hidden.shape[1]),
@@ -1820,30 +2129,82 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 d_hidden = self.doc_decompress(d_hidden)
         else:
             # Path B: Raw text token IDs (end-to-end training or standard inference without cache).
-            # 2a. Run raw tokens through bottom contextualization layers (H_bottom space).
-            if use_unpadded:
-                d_embeds = self.model.embeddings(input_ids=doc_ids)
+            if getattr(self.config, "unified_bottom_pass", True):
                 (
-                    d_unpadded,
+                    q_hidden,
+                    d_hidden,
+                    cu_seqlens_q,
                     cu_seqlens_d,
+                    max_seqlen_q,
                     max_seqlen_d,
-                    indices_d,
+                    query_mask,
+                    doc_mask,
                     d_pos_ids,
-                ) = _unpad_input_with_posids(d_embeds, doc_mask)
-                d_hidden, _ = self._forward_bottom(
-                    d_unpadded,
-                    cu_seqlens=cu_seqlens_d,
-                    max_seqlen=max_seqlen_d,
-                    pos_ids=d_pos_ids,
+                    q_pos_emb_top,
+                ) = self._forward_bottom_unified(
+                    query_ids=query_ids,
+                    query_mask=query_mask,
+                    doc_ids=doc_ids,
+                    doc_mask=doc_mask,
+                    use_unpadded=use_unpadded,
                     **kwargs,
                 )
             else:
-                d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
-                cu_seqlens_d = max_seqlen_d = None
+                # Legacy separate bottom passes
+                if use_unpadded:
+                    q_embeds = self.model.embeddings(input_ids=query_ids)
+                    (
+                        q_unpadded,
+                        cu_seqlens_q,
+                        max_seqlen_q,
+                        indices_q,
+                        q_pos_ids,
+                    ) = _unpad_input_with_posids(q_embeds, query_mask)
+                    q_hidden, q_pos_emb_top = self._forward_bottom(
+                        q_unpadded,
+                        cu_seqlens=cu_seqlens_q,
+                        max_seqlen=max_seqlen_q,
+                        pos_ids=q_pos_ids,
+                        **kwargs,
+                    )
+
+                    d_embeds = self.model.embeddings(input_ids=doc_ids)
+                    (
+                        d_unpadded,
+                        cu_seqlens_d,
+                        max_seqlen_d,
+                        indices_d,
+                        d_pos_ids,
+                    ) = _unpad_input_with_posids(d_embeds, doc_mask)
+                    d_hidden, _ = self._forward_bottom(
+                        d_unpadded,
+                        cu_seqlens=cu_seqlens_d,
+                        max_seqlen=max_seqlen_d,
+                        pos_ids=d_pos_ids,
+                        **kwargs,
+                    )
+                else:
+                    if (
+                        getattr(self.config, "_attn_implementation", "sdpa")
+                        == "flash_attention_2"
+                        and not query_ids.is_cuda
+                    ):
+                        logger.warning(
+                            "[MICE v2] Flash Attention 2 requested but inputs are not on CUDA. "
+                            "Falling back to standard 3D padded pipeline."
+                        )
+                    q_hidden, q_pos_emb_top = self._forward_bottom(
+                        query_ids, mask=query_mask, **kwargs
+                    )
+                    cu_seqlens_q = max_seqlen_q = None
+                    d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
+                    cu_seqlens_d = max_seqlen_d = None
+                    d_pos_ids = None
+
+            if not getattr(self.config, "use_upper_rope", True):
+                q_pos_emb_top = None
 
             # 2b. Full Document Post-Processing:
-            # Applies L2 normalization, utility prediction / gating / hard pruning,
-            # and doc_compress projection (H_bottom -> d) or adapter projection (H_bottom -> H_top).
             d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids = (
                 self._document_embed_post_process(
                     d_hidden,

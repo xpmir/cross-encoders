@@ -25,5 +25,5 @@ evaluation:
 grid_search:
   scorer_type: ["miceV2", "stCrossEncoder"]
   scorer_id:
-  # - VictorMorand/Mice-P-130m
+  - VictorMorand/Mice-P-130m
   - VictorMorand/Mice-P-61m
