@@ -4,7 +4,7 @@ description: Evaluation of LateOn multi-vector models with PLAID indexing and re
   Benchmark of PLAID indexing speed across buffer and fast_plaid_batch_size variants
   This config aims at finding the optimal parameters to build the plaid index in reasonable time
 
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 

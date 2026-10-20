@@ -763,17 +763,22 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "attrs" },
-    { name = "datamaestro", specifier = ">=1.15.2" },
+    { name = "datamaestro", specifier = ">=1.16.1" },
     { name = "experimaestro", specifier = ">=2.0.0" },
     { name = "impact-index", specifier = ">=1.3.1" },
     { name = "lxml" },
+    { name = "pandas", marker = "extra == 'parquet'" },
+    { name = "pyarrow", marker = "extra == 'parquet'" },
     { name = "typing-extensions" },
 ]
+provides-extras = ["parquet"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "docutils", specifier = ">=0.21.2" },
     { name = "git-cliff", specifier = ">=2.11.0" },
+    { name = "pandas" },
+    { name = "pyarrow" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "ruff", specifier = ">=0.8" },
     { name = "sphinx", specifier = ">=7" },
@@ -968,6 +973,7 @@ requires-dist = [
 provides-extras = ["carbon", "dev", "docs", "huggingface", "ssh"]
 
 [package.metadata.requires-dev]
+browser = [{ name = "playwright", specifier = ">=1.50" }]
 dev = [
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "ruff", specifier = ">=0.8" },
@@ -4678,7 +4684,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "experimaestro", specifier = ">=2.3.4" },
+    { name = "experimaestro", specifier = ">=2.5.2" },
     { name = "huggingface-hub", specifier = ">0.17" },
     { name = "lightning", specifier = ">=2.4" },
     { name = "safetensors", specifier = ">=0.4" },

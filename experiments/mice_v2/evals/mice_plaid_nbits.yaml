@@ -2,7 +2,7 @@ id: eval_mice_plaid_nbits
 title: mice_plaid_nbits_evaluation
 description: Evaluate MICE reranker across multiple PLAID bit-rates
 
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 

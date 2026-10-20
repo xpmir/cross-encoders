@@ -5,7 +5,7 @@ description: Evaluation with separate max_len for query and doc,
 
 module: Evaluation.experiment
 pre_experiment: pre_experiment
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 gpu: true
 
 grid_search:

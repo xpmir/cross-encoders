@@ -2,7 +2,7 @@ id: eval_scorers_top100_32_512
 title: cross_scorer_evaluation
 description: Evalutation of various HF Scorers
 
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 

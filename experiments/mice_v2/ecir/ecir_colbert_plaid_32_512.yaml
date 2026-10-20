@@ -2,7 +2,7 @@ id: eval_colbert_plaid
 title: cross_scorer_evaluation
 description: Evaluation of MICE v2 Models
 
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 

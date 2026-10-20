@@ -15,7 +15,7 @@ from lightning.fabric import Fabric
 from xpmir.neural.huggingface import hf_cross_scorer, HFCrossScorer
 from xpmir.neural.sentence_transformers import st_cross_scorer, STCrossEncoder
 from xpmir.letor.records import PointwiseItems
-from xpm_torch.module import fallback_fa2_if_incompatible_precision
+from xpm_torch.utils.fabric import fallback_fa2_if_incompatible_precision
 
 
 logging.basicConfig(level=logging.INFO)

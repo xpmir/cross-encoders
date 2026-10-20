@@ -2,7 +2,7 @@ id: eval_mice_32_512_hf
 title: cross_scorer_evaluation
 description: Comparison between MICE HF Scorer and its ST-Loaded Version
 
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 

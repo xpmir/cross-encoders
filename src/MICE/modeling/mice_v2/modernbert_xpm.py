@@ -35,8 +35,8 @@ from xpm_torch.module import (
     ModuleLoader,
     SimpleModuleLoader,
     ReadmeSection,
-    fallback_fa2_if_incompatible_precision,
 )
+from xpm_torch.utils.fabric import fallback_fa2_if_incompatible_precision
 from MICE.modeling.mice import MICEQueryDocTokenizer, MICETokenizedTexts, QueryDocInput
 from MICE.modeling.mice_v2.modernbert_hf import (
     ModernBertMiceConfig,

@@ -2,7 +2,7 @@ id: eval_lateon_plaid_abl_nbits
 title: lateon_plaid_retrieval_evaluation
 description: Evaluate LateOn on Various nbits
 
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 

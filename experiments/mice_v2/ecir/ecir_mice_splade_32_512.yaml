@@ -2,7 +2,7 @@ id: eval_mice_32_512
 title: cross_scorer_evaluation
 description: Evaluation of MICE HF Scorer with different tokenization
 
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 

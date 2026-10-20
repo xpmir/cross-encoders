@@ -2,7 +2,7 @@ id: eval_lateon_plaid
 title: lateon_plaid_retrieval_evaluation
 description: Evaluation of LateOn multi-vector models with PLAID indexing and retrieval
 
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 

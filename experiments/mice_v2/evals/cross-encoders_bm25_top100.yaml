@@ -2,7 +2,7 @@ id: eval_scorer_bm25_top100
 title: cross_scorer_evaluation
 description: Debug Evaluation of pushed HF Models
 
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 module: Evaluation.experiment
 pre_experiment: pre_experiment
 

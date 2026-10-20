@@ -4,7 +4,7 @@ description: Studies the impact of tokenization on the evaluation of cross-encod
 
 module: Evaluation.experiment
 pre_experiment: pre_experiment
-parent: ../_common.yaml
+parent: ../_common_eval.yaml
 gpu: true
 
 retriever: naver/splade-v3-distilbert
