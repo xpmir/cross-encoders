@@ -276,6 +276,8 @@ class UtilityRegularizer(TrainingHook):
         info: TrainerContext,
         utilities: torch.Tensor,
         doc_mask: Optional[torch.Tensor] = None,
+        p_active: Optional[torch.Tensor] = None,
+        doc_hidden: Optional[torch.Tensor] = None,
         hf_model: Optional[nn.Module] = None,
     ):
         if self.lambda_reg <= 0.0 or utilities is None:
@@ -303,7 +305,8 @@ class UtilityRegularizer(TrainingHook):
 
         target_model = hf_model or getattr(info, "model", None)
         model_to_inspect = getattr(target_model, "hf_model", target_model)
-        p_active = getattr(model_to_inspect, "last_p_active", None)
+        if p_active is None:
+            p_active = getattr(model_to_inspect, "last_p_active", None)
 
         if p_active is not None:
             # Hard Concrete L0 loss formulation over exact retention probability
@@ -416,9 +419,13 @@ class UtilityRegularizer(TrainingHook):
 
             # Monitor Token-Level Diagnostics (Kept vs Suppressed)
             doc_h = (
-                getattr(target_model, "last_doc_hidden", None)
-                if target_model is not None
-                else None
+                doc_hidden
+                if doc_hidden is not None
+                else (
+                    getattr(target_model, "last_doc_hidden", None)
+                    if target_model is not None
+                    else None
+                )
             )
             split_metrics = compute_token_split_metrics(
                 valid_utilities,
@@ -429,7 +436,11 @@ class UtilityRegularizer(TrainingHook):
                 info.metrics.add(ScalarMetric(k, float(v.item()), nrecords))
 
         # Log TensorBoard histogram at validation interval boundaries
-        writer = getattr(info, "writer", None)
+        writer = (
+            getattr(info, "writer", None)
+            or getattr(info, "_writer", None)
+            or getattr(info, "_writer", None)
+        )
         if (
             self.histogram_interval > 0
             and writer is not None
@@ -615,7 +626,7 @@ class GatedValueRegularizer(TrainingHook):
                 info.metrics.add(ScalarMetric(k, float(v.item()), nrecords))
 
         # Log TensorBoard histograms
-        writer = getattr(info, "writer", None)
+        writer = getattr(info, "writer", None) or getattr(info, "_writer", None)
         if (
             self.histogram_interval > 0
             and writer is not None
@@ -1725,15 +1736,14 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             )
             target_doc_mask = tokenized_docs.mask
 
-        if (
-            info is not None
-            and getattr(self.hf_model, "last_utilities", None) is not None
-        ):
+        if info is not None and getattr(out, "utilities", None) is not None:
             for hook in info.hooks(UtilityRegularizer):
                 hook(
                     info,
-                    self.hf_model.last_utilities,
+                    out.utilities,
                     doc_mask=target_doc_mask,
+                    p_active=getattr(out, "p_active", None),
+                    doc_hidden=getattr(out, "doc_hidden", None),
                     hf_model=self.hf_model,
                 )
 
@@ -1741,22 +1751,20 @@ class ModernBertMiceScorer(AbstractModuleScorer):
                 hook(
                     info,
                     self.hf_model,
-                    self.hf_model.last_utilities,
-                    self.hf_model.last_doc_hidden,
+                    out.utilities,
+                    getattr(out, "doc_hidden", None),
                     doc_mask=target_doc_mask,
                 )
 
         if (
             not self.training
             and getattr(self, "eval_sparsity_tracker", None) is not None
-            and getattr(self.hf_model, "last_utilities", None) is not None
+            and getattr(out, "utilities", None) is not None
         ):
             logger.debug(
                 "[ModernBertMiceScorer] Updating eval_sparsity_tracker during evaluation forward pass"
             )
-            self.eval_sparsity_tracker.update(
-                self.hf_model.last_utilities, doc_mask=target_doc_mask
-            )
+            self.eval_sparsity_tracker.update(out.utilities, doc_mask=target_doc_mask)
 
         return out.logits.squeeze(-1)
 

@@ -154,7 +154,8 @@ def test_model_gate_target_h_vs_v_behavior():
 
     # In model_h (gate_target="h" with top_layers_doc_ln=False):
     # d_hidden was multiplied by utilities during post_process_documents
-    u = model_h.last_utilities
+    u = out_h.utilities
+    assert u is not None, "out_h.utilities must be populated"
     assert (u > 0.0).all() and (u < 1.0).all(), "Utilities must be fractional"
 
     # In model_v (gate_target="v"):

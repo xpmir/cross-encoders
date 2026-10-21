@@ -4,6 +4,7 @@ Custom PreTrainedModel and Modules supporting SDPA, Flash Attention 2, and ST ex
 """
 
 import copy
+from dataclasses import dataclass
 import logging
 import math
 from collections import OrderedDict
@@ -37,6 +38,31 @@ except ImportError:
     _unpad_input, _pad_input = None, None
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ModernBertMiceOutput(SequenceClassifierOutput):
+    """Output dataclass for ModernBertMiceForSequenceClassification.
+
+    Attributes:
+        loss (Optional[torch.FloatTensor]): Classification loss if labels provided.
+        logits (torch.FloatTensor): Classification logits of shape (batch_size, num_labels).
+        hidden_states (Optional[Tuple[torch.FloatTensor, ...]]): Hidden-states if requested.
+        attentions (Optional[Tuple[torch.FloatTensor, ...]]): Attentions if requested.
+        utilities (Optional[torch.FloatTensor]): Predicted token utility scores [B, L, 1] (or [total_tokens, 1]).
+        p_active (Optional[torch.FloatTensor]): Exact active retention probabilities under Hard Concrete gate [B, L, 1].
+        doc_hidden (Optional[torch.FloatTensor]): Pre-gating uncompressed document hidden states [B, L, D].
+        pruned_utilities (Optional[torch.FloatTensor]): Post-pruned utility scores if hard pruning is active.
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    utilities: Optional[torch.FloatTensor] = None
+    p_active: Optional[torch.FloatTensor] = None
+    doc_hidden: Optional[torch.FloatTensor] = None
+    pruned_utilities: Optional[torch.FloatTensor] = None
 
 
 def is_fa2_available() -> bool:
@@ -131,7 +157,6 @@ class UtilityPredictor(nn.Module):
         self.use_hard_concrete = use_hard_concrete
         self.hc_gamma = hc_gamma
         self.hc_zeta = hc_zeta
-        self.last_p_active: Optional[torch.Tensor] = None
 
         self.wi = nn.Linear(hidden_dim, 2 * bottleneck_dim, bias=False)
         self.wo = nn.Linear(bottleneck_dim, 1, bias=True)
@@ -185,13 +210,17 @@ class UtilityPredictor(nn.Module):
             error_msgs,
         )
 
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, h: torch.Tensor, return_p_active: bool = False
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Optional[torch.Tensor]]]:
         """Args:
             h: Hidden state tensor of shape (batch_size, seq_len, hidden_dim)
                or (1, total_tokens, hidden_dim)
+            return_p_active: If True, also returns the active probability tensor p_active.
 
         Returns:
             u: Utility scores of shape (batch_size, seq_len, 1) or (1, total_tokens, 1) in [0, 1]
+               (or tuple of (u, p_active) if return_p_active=True).
         """
         x_val, x_gate = self.wi(h).chunk(2, dim=-1)
         geglu_out = x_val * torch.nn.functional.gelu(x_gate, approximate="none")
@@ -199,13 +228,15 @@ class UtilityPredictor(nn.Module):
         beta = max(float(self.temperature.item()), 1e-4)
 
         if not self.use_hard_concrete:
-            self.last_p_active = None
-            return torch.sigmoid(logits / beta)
+            u = torch.sigmoid(logits / beta)
+            if return_p_active:
+                return u, None
+            return u
 
         # Hard Concrete L0 formulation:
         # Closed-form retention probability: P(u > 0) = sigma(z - beta * log(-gamma / zeta))
         offset = beta * math.log(-self.hc_gamma / self.hc_zeta)
-        self.last_p_active = torch.sigmoid(logits - offset)
+        p_active = torch.sigmoid(logits - offset)
 
         if self.training:
             # Clamped uniform noise to avoid log(0)
@@ -216,7 +247,10 @@ class UtilityPredictor(nn.Module):
             s = torch.sigmoid(logits / beta)
 
         s_bar = s * (self.hc_zeta - self.hc_gamma) + self.hc_gamma
-        return torch.clamp(s_bar, min=0.0, max=1.0)
+        u_clamped = torch.clamp(s_bar, min=0.0, max=1.0)
+        if return_p_active:
+            return u_clamped, p_active
+        return u_clamped
 
 
 def _hard_prune_unpadded_documents(
@@ -1266,9 +1300,6 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             )
         else:
             self.utility_predictor = None
-        self.last_utilities = None
-        self.last_p_active = None
-        self.last_doc_hidden = None
 
         self.post_init()
 
@@ -1881,16 +1912,31 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         cu_seqlens_d: Optional[torch.Tensor] = None,
         max_seqlen_d: Optional[int] = None,
         d_pos_ids: Optional[torch.Tensor] = None,
-    ):
-        """
-        Postprocessing of the contextualized token representations:
+    ) -> Tuple[
+        torch.Tensor,
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[int],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
+        """Postprocessing of the contextualized token representations:
         First centering the hs and L2 norm for FastPLAID index and calculating
         token utilities and applies soft gating or hard token pruning.
-        Returns updated (d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids).
+        Returns updated (d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids,
+        utilities, p_active, d_hidden_pre_gate, pruned_utilities).
         """
         if getattr(self.config, "normalize_doc_embeds", False):
             d_hidden = d_hidden - torch.mean(d_hidden, dim=-1, keepdim=True)
             d_hidden = torch.nn.functional.normalize(d_hidden, p=2, dim=-1)
+
+        d_hidden_pre_gate = d_hidden
+        utilities = None
+        p_active = None
+        pruned_utilities = None
 
         if self.utility_predictor is not None:
             hard_prune = self.config.hard_pruning
@@ -1899,10 +1945,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 if getattr(self.config, "use_hard_concrete", False)
                 else self.config.hard_prune_threshold
             )
-            self.last_utilities = self.utility_predictor(d_hidden)
-            self.last_p_active = getattr(self.utility_predictor, "last_p_active", None)
-            self.last_doc_hidden = d_hidden
-            self.pruned_utilities = None
+            utilities, p_active = self.utility_predictor(d_hidden, return_p_active=True)
 
             if hard_prune:
                 if use_unpadded and cu_seqlens_d is not None:
@@ -1916,7 +1959,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                         d_hidden,
                         d_pos_ids,
                         cu_seqlens_d,
-                        self.last_utilities,
+                        utilities,
                         threshold=threshold,
                         return_pruned_utilities=True,
                     )
@@ -1935,22 +1978,22 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     ) = _hard_prune_padded_documents(
                         d_hidden,
                         doc_mask,
-                        self.last_utilities,
+                        utilities,
                         threshold=threshold,
                         return_pruned_utilities=True,
                     )
-                self.pruned_utilities = pruned_utils
+                pruned_utilities = pruned_utils
                 gate_target = getattr(self.config, "gate_target", "h")
                 if gate_target == "h" and not getattr(
                     self.config, "top_layers_doc_ln", False
                 ):
-                    d_hidden = d_hidden * self.pruned_utilities
+                    d_hidden = d_hidden * pruned_utilities
             else:
                 gate_target = getattr(self.config, "gate_target", "h")
                 if gate_target == "h":
                     if not getattr(self.config, "top_layers_doc_ln", False):
                         # Legacy soft gating: multiply in post-processing
-                        d_hidden = d_hidden * self.last_utilities
+                        d_hidden = d_hidden * utilities
                     else:
                         # Defer soft gating to top_layers (applied post-doc_cross_attn_norm)
                         pass
@@ -1961,18 +2004,23 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                     raise ValueError(
                         f"Unknown gate_target: '{gate_target}'. Expected 'h' or 'v'."
                     )
-        else:
-            self.last_utilities = None
-            self.last_p_active = None
-            self.last_doc_hidden = None
-            self.pruned_utilities = None
 
         if self.doc_compress is not None:
             d_hidden = self.doc_compress(d_hidden)
         elif self.adapter is not None:
             d_hidden = self.adapter(d_hidden)
 
-        return d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids
+        return (
+            d_hidden,
+            doc_mask,
+            cu_seqlens_d,
+            max_seqlen_d,
+            d_pos_ids,
+            utilities,
+            p_active,
+            d_hidden_pre_gate,
+            pruned_utilities,
+        )
 
     def encode_documents(
         self,
@@ -1988,7 +2036,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
         positions are real tokens.
         """
         d_hidden, _ = self._forward_bottom(doc_ids, mask=doc_mask, **kwargs)
-        d_hidden, doc_mask, _, _, _ = self._document_embed_post_process(
+        d_hidden, doc_mask, _, _, _, _, _, _, _ = self._document_embed_post_process(
             d_hidden, doc_mask, use_unpadded=False
         )
         return d_hidden, doc_mask
@@ -2066,6 +2114,11 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             and is_fa2_available()
             and _unpad_input is not None
         )
+
+        utilities = None
+        p_active = None
+        d_hidden_pre_gate = None
+        pruned_utilities = None
 
         if doc_hidden is not None:
             # Path A: Pre-encoded document embeddings (from index / cache / encode_documents).
@@ -2205,15 +2258,23 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 q_pos_emb_top = None
 
             # 2b. Full Document Post-Processing:
-            d_hidden, doc_mask, cu_seqlens_d, max_seqlen_d, d_pos_ids = (
-                self._document_embed_post_process(
-                    d_hidden,
-                    doc_mask,
-                    use_unpadded=use_unpadded,
-                    cu_seqlens_d=cu_seqlens_d,
-                    max_seqlen_d=max_seqlen_d,
-                    d_pos_ids=d_pos_ids if use_unpadded else None,
-                )
+            (
+                d_hidden,
+                doc_mask,
+                cu_seqlens_d,
+                max_seqlen_d,
+                d_pos_ids,
+                utilities,
+                p_active,
+                d_hidden_pre_gate,
+                pruned_utilities,
+            ) = self._document_embed_post_process(
+                d_hidden,
+                doc_mask,
+                use_unpadded=use_unpadded,
+                cu_seqlens_d=cu_seqlens_d,
+                max_seqlen_d=max_seqlen_d,
+                d_pos_ids=d_pos_ids if use_unpadded else None,
             )
 
             # 2c. If bottleneck is active, decompress from storage dim d to interaction dim H_top.
@@ -2229,7 +2290,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 if getattr(self.config, "use_hard_concrete", False):
                     # Hard Concrete Value-gated slicing: pass pruned utilities to top layers
                     d_utilities = (
-                        self.pruned_utilities
+                        pruned_utilities
                         if (
                             getattr(self.config, "top_layers_doc_ln", False)
                             or getattr(self.config, "gate_target", "h") == "v"
@@ -2242,7 +2303,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             else:
                 # Soft gating or unpruned ablation
                 d_utilities = (
-                    self.last_utilities
+                    utilities
                     if (
                         getattr(self.config, "top_layers_doc_ln", False)
                         or getattr(self.config, "gate_target", "h") == "v"
@@ -2381,9 +2442,13 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
             output = (logits,)
             return ((loss,) + output) if loss is not None else output
 
-        return SequenceClassifierOutput(
+        return ModernBertMiceOutput(
             loss=loss,
             logits=logits,
+            utilities=utilities,
+            p_active=p_active,
+            doc_hidden=d_hidden_pre_gate,
+            pruned_utilities=pruned_utilities,
         )
 
 

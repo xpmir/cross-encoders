@@ -167,7 +167,7 @@ def test_p_active_closed_form_formula():
     )
 
     h = torch.randn(8, 12, 16)
-    pred(h)
+    _, p_active = pred(h, return_p_active=True)
 
     # Theoretical formula
     with torch.no_grad():
@@ -176,9 +176,9 @@ def test_p_active_closed_form_formula():
         logits = pred.wo(geglu)
         expected_p_active = torch.sigmoid(logits - beta * math.log(-gamma / zeta))
 
-    assert pred.last_p_active is not None
-    assert torch.allclose(pred.last_p_active, expected_p_active, atol=1e-6)
-    assert (pred.last_p_active > 0.0).all() and (pred.last_p_active < 1.0).all()
+    assert p_active is not None
+    assert torch.allclose(p_active, expected_p_active, atol=1e-6)
+    assert (p_active > 0.0).all() and (p_active < 1.0).all()
 
 
 def test_utility_regularizer_l0_loss_and_metrics():
@@ -202,10 +202,10 @@ def test_utility_regularizer_l0_loss_and_metrics():
     doc_ids = torch.randint(0, 50, (2, 8))
     doc_mask = torch.ones((2, 8), dtype=torch.long)
 
-    model(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask)
+    out = model(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask)
 
-    assert model.last_utilities is not None
-    assert model.last_p_active is not None
+    assert out.utilities is not None
+    assert out.p_active is not None
 
     # Hook test
     budget = 0.3
@@ -228,7 +228,7 @@ def test_utility_regularizer_l0_loss_and_metrics():
     ctx.metrics = Metrics()
 
     with ctx.losses() as losses:
-        reg_hook(ctx, model.last_utilities, doc_mask=doc_mask, hf_model=model)
+        reg_hook(ctx, out.utilities, doc_mask=doc_mask, p_active=out.p_active, hf_model=model)
 
     # 1. Loss was added
     assert len(losses) == 1
@@ -236,8 +236,8 @@ def test_utility_regularizer_l0_loss_and_metrics():
     assert loss_item.name == "utility_reg"
     assert loss_item.weight == 0.5
 
-    # Verify loss calculation uses last_p_active rather than utilities
-    expected_mean_p = model.last_p_active.mean()
+    # Verify loss calculation uses p_active rather than utilities
+    expected_mean_p = out.p_active.mean()
     expected_diff = F.relu(expected_mean_p - budget)
     expected_loss = expected_diff**2
     assert loss_item.value.item() == pytest.approx(expected_loss.item(), rel=1e-5)
@@ -307,9 +307,9 @@ def test_hard_concrete_gradient_flow():
 
     out = model(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask)
 
-    # Joint loss: task_loss (from logits) + l0_loss (from last_p_active)
+    # Joint loss: task_loss (from logits) + l0_loss (from p_active)
     task_loss = out.logits.sum()
-    l0_loss = (model.last_p_active.mean() - 0.3) ** 2
+    l0_loss = (out.p_active.mean() - 0.3) ** 2
     total_loss = task_loss + 0.1 * l0_loss
 
     total_loss.backward()
@@ -418,15 +418,15 @@ def test_hard_pruning_hc_model_forward_and_utilities_separation():
     )
 
     assert out.logits.shape == (2, 1)
-    # Full document length must be preserved in last_utilities and last_p_active
-    assert model.last_utilities.shape == (2, 12, 1)
-    assert model.last_p_active.shape == (2, 12, 1)
+    # Full document length must be preserved in utilities and p_active
+    assert out.utilities.shape == (2, 12, 1)
+    assert out.p_active.shape == (2, 12, 1)
 
     # Pruned utilities must exist and have sequence length <= 12
-    assert model.pruned_utilities is not None
-    assert model.pruned_utilities.shape[0] == 2
-    assert model.pruned_utilities.shape[1] <= 12
-    assert model.pruned_utilities.shape[2] == 1
+    assert out.pruned_utilities is not None
+    assert out.pruned_utilities.shape[0] == 2
+    assert out.pruned_utilities.shape[1] <= 12
+    assert out.pruned_utilities.shape[2] == 1
 
 
 def test_hard_pruning_hc_ablation_disabled():
@@ -457,9 +457,9 @@ def test_hard_pruning_hc_ablation_disabled():
     )
 
     assert out.logits.shape == (2, 1)
-    assert model.last_utilities.shape == (2, 10, 1)
+    assert out.utilities.shape == (2, 10, 1)
     # When hard_pruning is False, pruned_utilities must be None
-    assert model.pruned_utilities is None
+    assert out.pruned_utilities is None
 
 
 def test_hard_pruning_hc_experimaestro_hash_and_tags():
@@ -524,7 +524,7 @@ def test_hard_pruning_hc_end_to_end_gradient_flow():
     )
 
     task_loss = out.logits.sum()
-    l0_loss = (model.last_p_active.mean() - 0.3) ** 2
+    l0_loss = (out.p_active.mean() - 0.3) ** 2
     total_loss = task_loss + 0.1 * l0_loss
     total_loss.backward()
 

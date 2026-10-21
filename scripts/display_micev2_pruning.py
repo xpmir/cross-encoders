@@ -323,10 +323,10 @@ def main():
             doc_mask=enc_d["attention_mask"],
         )
         baseline_indep_scores = indep_out.logits.squeeze(-1).cpu().numpy()
-        utilities_tensor = getattr(model, "last_utilities", None)
+        utilities_tensor = getattr(indep_out, "utilities", None)
 
     if utilities_tensor is None:
-        raise RuntimeError("model.last_utilities was not populated during forward pass!")
+        raise RuntimeError("Model output did not contain 'utilities'!")
 
     logger.info("Baseline Pair Scores (ST mode): %s", baseline_pair_scores)
     logger.info("Baseline Independent Scores:  %s", baseline_indep_scores)

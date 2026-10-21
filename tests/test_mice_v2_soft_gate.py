@@ -147,10 +147,10 @@ def test_modernbert_hf_soft_gate():
             doc_mask=doc_mask,
         )
 
-    assert model.last_utilities is not None, "model.last_utilities should be populated when utility_pred=True"
-    assert model.last_utilities.shape == (2, 16, 1), f"Expected utilities shape (2, 16, 1), got {model.last_utilities.shape}"
-    assert (model.last_utilities >= 0.0).all() and (model.last_utilities <= 1.0).all()
-    assert model.last_utilities.mean().item() > 0.95, f"Expected initial mean utility > 0.95, got {model.last_utilities.mean().item()}"
+    assert out.utilities is not None, "out.utilities should be populated when utility_pred=True"
+    assert out.utilities.shape == (2, 16, 1), f"Expected utilities shape (2, 16, 1), got {out.utilities.shape}"
+    assert (out.utilities >= 0.0).all() and (out.utilities <= 1.0).all()
+    assert out.utilities.mean().item() > 0.95, f"Expected initial mean utility > 0.95, got {out.utilities.mean().item()}"
 
 
 def test_modernbert_xpm_soft_gate_and_hook():
@@ -294,8 +294,8 @@ def test_top_layers_doc_ln_toggle():
 
     assert out_false.logits.shape == (2, 1)
     assert out_true.logits.shape == (2, 1)
-    assert model_false.last_utilities.shape == (2, 16, 1)
-    assert model_true.last_utilities.shape == (2, 16, 1)
+    assert out_false.utilities.shape == (2, 16, 1)
+    assert out_true.utilities.shape == (2, 16, 1)
 
 
 def test_top_layers_doc_ln_backbone_seeding():
@@ -411,8 +411,8 @@ def test_gated_value_regularizer():
     doc_mask = torch.ones((2, 8), dtype=torch.bool)
 
     out = model(query_ids=query_ids, query_mask=query_mask, doc_ids=doc_ids, doc_mask=doc_mask)
-    assert model.last_utilities is not None
-    assert model.last_doc_hidden is not None
+    assert out.utilities is not None
+    assert out.doc_hidden is not None
 
     reg_hook = GatedValueRegularizer.C(lambda_reg=0.1)
 
@@ -432,8 +432,8 @@ def test_gated_value_regularizer():
         reg_hook(
             context,
             model,
-            model.last_utilities,
-            model.last_doc_hidden,
+            out.utilities,
+            out.doc_hidden,
             doc_mask=doc_mask,
         )
 
@@ -571,7 +571,7 @@ def test_compensation_diagnostics_metrics():
     context.metrics = Metrics()
 
     with context.losses():
-        reg_hook(context, model.last_utilities, doc_mask=dm, hf_model=model)
+        reg_hook(context, out.utilities, doc_mask=dm, doc_hidden=out.doc_hidden, hf_model=model)
 
     metrics_dict = {name: metric.compute() for name, metric in context.metrics.metrics.items()}
 
@@ -994,3 +994,40 @@ def test_utility_bias_scorer_and_hash_invariance():
     inst = tasks_zero[0].instance()
     inst.execute()
     assert inst.scorer.hf_model.utility_predictor.wo.bias.item() == pytest.approx(0.0)
+
+
+def test_modernbert_statelessness_no_side_channels():
+    """Verify that ModernBertMiceForSequenceClassification does not store side-channel states on self."""
+    config = ModernBertMiceConfig(
+        hidden_size=32,
+        intermediate_size=64,
+        num_attention_heads=2,
+        num_hidden_layers=2,
+        n_contextualization_layers=1,
+        utility_pred=True,
+        gate_target="h",
+        use_hard_concrete=True,
+        hard_pruning=True,
+        _attn_implementation="sdpa",
+    )
+    model = ModernBertMiceForSequenceClassification(config)
+    q = torch.randint(0, 50, (2, 4))
+    qm = torch.ones((2, 4), dtype=torch.long)
+    d = torch.randint(0, 50, (2, 8))
+    dm = torch.ones((2, 8), dtype=torch.long)
+
+    out = model(query_ids=q, query_mask=qm, doc_ids=d, doc_mask=dm)
+
+    # All outputs must be cleanly returned in out
+    assert out.logits is not None
+    assert out.utilities is not None
+    assert out.p_active is not None
+    assert out.doc_hidden is not None
+    assert out.pruned_utilities is not None
+
+    # Model itself must NOT have side-channel attributes
+    assert not hasattr(model, "last_utilities")
+    assert not hasattr(model, "last_p_active")
+    assert not hasattr(model, "last_doc_hidden")
+    assert not hasattr(model, "pruned_utilities")
+    assert not hasattr(model.utility_predictor, "last_p_active")
