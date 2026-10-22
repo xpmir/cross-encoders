@@ -1,152 +1,84 @@
 <div align="center">
 
-# Reproducing and Comparing Distillation Techniques for Cross-Encoders
-
+<h1>Reproducing and Comparing Distillation Techniques for Cross-Encoders</h1>
 <div>
     <a href='https://victormorand.github.io/' target='_blank'>Victor Morand</a><sup>1</sup>&emsp;
-    <a href='https://scholar.google.com/citations?user=QGCo1PAAAAAJ&hl' target='_blank'>Mathias Vast</a><sup>1,2</sup>&emsp;
+    <a href=https://scholar.google.com/citations?user=QGCo1PAAAAAJ&hl target='_blank'>Mathias Vast</a><sup>12</sup>&emsp;
     <a target='_blank'>Basile van Cooten</a><sup>2</sup>&emsp;
     <a href='https://scholar.google.fr/citations?user=3gUQp6oAAAAJ&hl' target='_blank'>Laure Soulier</a><sup>1</sup>&emsp;
     <a href='https://scholar.google.com/citations?user=V-Nyr0wAAAAJ' target='_blank'>Josiane Mothe</a><sup>3</sup>&emsp;
-    <a href='https://www.piwowarski.fr' target='_blank'>Benjamin Piwowarski</a><sup>1</sup>
+    <a href='https://www.piwowarski.fr' target='_blank'>Benjamin Piwowarski</a><sup>1</sup>&emsp;
 </div>
 <br>
 <div>
-    <sup>1</sup>Sorbonne Université, CNRS, ISIR, F-75005 Paris, France<br>
-    <sup>2</sup>ChapsVision, Paris, France<br>
-    <sup>3</sup>IRIT, Université de Toulouse, UMR5505 CNRS, F-31400 Toulouse, France
+    <sup>1</sup>Sorbonne Université, CNRS, ISIR, F-75005 Paris, France&emsp;<br>
+    <sup>2</sup>ChapsVision, Paris, France&emsp;<br>
+    <sup>3</sup>IRIT, Université de Toulouse, UMR5505 CNRS, F-31400 Toulouse, France&emsp;<br>
 </div>
 <br>
 
-[![Paper](https://img.shields.io/badge/Paper-ArXiv_2603.03010-red)](http://arxiv.org/abs/2603.03010)
-[![Hugging Face Collection](https://img.shields.io/badge/🤗%20Hugging%20Face-Models_Collection-blue)](https://huggingface.co/collections/xpmir/reproducing-cross-encoders)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
-[![Experimaestro](https://img.shields.io/badge/orchestrated%20by-experimaestro-orange)](https://github.com/experimaestro/experimaestro-python)
-
+[![Paper](https://img.shields.io/badge/Paper-Arxiv-red)](http://arxiv.org/abs/2603.03010)
+[![All Models](https://img.shields.io/badge/🤗%20Hugging%20Face%20Models-blue)](https://huggingface.co/collections/xpmir/reproducing-cross-encoders)
+[![GitHub](https://img.shields.io/badge/GitHub-Code-blue)](https://github.com/xpmir/cross-encoders)
 </div>
 
----
+### 📄 Paper Abstract
 
-### 📄 Abstract
+> Recent advances in Information Retrieval have established transformer-based cross-encoders as a keystone in IR. Recent studies have focused on knowledge distillation and showed that, with the right strategy, traditional cross-encoders could reach the level of effectiveness of LLM re-rankers. Yet, comparisons with previous training strategies, including distillation from strong cross-encoder teachers, remain unclear. In addition, few studies cover a similar range of backbone encoders, while substantial improvements have been made in this area since BERT. This lack of comprehensive studies in controlled environments makes it difficult to identify robust design choices. In this work, we reproduce [Schlatt et al. 2025](http://arxiv.org/abs/2405.07920) LLM-based distillation strategy and compare it to [Hofstätter et al. 2020](https://www.semanticscholar.org/paper/Improving-Efficient-Neural-Ranking-Models-with-Hofst%C3%A4tter-Althammer/102f40abbd5f64a0f7c341ceaf8af4fb536e35f8) approach based on an ensemble of cross-encoder teachers, as well as other supervised objectives, to fine-tune a large range of cross-encoders, from the original BERT and its follow-ups RoBERTa, ELECTRA and DeBERTa-v3, to the more recent ModernBERT. We evaluate all models on both in-domain (TREC-DL and MS MARCO dev) and out-of-domain datasets (BEIR, LoTTE, and Robust04). Our results show that objectives emphasizing relative comparisons---pairwise MarginMSE and listwise InfoNCE---consistently outperform pointwise baselines across all backbones and evaluation settings, and that objective choice can yield gains comparable to scaling the backbone architecture.
 
-> Recent advances in Information Retrieval (IR) have established transformer-based cross-encoders as a keystone for re-ranking. Recent studies have focused on knowledge distillation and showed that, with the right strategy, traditional cross-encoders could reach the level of effectiveness of LLM re-rankers. Yet, comparisons with previous training strategies, including distillation from strong cross-encoder teachers, remain unclear. In addition, few studies cover a similar range of backbone encoders, while substantial improvements have been made in this area since BERT.
->
-> In this work, we reproduce [Schlatt et al. (2024)](http://arxiv.org/abs/2405.07920) LLM-based distillation strategy and compare it to [Hofstätter et al. (2020)](https://www.semanticscholar.org/paper/Improving-Efficient-Neural-Ranking-Models-with-Hofst%C3%A4tter-Althammer/102f40abbd5f64a0f7c341ceaf8af4fb536e35f8) approach based on an ensemble of cross-encoder teachers, as well as other supervised objectives (BCE, Hinge, MarginMSE, InfoNCE, DistillRankNet, ADR-MSE). We fine-tune a wide range of cross-encoders, from BERT, RoBERTa, ELECTRA, and DeBERTa-v3, to modern architectures such as Ettin and ModernBERT, evaluating on both in-domain (TREC-DL, MS MARCO) and out-of-domain benchmarks (BEIR, LoTTE, Robust04).
+## 👨‍💻 Package
 
----
+This repository provides a standardized and fully modular framework for the fine-tuning and evaluation of state-of-the-art Cross-Encoder models for Information Retrieval (IR).
+Built upon the Experimaestro and xpmir ecosystems, it automates the end-to-end experimental lifecycle—from document indexing (using BM25 or SPLADE) and advanced training strategies (such as MarginMSE and listwise distillation) to rigorous multi-benchmark evaluation on datasets like BEIR.
+We release this project as a resource for the IR community, simplifing the reproduction and evaluation of sota re-ranking results, and providing modular components for researching new loss functions and negative sampling techniques.
 
-## ⚡ Quickstart: Using Pretrained Models
+## Reproducing Paper results
 
-All trained checkpoints are available in the [Hugging Face Collection](https://huggingface.co/collections/xpmir/reproducing-cross-encoders). You can score query-document pairs directly using `sentence-transformers`:
+The use of [experimaestro](https://github.com/experimaestro/experimaestro-python) (and especially its IR extension [experimaestro-ir](https://github.com/experimaestro/experimaestro-ir)) ensures full reproducibility; all results from the paper can be reproduced with Experimaestro.
 
-```python
-from sentence_transformers import CrossEncoder
+- All training configurations are available as yaml files in `experiments/repro_paper/`.
+- We release all trained models in the HF collection [`xpmir/reproducing-cross-encoders`](https://huggingface.co/collections/xpmir/reproducing-cross-encoders) [![All Models](https://img.shields.io/badge/🤗%20Hugging%20Face%20Models-blue)](https://huggingface.co/collections/xpmir/reproducing-cross-encoders)
 
-model = CrossEncoder("xpmir/cross-encoder-ettin-150m-infoNCE")
 
-query = "What causes ocean tides?"
-documents = [
-    "Tides are the rise and fall of sea levels caused by the gravitational forces exerted by the Moon and the Sun.",
-    "Ocean currents are continuous, directed movements of seawater generated by forces such as wind and water density differences.",
-]
+# Usage
 
-scores = model.predict([(query, doc) for doc in documents])
-print(scores)
-```
+## Installation
 
----
+To install this repository, first ensure you have `git` and [`uv`](https://docs.astral.sh/uv/) installed.
 
-## 🛠️ Repository Structure
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/xpmir/cross-encoders.git
+    cd cross-encoders
+    ```
 
-```
-├── experiments/
-│   ├── repro_paper/       # YAML configurations reproducing the paper experiments
-│   ├── mice_v1/           # MICE v1 experiments (multi-stage efficient re-ranking)
-│   └── mice_v2/           # MICE v2 experiments
-├── src/
-│   ├── cross_encoders_training/  # Training workflows & experiment launchers
-│   ├── Evaluation/              # Benchmark evaluation scripts (BEIR, NanoBEIR, etc.)
-│   ├── MICE/                    # Multi-stage / Interleaved Cross-Encoder implementation
-│   ├── models/                  # Custom models & architectures
-│   └── retrievers.py            # First-stage retrievers (SPLADE, BM25, SEISMIC)
-├── CrossEncoderResults.ipynb    # Analysis & visualization of paper results
-├── MiceResults.ipynb            # Evaluation & Pareto curves for MICE architectures
-└── experimaestro-*/             # Modular core submodules (xpmir, xpm-torch, datamaestro)
-```
+2.  Synchronize the Python dependencies using [`uv`](https://docs.astral.sh/uv/):
+    ```bash
+    uv sync
+    ```
 
----
 
-## 📦 Installation
+### Launching experiments
+If it is the first time using experimaestro, you may first setup your environment to be able to launch experiments. You can follow [the tutorial](https://experimaestro-python.readthedocs.io/en/latest/tutorial.html).
 
-This project uses [`uv`](https://docs.astral.sh/uv/) for high-performance dependency management and reproducible environments.
 
-### 1. Clone the repository and submodules
+Once experimaestro is setup, you can launch the training of a cross-encoder with the following command:
+
 ```bash
-git clone --recurse-submodules https://github.com/xpmir/cross-encoders.git
-cd cross-encoders
+uv run experimaestro run-experiment experiments/repro_paper/core_base.yaml
 ```
-*(If cloned without `--recurse-submodules`, initialize them with `git submodule update --init --recursive`)*
 
-### 2. Install dependencies
+You may first want to see what tasks will be launched with:
 ```bash
-uv sync
-```
-> **Note on Platforms:** PyTorch wheels are mapped to CUDA 12.6 on Linux clusters and native MPS/CPU on macOS Apple Silicon.
-
-### 3. (Optional) Flash-Attention 2
-For faster training and unpadded sequence processing:
-```bash
-uvx hf download kernels-community/flash-attn2
+uv run experimaestro run-experiment experiments/repro_paper/core_mini_debug.yaml --run-mode DRY_RUN
 ```
 
----
 
-## 🚀 Running Experiments
+### Citation
 
-Experiments are orchestrated by **[Experimaestro](https://github.com/experimaestro/experimaestro-python)**, enabling deterministic execution, automated dependency caching, and distributed multi-GPU / SLURM job submission.
 
-### Dry Run (Validate experiment graph)
-Check which tasks (indexing, negative mining, training, evaluation) will be executed without running them:
-```bash
-uv run experimaestro run-experiment experiments/repro_paper/core_debug.yaml --run-mode DRY_RUN
-```
+If you find this work useful, you can cite our work as:
 
-### Reproducing Paper Experiments
-The YAML configurations in `experiments/repro_paper/` cover all model backbones and distillation objectives:
-
-| Configuration | Description |
-|---|---|
-| [`core_debug.yaml`](experiments/repro_paper/core_debug.yaml) | Fast sanity-check configuration for local debugging |
-| [`core_mini.yaml`](experiments/repro_paper/core_mini.yaml) | MiniLM & small backbones (17M, 32M, 68M) across 6 loss functions |
-| [`core_base_paper.yaml`](experiments/repro_paper/core_base_paper.yaml) | Base models (BERT, RoBERTa, ELECTRA, DeBERTa-v3, Ettin-150M) |
-| [`core_large.yaml`](experiments/repro_paper/core_large.yaml) | Large backbones and scaling experiments |
-| [`reproduction_rank_distiLLM.yaml`](experiments/repro_paper/reproduction_rank_distiLLM.yaml) | Direct reproduction of Rank-DistiLLM training |
-
-Run any experiment with:
-```bash
-uv run experimaestro run-experiment experiments/repro_paper/core_mini.yaml
-```
-
-### Evaluation on Benchmarks
-To run standalone evaluation across benchmark datasets (NanoBEIR, BEIR, Robust04, TREC-DL):
-```bash
-uv run experimaestro run-experiment src/Evaluation/cross-encoders_from_experiment.yaml
-```
-
----
-
-## 📊 Results & Analysis
-
-Interactive notebooks for reproducing the tables and figures in the paper are provided:
-- **[`CrossEncoderResults.ipynb`](CrossEncoderResults.ipynb)**: Cross-encoder distillation comparison, scaling laws, and loss function impact.
-- **[`MiceResults.ipynb`](MiceResults.ipynb)** & **[`MiceV2Results.ipynb`](MiceV2Results.ipynb)**: Efficiency vs. effectiveness Pareto analysis of MICE early-exit and cascaded re-rankers.
-
----
-
-## 📑 Citation
-
-If you use this codebase or our pretrained models, please cite:
 
 ```bibtex
 @misc{morand2026reproducingcomparingdistillationtechniques,
