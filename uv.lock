@@ -563,7 +563,7 @@ requires-dist = [
     { name = "datamaestro-ir" },
     { name = "datasets", specifier = ">=5.0.0" },
     { name = "experimaestro", specifier = ">=2.1.0" },
-    { name = "experimaestro-ir", extras = ["neural"] },
+    { name = "experimaestro-ir", extras = ["neural"], git = "https://github.com/experimaestro/experimaestro-ir.git?tag=v1.5.0" },
     { name = "fast-plaid", specifier = ">=1.5.0" },
     { name = "impact-index", specifier = ">=1.7.0" },
     { name = "ir-datasets", git = "https://github.com/bpiwowar/ir_datasets.git" },
@@ -724,21 +724,6 @@ wheels = [
 ]
 
 [[package]]
-name = "datamaestro-text"
-version = "2026.4.22"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "attrs", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "datamaestro", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "experimaestro", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "ir-datasets", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/86/3a/df852e292b2214d4569e992711e02b5e6b5e4710ac96fcee84badd8d2ffe/datamaestro_text-2026.4.22.tar.gz", hash = "sha256:3460ded8a6ecd23c8a51583feaa355314676f08847a15e8880d5072c41302900", size = 64738, upload-time = "2026-04-22T16:37:33.381Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/20/37/2dff69ec2929116bf3937880c96ba6068ee766ab329b9653cb692750d23c/datamaestro_text-2026.4.22-py3-none-any.whl", hash = "sha256:a5c175a776469a231f9669201d37ffb3b375f3c487538f932d46350e6828c7c4", size = 95754, upload-time = "2026-04-22T16:37:32.014Z" },
-]
-
-[[package]]
 name = "datasets"
 version = "5.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -878,24 +863,25 @@ wheels = [
 
 [[package]]
 name = "experimaestro-ir"
-version = "1.2.0"
-source = { registry = "https://pypi.org/simple" }
+version = "1.5.0"
+source = { git = "https://github.com/experimaestro/experimaestro-ir.git?tag=v1.5.0#6ec77e597448a2d91409651bbb112c10140d2b9d" }
 dependencies = [
     { name = "attrs", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "datamaestro", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "datamaestro-text", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "datamaestro-ir", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "docstring-parser", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "experimaestro", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "ir-datasets", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "impact-index", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "ir-measures", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "omegaconf", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "pandas", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "pytest", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "python-dotenv", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "pytorch-lightning", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "toma", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "xpmir-rust", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/eb/24b6d4f0eb12cd66aad487b139047dfe737dbfbdce92317a90780545139d/experimaestro-ir-1.2.0.tar.gz", hash = "sha256:6ac3999e57288733bf6df024a6d1be790b2ce4c0c908b37491c00308a1a02430", size = 139235, upload-time = "2023-12-08T16:45:03.444Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/23/36784a4b410b8c7882ae40186e107f4ec4940e23feed30feba1bfd667bfe/experimaestro_ir-1.2.0-py3-none-any.whl", hash = "sha256:4027542ce0fb2bb9bf581847bb7c356e1b9322ac20e3a97a63845a615c16bb62", size = 159124, upload-time = "2023-12-08T16:45:00.08Z" },
+    { name = "transformers", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "xpm-torch", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [package.optional-dependencies]
@@ -4520,16 +4506,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a3/54/1ae6b51634d1761a436d4140ac3bccdd9cd6a3d330c4e1f7b6d7b513914c/xpm_torch-0.3.1.tar.gz", hash = "sha256:74c0fd579ba5e191f42dc3fcf589140ede3a6b8e10a4757fdc915c7bbd299dda", size = 303791, upload-time = "2026-10-22T14:10:57.404Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3e/e4/4247fe99861ba693a947718bed87ae3285c3c0783cd753651e1d2ba3b4c6/xpm_torch-0.3.1-py3-none-any.whl", hash = "sha256:c8febd4dab691d36c0c75af482941567cb52a8dc518bc8a0aa8be413ac932b54", size = 72061, upload-time = "2026-10-22T14:10:55.791Z" },
-]
-
-[[package]]
-name = "xpmir-rust"
-version = "0.20.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2c/0b/7802c38e2e412ac5a9a513465303718d729db2e4e8fe750695a3363eaec6/xpmir_rust-0.20.0.tar.gz", hash = "sha256:c8add7d912415b24d5ecb6a72f8dec0efaab7d223bffcb677dc780b2eaf4ae90", size = 31213, upload-time = "2023-01-14T10:26:45.594Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e7/ec/ce92f36c1ac6659d2175b5d37499a6dda565c89b8bed235358b3e30221da/xpmir_rust-0.20.0-cp38-abi3-macosx_10_9_x86_64.macosx_11_0_arm64.macosx_10_9_universal2.whl", hash = "sha256:986066916e310e3a9b10e9a02df42288324582ca3925c007f21cbda815369582", size = 659218, upload-time = "2023-01-14T10:26:42.449Z" },
-    { url = "https://files.pythonhosted.org/packages/45/c9/a154e32a276e749a30b0bb6b73f102fe16319d0e21cd0bfb30586823271d/xpmir_rust-0.20.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9d4d1f289e88cadc624f1f1b0a5f735c43dfd9912c1132f5ca6e708dcb13e60e", size = 1166287, upload-time = "2023-01-14T10:26:44.289Z" },
 ]
 
 [[package]]
