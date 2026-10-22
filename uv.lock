@@ -1017,7 +1017,7 @@ neural = [
 requires-dist = [
     { name = "attrs" },
     { name = "datamaestro", specifier = ">=0.2.3" },
-    { name = "datamaestro-ir", specifier = ">=0.2.0" },
+    { name = "datamaestro-ir", specifier = ">=0.5.0" },
     { name = "docstring-parser" },
     { name = "experimaestro", specifier = ">=2.4.0" },
     { name = "fast-plaid", marker = "extra == 'fast-plaid'" },
@@ -1036,7 +1036,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'neural'", specifier = ">=2.10" },
     { name = "transformers", specifier = ">=5.8.1" },
     { name = "transformers", marker = "extra == 'neural'" },
-    { name = "xpm-torch", specifier = ">=0.2.0" },
+    { name = "xpm-torch", specifier = ">=0.3.0" },
 ]
 provides-extras = ["anserini", "fast-plaid", "neural"]
 

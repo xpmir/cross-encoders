@@ -11,7 +11,7 @@ from datamaestro import prepare_dataset
 from datamaestro_ir.config.cross_encoder.ettin_reranker_v1_data import CONFIGS
 
 # Set up logging
-from logging_utils import setup_logging
+from xp_utils import setup_logging
 setup_logging(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

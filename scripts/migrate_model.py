@@ -5,7 +5,7 @@ import logging, shutil
 from pathlib import Path
 from experimaestro import Config
 
-from logging_utils import setup_logging
+from xp_utils import setup_logging
 setup_logging(level=logging.INFO)
 
 xps_root = Path.home() / "code" / "experiments" / "JZ"

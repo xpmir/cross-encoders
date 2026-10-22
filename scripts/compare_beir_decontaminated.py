@@ -11,11 +11,11 @@ from pathlib import Path
 
 from datamaestro import prepare_dataset
 
-# Add src to python path for logging_utils
+# Add src to python path for xp_utils
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 try:
-    from logging_utils import setup_logging
+    from xp_utils import setup_logging
 
     setup_logging(level=logging.INFO)
 except ImportError:
@@ -193,7 +193,7 @@ def main():
 
     log_level = logging.DEBUG if args.debug else logging.INFO
     try:
-        from logging_utils import setup_logging
+        from xp_utils import setup_logging
 
         setup_logging(level=log_level)
     except ImportError:

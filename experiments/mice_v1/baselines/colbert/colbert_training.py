@@ -20,7 +20,7 @@ from format import (
     backbone_names_lower,
 )
 
-from logging_utils import setup_logging
+from xp_utils import setup_logging
 
 setup_logging(level=logging.INFO)
 

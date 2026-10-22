@@ -36,7 +36,7 @@ class TestMiceForwardTask(LightweightTask):
 
 
 def test_global_cls_token_all():
-    from logging_utils import setup_logging
+    from xp_utils import setup_logging
 setup_logging(level=logging.INFO)
 
     model_ids = [

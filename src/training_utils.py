@@ -655,6 +655,17 @@ def export_model(
                         action_inst.loader.model._tb_path = tb_log_path
 
             action_inst.export_to_folder(best_model_path)
+
+            # Hydrate predecessor task stubs and anonymize cluster paths in experimaestro.json
+            from xp_utils import sanitize_and_hydrate_model_export
+
+            try:
+                sanitize_and_hydrate_model_export(best_model_path)
+            except Exception as e:
+                logger.warning(
+                    f"Failed to sanitize and hydrate experimaestro.json in {best_model_path}: {e}",
+                    exc_info=True,
+                )
     else:
         logger.warning(f"Could not find model task for tags {best_tags} in all_weights")
 

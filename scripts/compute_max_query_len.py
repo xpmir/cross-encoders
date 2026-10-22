@@ -3,7 +3,7 @@ import logging
 from xpmir.text.huggingface.tokenizers import HFTokenizer
 from format import aggregations
 
-from logging_utils import setup_logging
+from xp_utils import setup_logging
 setup_logging(level=logging.INFO)
 
 if __name__ == '__main__':

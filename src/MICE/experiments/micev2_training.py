@@ -52,7 +52,7 @@ from MICE.modeling.mice_v2.modernbert_xpm import (
     InitMICEV2FromCheckpoint,
     InitEvalSparsityHook,
 )
-from logging_utils import setup_logging
+from xp_utils import setup_logging
 
 setup_logging(level=logging.INFO)
 

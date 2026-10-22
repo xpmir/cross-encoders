@@ -54,7 +54,7 @@ from sentence_transformers.cross_encoder import CrossEncoderModelCardData
 from sentence_transformers.models import Transformer, Pooling, Dense, LayerNorm
 from torch import nn
 
-from logging_utils import setup_logging
+from xp_utils import setup_logging
 
 setup_logging(level=logging.INFO)
 

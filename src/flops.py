@@ -17,7 +17,7 @@ from models.mask_scorer import HFMaskedMiniLMCrossScorer, HFMaskedEttinCrossScor
 import logging
 
 # Setup logging
-from logging_utils import setup_logging
+from xp_utils import setup_logging
 
 setup_logging(level=logging.WARNING)
 logger = logging.getLogger(__name__)

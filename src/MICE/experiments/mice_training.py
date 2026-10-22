@@ -49,7 +49,7 @@ from training_utils import (
     find_checkpoint,
 )
 
-from logging_utils import setup_logging
+from xp_utils import setup_logging
 
 setup_logging(level=logging.INFO)
 

@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import logging
 
 # Configure logging
-from logging_utils import setup_logging
+from xp_utils import setup_logging
 setup_logging(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
