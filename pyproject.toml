@@ -17,7 +17,7 @@ dependencies = [
     "pandas>=3.0.0",
     "tabulate>=0.9.0",
     "transformers[kernels]>=5.0.0",
-    "xpm-torch>=0.2.0",
+    "xpm-torch>=0.3.0",
     "torch",
     "accelerate>=1.13.0",
     "tiktoken>=0.12.0",
@@ -26,6 +26,7 @@ dependencies = [
     "fast-plaid>=1.5.0",
     "datasets>=5.0.0",
     "impact-index>=1.7.0",
+    "xpm-mlboard>=0.2.0",
 ]
 
 [tool.setuptools]

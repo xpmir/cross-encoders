@@ -15,7 +15,6 @@ from xpmir.text.encoders import (
 )
 from xpmir.neural.huggingface import HFCrossScorer, InitCEFromHFID
 from xpm_torch.utils import to_device
-from xpm_torch.trainers import TrainerContext
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +65,6 @@ class PreTTRCrossEncoder(HFCrossScorer):
         tokenized: Optional[TokenizedTexts] = None,
         doc_hidden_states: Optional[torch.Tensor] = None,
         doc_mask: Optional[torch.Tensor] = None,
-        info: Optional[TrainerContext] = None,
         **kwargs,
     ):
         if inputs is None and tokenized is None:

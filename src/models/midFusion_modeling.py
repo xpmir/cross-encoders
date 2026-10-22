@@ -6,7 +6,6 @@ import torch.nn as nn
 from experimaestro import field, Constant, Param
 from datamaestro_text.data.ir import TextItem
 from transformers import GradientCheckpointingLayer
-from xpmir.learning.context import TrainerContext
 from xpmir.letor.records import BaseRecords
 from xpmir.rankers import LearnableScorer
 from configuration import PoolingMethod
@@ -389,7 +388,6 @@ class MiniLMMidFusionCrossEncoder(MidFusionCrossEncoder):
     def forward(
         self,
         inputs: BaseRecords,
-        info: TrainerContext = None,
         tokenized_queries: Optional[dict] = None,
         tokenized_docs: Optional[dict] = None,
         doc_hidden_states: Optional[torch.Tensor] = None,
@@ -909,7 +907,7 @@ class EttinMidFusionCrossEncoder(MidFusionCrossEncoder):
 
         return x
 
-    def forward(self, inputs: BaseRecords, info: TrainerContext = None):
+    def forward(self, inputs: BaseRecords):
         # Prepare inputs
         queries = [t[TextItem].text for t in inputs.topics]
         docs = [d[TextItem].text for d in inputs.documents]

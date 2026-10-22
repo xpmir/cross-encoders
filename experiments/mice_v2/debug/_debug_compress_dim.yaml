@@ -14,7 +14,7 @@ bottom_final_norm: false
 top_final_norm: false
 normalize_doc_embeds: true
 
-learner: 
+learner:
     # For the first debug version first try shorter things.
     optimization:
         max_epochs: 1500
@@ -33,7 +33,7 @@ retrieval:
 
 
 grid_search:
-    config_dicts: 
+    config_dicts:
         - {compress_dim: 1.0, compress_init_option: "seed"}
         - {compress_dim: 1.0, compress_init_option: "random"}
         - {compress_dim: 1.333333333, compress_init_option: "random"}

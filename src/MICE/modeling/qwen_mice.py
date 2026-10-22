@@ -5,7 +5,6 @@ from transformers import AutoModelForCausalLM
 
 from experimaestro import field, Param, LightweightTask
 from xpm_torch.utils import to_device
-from xpm_torch.trainers import TrainerContext
 from xpmir.letor.records import BaseItems
 
 from .mice import MiceCrossEncoder, MICETokenizedTexts
@@ -478,7 +477,6 @@ class QwenMiceCrossEncoder(MiceCrossEncoder):
         self,
         inputs: Optional[BaseItems] = None,
         tokenized: Optional[MICETokenizedTexts] = None,
-        info: Optional[TrainerContext] = None,
         **kwargs,
     ):
         if tokenized is None:

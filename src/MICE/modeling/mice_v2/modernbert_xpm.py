@@ -435,22 +435,18 @@ class UtilityRegularizer(TrainingHook):
             for k, v in split_metrics.items():
                 info.metrics.add(ScalarMetric(k, float(v.item()), nrecords))
 
-        # Log TensorBoard histogram at validation interval boundaries
-        writer = (
-            getattr(info, "writer", None)
-            or getattr(info, "_writer", None)
-            or getattr(info, "_writer", None)
-        )
+        # Log histogram at interval boundaries
+        metrics_logger = getattr(info, "metrics_logger", None)
         if (
             self.histogram_interval > 0
-            and writer is not None
+            and metrics_logger is not None
             and (info.state.step % self.histogram_interval == 0)
             and valid_utilities.numel() > 0
         ):
-            writer.add_histogram(
+            metrics_logger.log_histogram(
                 "train/utility/distribution",
-                valid_utilities.detach(),
-                global_step=info.state.step,
+                valid_utilities.detach().float().cpu().numpy(),
+                step=info.state.step,
             )
 
 
@@ -625,23 +621,23 @@ class GatedValueRegularizer(TrainingHook):
             for k, v in split_metrics.items():
                 info.metrics.add(ScalarMetric(k, float(v.item()), nrecords))
 
-        # Log TensorBoard histograms
-        writer = getattr(info, "writer", None) or getattr(info, "_writer", None)
+        # Log histograms
+        metrics_logger = getattr(info, "metrics_logger", None)
         if (
             self.histogram_interval > 0
-            and writer is not None
+            and metrics_logger is not None
             and (info.state.step % self.histogram_interval == 0)
             and valid_v_norms.numel() > 0
         ):
-            writer.add_histogram(
+            metrics_logger.log_histogram(
                 "train/value_norm/distribution",
-                valid_v_norms.detach(),
-                global_step=info.state.step,
+                valid_v_norms.detach().float().cpu().numpy(),
+                step=info.state.step,
             )
-            writer.add_histogram(
+            metrics_logger.log_histogram(
                 "train/utility/distribution",
-                valid_utilities.detach(),
-                global_step=info.state.step,
+                valid_utilities.detach().float().cpu().numpy(),
+                step=info.state.step,
             )
 
 
@@ -1687,7 +1683,6 @@ class ModernBertMiceScorer(AbstractModuleScorer):
         inputs: Optional[BaseItems] = None,
         tokenized: Optional[MICETokenizedTexts] = None,
         doc_hidden_states: Optional[List[torch.Tensor]] = None,
-        info: Optional[TrainerContext] = None,
     ) -> torch.Tensor:
         if inputs is None and tokenized is None:
             raise ValueError("Either raw inputs or tokenized inputs must be provided.")
@@ -1736,25 +1731,38 @@ class ModernBertMiceScorer(AbstractModuleScorer):
             )
             target_doc_mask = tokenized_docs.mask
 
-        if info is not None and getattr(out, "utilities", None) is not None:
-            for hook in info.hooks(UtilityRegularizer):
-                hook(
-                    info,
-                    out.utilities,
-                    doc_mask=target_doc_mask,
-                    p_active=getattr(out, "p_active", None),
-                    doc_hidden=getattr(out, "doc_hidden", None),
-                    hf_model=self.hf_model,
-                )
+        info = TrainerContext.current()
 
-            for hook in info.hooks(GatedValueRegularizer):
-                hook(
-                    info,
-                    self.hf_model,
-                    out.utilities,
-                    getattr(out, "doc_hidden", None),
-                    doc_mask=target_doc_mask,
+        if info is not None:
+            if getattr(out, "utilities", None) is not None:
+                for hook in info.hooks(UtilityRegularizer):
+                    hook(
+                        info,
+                        out.utilities,
+                        doc_mask=target_doc_mask,
+                        p_active=getattr(out, "p_active", None),
+                        doc_hidden=getattr(out, "doc_hidden", None),
+                        hf_model=self.hf_model,
+                    )
+
+                for hook in info.hooks(GatedValueRegularizer):
+                    hook(
+                        info,
+                        self.hf_model,
+                        out.utilities,
+                        getattr(out, "doc_hidden", None),
+                        doc_mask=target_doc_mask,
+                    )
+        elif self.training and getattr(out, "utilities", None) is not None:
+            if not getattr(self, "_warned_missing_context", False):
+                logger.warning(
+                    "[ModernBertMiceScorer] Model is in training mode (self.training=True) and "
+                    "utilities were computed, but no active TrainerContext was found via "
+                    "TrainerContext.current(). Regularization hooks (UtilityRegularizer, "
+                    "GatedValueRegularizer) will NOT execute! "
+                    "Wrap your execution block in 'with context:' or 'with context.losses():'."
                 )
+                self._warned_missing_context = True
 
         if (
             not self.training

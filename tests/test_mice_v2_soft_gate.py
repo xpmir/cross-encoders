@@ -5,6 +5,7 @@ Run with: `uv run pytest tests/test_mice_v2_soft_gate.py -v`
 
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 import pytest
 import torch
 
@@ -25,7 +26,7 @@ from MICE.modeling.mice_v2.modernbert_xpm import (
 )
 from xpmir.letor.records import PointwiseItems
 from xpm_torch.trainers import TrainerContext
-from xpm_torch.metrics import Metrics
+from xpm_torch.metrics import Metrics, MetricsLogger
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -100,11 +101,14 @@ def test_utility_regularizer_histogram_logging():
 
     histogram_calls = []
 
-    class MockWriter:
-        def add_histogram(self, tag, values, global_step=None):
-            histogram_calls.append((tag, values.shape, global_step))
+    class MockLogger(MetricsLogger):
+        def log_scalar(self, tag: str, value: float, step: int) -> None:
+            pass
 
-    context._writer = MockWriter()
+        def log_histogram(self, tag: str, values: object, step: int) -> None:
+            histogram_calls.append((tag, getattr(values, "shape", None), step))
+
+    context._logger = MockLogger()
 
     # Step 50: step % 100 != 0 -> should NOT log histogram
     context.state.steps = 50
@@ -119,6 +123,47 @@ def test_utility_regularizer_histogram_logging():
     assert len(histogram_calls) == 1
     assert histogram_calls[0][0] == "train/utility/distribution"
     assert histogram_calls[0][2] == 100
+
+
+def test_utility_regularizer_bfloat16_histogram_logging():
+    """Test UtilityRegularizer does not crash with TypeError: Got unsupported ScalarType BFloat16."""
+    import numpy as np
+
+    reg_hook = UtilityRegularizer.C(lambda_reg=0.1, histogram_interval=100)
+
+    # utilities in bfloat16
+    utilities = torch.rand((4, 16, 1), dtype=torch.bfloat16)
+    doc_mask = torch.ones((4, 16), dtype=torch.long)
+
+    context = TrainerContext(
+        logpath=Path("/tmp/logs"),
+        path=Path("/tmp/ckpts"),
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    context.metrics = Metrics()
+
+    histogram_calls = []
+
+    class MockLogger(MetricsLogger):
+        def log_scalar(self, tag: str, value: float, step: int) -> None:
+            pass
+
+        def log_histogram(self, tag: str, values: object, step: int) -> None:
+            histogram_calls.append((tag, getattr(values, "dtype", None), step))
+
+    context._logger = MockLogger()
+    context.state.steps = 100
+    with context.losses():
+        reg_hook(context, utilities, doc_mask=doc_mask)
+
+    assert len(histogram_calls) == 1
+    assert histogram_calls[0][0] == "train/utility/distribution"
+    assert histogram_calls[0][1] == np.float32
 
 
 def test_modernbert_hf_soft_gate():
@@ -191,7 +236,7 @@ def test_modernbert_xpm_soft_gate_and_hook():
         context.add_hook(reg_hook)
 
         with context.losses() as losses:
-            output = scorer(input_records, info=context)
+            output = scorer(input_records)
             assert output.shape == (2,), f"Expected output shape (2,), got {output.shape}"
 
         # Verify UtilityRegularizer registered loss in context
@@ -1031,3 +1076,186 @@ def test_modernbert_statelessness_no_side_channels():
     assert not hasattr(model, "last_doc_hidden")
     assert not hasattr(model, "pruned_utilities")
     assert not hasattr(model.utility_predictor, "last_p_active")
+
+
+def test_ambient_trainer_context_lifecycle_and_warning(tmp_path, caplog):
+    """Test TrainerContext.current() ambient context lifecycle and loud warning when missing in train mode."""
+    scorer_cfg, init_tasks = mice_v2_scorer(
+        hf_id="jhu-clsp/ettin-encoder-17m",
+        n_contextualization_layers=2,
+        utility_pred=True,
+    )
+    for task in init_tasks:
+        inst_task = task.instance()
+        inst_task.execute()
+        scorer = inst_task.scorer
+
+    # 1. Outside context: TrainerContext.current() must be None
+    assert TrainerContext.current() is None
+
+    context = TrainerContext(
+        logpath=tmp_path / "logs",
+        path=tmp_path / "ckpts",
+        max_epoch=1,
+        steps_per_epoch=10,
+        trainer=None,
+        model=scorer,
+        optimizer=None,
+        fabric=None,
+    )
+    context.metrics = Metrics()
+    reg_hook = UtilityRegularizer.C(lambda_reg=0.1)
+    context.add_hook(reg_hook)
+
+    # 2. Inside with context: TrainerContext.current() is active
+    with context:
+        assert TrainerContext.current() is context
+    assert TrainerContext.current() is None
+
+    # 3. Inside with context.losses(): TrainerContext.current() is active and hook executes
+    input_records = PointwiseItems.from_texts(
+        topics=["What is MICE?"],
+        documents=["MICE is a contextual compression cross-encoder."],
+    )
+
+    with context.losses() as losses:
+        assert TrainerContext.current() is context
+        out = scorer(input_records)
+        assert out.shape == (1,)
+    assert len(losses) == 1
+    assert losses[0].name == "utility_reg"
+    assert TrainerContext.current() is None
+
+    # 4. Loud warning when model is in train mode (scorer.train()) and called outside context
+    scorer.train()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        out_train = scorer(input_records)
+        assert out_train.shape == (1,)
+    assert any(
+        "Regularization hooks (UtilityRegularizer, GatedValueRegularizer) will NOT execute"
+        in record.message
+        for record in caplog.records
+    )
+
+
+def test_reentrant_ambient_context_and_learner_simulation(tmp_path):
+    """Test that Context is fully re-entrant across epoch, step, and losses scopes without token reuse errors."""
+    mock_optimizer = MagicMock()
+    context = TrainerContext(
+        logpath=tmp_path / "logs",
+        path=tmp_path / "ckpts",
+        max_epoch=2,
+        steps_per_epoch=3,
+        trainer=None,
+        model=torch.nn.Linear(10, 1),
+        optimizer=mock_optimizer,
+        fabric=None,
+    )
+
+    # 1. Multi-level nested re-entrancy
+    assert TrainerContext.current() is None
+    with context:
+        assert TrainerContext.current() is context
+        with context:
+            assert TrainerContext.current() is context
+            with context.losses():
+                assert TrainerContext.current() is context
+            assert TrainerContext.current() is context
+        assert TrainerContext.current() is context
+    assert TrainerContext.current() is None
+
+    # 2. Learner training loop simulation: epoch scope -> step -> losses across multiple epochs/batches
+    for epoch in range(2):
+        with context:
+            assert TrainerContext.current() is context
+            for b in range(3):
+                metrics = Metrics()
+                with context.step(metrics):
+                    assert TrainerContext.current() is context
+                    for microbatch in range(2):
+                        with context.losses() as losses:
+                            assert TrainerContext.current() is context
+                            assert isinstance(losses, list)
+                    assert TrainerContext.current() is context
+            assert TrainerContext.current() is context
+        # Outside epoch (e.g. during validation / listeners):
+        assert TrainerContext.current() is None
+
+
+def test_activation_checkpointing_backward_guard(tmp_path):
+    """Test that activation checkpointing recompute during backward does not duplicate losses/metrics or fail assertions."""
+    from torch.utils.checkpoint import checkpoint
+    from xpm_torch.losses import Loss
+
+    context = TrainerContext(
+        logpath=tmp_path / "logs",
+        path=tmp_path / "ckpts",
+        max_epoch=1,
+        steps_per_epoch=1,
+        trainer=None,
+        model=None,
+        optimizer=MagicMock(),
+        fabric=None,
+    )
+    context.metrics = Metrics()
+
+    loss_call_count = 0
+
+    class DummyCheckpointModule(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(8, 8)
+
+        def forward(self, x):
+            nonlocal loss_call_count
+            ctx = TrainerContext.current()
+            if ctx is not None:
+                loss_call_count += 1
+                dummy_loss = (self.linear(x) * 0.0).sum()
+                ctx.add_loss(Loss("dummy_reg", 0.1, dummy_loss))
+            return self.linear(x)
+
+    module = DummyCheckpointModule()
+    x = torch.randn(2, 8, requires_grad=True)
+
+    with context:  # epoch level
+        with context.losses() as losses:
+            out = checkpoint(module, x, use_reentrant=True)
+            main_loss = out.sum()
+            total_loss = main_loss + sum(l.weight * l.value for l in losses)
+
+        assert loss_call_count == 1
+        assert len(losses) == 1
+        # Backward triggers checkpoint recompute of forward; guard must silently bypass add_loss:
+        context.backward(total_loss)
+        assert len(losses) == 1
+
+
+def test_metrics_logger_histogram_and_null_logger(tmp_path):
+    """Test MetricsLogger.log_histogram on TensorboardLogger and NullMetricsLogger, plus writer property."""
+    from xpm_torch.loggers import TensorboardLogger, NullMetricsLogger
+    import numpy as np
+
+    null_logger = NullMetricsLogger()
+    null_logger.log_histogram("test/tag", np.zeros(10), step=1)
+    null_logger.log_scalar("test/scalar", 1.0, step=1)
+
+    tb_logger = TensorboardLogger(tmp_path / "tb")
+    tb_logger.log_histogram("test/hist", np.random.randn(20), step=1)
+    tb_logger.log_scalar("test/val", 0.42, step=1)
+    assert tb_logger.writer is not None
+    tb_logger.close()
+
+    context = TrainerContext(
+        logpath=tmp_path / "logs",
+        path=tmp_path / "ckpts",
+        max_epoch=1,
+        steps_per_epoch=1,
+        trainer=None,
+        model=None,
+        optimizer=None,
+        fabric=None,
+    )
+    assert context.writer is not None
+    assert context.metrics_logger is not None

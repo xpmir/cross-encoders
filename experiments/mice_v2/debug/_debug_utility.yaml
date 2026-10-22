@@ -1,38 +1,16 @@
-id: debug_mice_v2_utility
+id: debug_mice_v2_l0reg
 title: "Debugging Mice V2 training"
 description:
     💡 Debug config for ModernBERT Mice V2 training using ettin-encoder-17m
 
 module: MICE.experiments.micev2_training
-export_trained_models: false
-parent: ./_ettin68m_abl.yaml
-
-
+parent: ../_ettin68m_abl.yaml
 nb_repetitions: 1
+
 base: cross-encoder/ettin-reranker-68m-v1
-top_layers_doc_ln: true
-
-retrieval:
-    #fast evals don't need multiple GPUs
-    # requirements: duration=20h & cpu(cores=16) & cuda(mem=30G) * 2
-    requirements: duration=2h & cpu(cores=8) & cuda(mem=50G) # debug on H100
-    long_requirements: duration=2h & cpu(cores=16) & cuda(mem=40G) * 2
-
 
 learner:
-    loss: marginMSE
-    optimization:
-        lr: 7e-5 # best value for Mice-Ettin-68m (v1)
-        re_no_l2_regularization: ['\.bias$', '(?i)norm' ]
-        batch_size: 64
-    requirements: duration=10h & cpu(mem=10G) & cuda(mem=40G)
-
-
-# Tokenization settings for all models, ensuring fair comparison
-max_length: null #This is useless (independent max_query / doc len) but kept for identity with other configs
-max_query_length: 32
-max_doc_length: 512
-pref_attn_implementation: sdpa
+    requirements: duration=2h & cpu(cores=8, mem=10G) & cuda(mem=40G)
 
 
 # Eval only on BEIR
@@ -40,7 +18,7 @@ eval_sparsity: true
 evaluation: #default = Minified tests
     eval_checkpoint: "last"
     all_datasets: false
-    in_domain: true
+    in_domain: false
     beir13: false
 
 #Utility settings for pruning
@@ -67,6 +45,5 @@ grid_search:
         - {lambda_reg: 0.1, gate_target: h, use_hard_concrete: false, phase2_training: true, temp_start: 1.0, utility_bias: 3.0} # 2-phase soft gate h
         - {lambda_reg: 0.1, gate_target: v, use_hard_concrete: false, phase2_training: true, temp_start: 1.0, utility_bias: 3.0} # 2-phase value-only gate v
         # Hard Concrete tests
-        - {lambda_reg: 0.1, gate_target: v, use_hard_concrete: true, phase2_training: false, temp_start: 1.0, utility_bias: 3.0} # single-phase hard concrete L0 (initial test: saturated)
         - {lambda_reg: 1.0, gate_target: v, use_hard_concrete: true, phase2_training: false, temp_start: 2.0, utility_bias: 3.0} # single-phase hard concrete L0 (temp 2.0 test)
         - {lambda_reg: 1.0, gate_target: v, use_hard_concrete: true, phase2_training: false, temp_start: 0.67, utility_bias: 0.0} # Louizos et al: beta=2/3, bias=0.0, lambda=1.0
