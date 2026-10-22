@@ -209,6 +209,9 @@ class Evaluation:
     lotte_search: bool = False
     """Whether to evaluate on all LOTTE Search datasets"""
 
+    lotte: bool = False
+    """Alias for lotte_search"""
+
     robust04: bool = False
     """Whether to evaluate on Robust04"""
 

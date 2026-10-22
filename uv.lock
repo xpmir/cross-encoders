@@ -562,7 +562,7 @@ requires-dist = [
     { name = "datamaestro" },
     { name = "datamaestro-ir" },
     { name = "datasets", specifier = ">=5.0.0" },
-    { name = "experimaestro", specifier = ">=2.1.0" },
+    { name = "experimaestro", git = "https://github.com/experimaestro/experimaestro-python.git" },
     { name = "experimaestro-ir", extras = ["neural"], git = "https://github.com/experimaestro/experimaestro-ir.git?tag=v1.5.0" },
     { name = "fast-plaid", specifier = ">=1.5.0" },
     { name = "impact-index", specifier = ">=1.7.0" },
@@ -826,8 +826,8 @@ wheels = [
 
 [[package]]
 name = "experimaestro"
-version = "2.7.0"
-source = { registry = "https://pypi.org/simple" }
+version = "2.7.1.dev108"
+source = { git = "https://github.com/experimaestro/experimaestro-python.git#ec8908f6b587a298ba1bc0bf1a166b34c03c76d6" }
 dependencies = [
     { name = "arpeggio", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "attrs", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -855,10 +855,6 @@ dependencies = [
     { name = "tqdm", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "uvicorn", extra = ["standard"], marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "watchdog", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/da/57/c926bc2b88d195834e3a15d1c04d0e273bd4e50bdf8b78b752c7c8b66459/experimaestro-2.7.0.tar.gz", hash = "sha256:4ca813a7bc154abdb9088bd09604c61b2a977712fcdbf74ecfc5fd4b3b5796da", size = 2383712, upload-time = "2026-10-07T16:07:52.34Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/c0/25bb38172a7361b7b20b97df5b9e4706005925f7fcb6540dfca516284e4d/experimaestro-2.7.0-py3-none-any.whl", hash = "sha256:f2f6e3e7afdd0fa0ff67349671d4d6df7a2a41c4357979f06f595209063ba832", size = 1757600, upload-time = "2026-10-07T16:07:50.488Z" },
 ]
 
 [[package]]

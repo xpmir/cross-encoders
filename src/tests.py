@@ -810,7 +810,7 @@ def build_tests(
         targets.append("beir13_decontaminated")
     if cfg.robust04:
         targets.append("robust04")
-    if cfg.lotte_search or getattr(cfg, "lotte", False):
+    if cfg.lotte_search or cfg.lotte:
         targets.append("lotte")
     if cfg.nanobeir:
         targets.append("nano_beir")
