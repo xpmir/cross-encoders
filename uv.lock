@@ -978,7 +978,7 @@ provides-extras = ["carbon", "dev", "docs", "huggingface", "ssh"]
 browser = [{ name = "playwright", specifier = ">=1.50" }]
 dev = [
     { name = "mkdocs", specifier = ">=1.6.1" },
-    { name = "ruff", specifier = ">=0.8" },
+    { name = "ruff", specifier = ">=0.17" },
     { name = "vulture", specifier = ">=2.14" },
 ]
 

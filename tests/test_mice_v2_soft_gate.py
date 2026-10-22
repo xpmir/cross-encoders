@@ -1259,3 +1259,43 @@ def test_metrics_logger_histogram_and_null_logger(tmp_path):
     )
     assert context.writer is not None
     assert context.metrics_logger is not None
+
+
+def test_cross_attention_dtype_preservation():
+    """Test that value-only gating does not upcast bfloat16 attention states to float32."""
+    from MICE.modeling.mice_v2.modernbert_hf import ModernBertMiceCrossAttention
+
+    config = ModernBertMiceConfig(
+        hidden_size=128,
+        num_attention_heads=4,
+        gate_target="v",
+        _attn_implementation="sdpa",
+    )
+    cross_attn = ModernBertMiceCrossAttention(config, layer_idx=0).to(torch.bfloat16)
+
+    # Simulate mixed precision: representations in bfloat16, utilities in float32
+    q_hidden = torch.randn(2, 16, 128, dtype=torch.bfloat16)
+    d_hidden = torch.randn(2, 32, 128, dtype=torch.bfloat16)
+    d_utilities = torch.rand(2, 32, 1, dtype=torch.float32)
+
+    # Test 3D padded path
+    out = cross_attn(q_hidden, d_hidden, d_utilities=d_utilities)
+    assert out.dtype == torch.bfloat16, f"Expected output dtype bfloat16, got {out.dtype}"
+
+    # Test varlen unpadded path simulation
+    q_unpad = torch.randn(1, 16, 128, dtype=torch.bfloat16)
+    d_unpad = torch.randn(1, 32, 128, dtype=torch.bfloat16)
+    d_utils_unpad = torch.rand(1, 32, 1, dtype=torch.float32)
+    cu_q = torch.tensor([0, 16], dtype=torch.int32)
+    cu_d = torch.tensor([0, 32], dtype=torch.int32)
+
+    out_varlen = cross_attn(
+        q_unpad,
+        d_unpad,
+        d_utilities=d_utils_unpad,
+        cu_seqlens_q=cu_q,
+        cu_seqlens_d=cu_d,
+        max_seqlen_q=16,
+        max_seqlen_d=32,
+    )
+    assert out_varlen.dtype == torch.bfloat16, f"Expected varlen output dtype bfloat16, got {out_varlen.dtype}"

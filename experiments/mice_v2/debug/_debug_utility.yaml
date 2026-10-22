@@ -41,9 +41,10 @@ temp_end: 0.1 # not ok with new LR = 7e-5, but ok with LR = 3e-5 (v1)
 
 grid_search:
     config_dicts:
-        - {lambda_reg: 0.0, gate_target: h, use_hard_concrete: false, phase2_training: true, temp_start: 1.0, utility_bias: 3.0} # baseline - no pruning
-        - {lambda_reg: 0.1, gate_target: h, use_hard_concrete: false, phase2_training: true, temp_start: 1.0, utility_bias: 3.0} # 2-phase soft gate h
-        - {lambda_reg: 0.1, gate_target: v, use_hard_concrete: false, phase2_training: true, temp_start: 1.0, utility_bias: 3.0} # 2-phase value-only gate v
         # Hard Concrete tests
         - {lambda_reg: 1.0, gate_target: v, use_hard_concrete: true, phase2_training: false, temp_start: 2.0, utility_bias: 3.0} # single-phase hard concrete L0 (temp 2.0 test)
         - {lambda_reg: 1.0, gate_target: v, use_hard_concrete: true, phase2_training: false, temp_start: 0.67, utility_bias: 0.0} # Louizos et al: beta=2/3, bias=0.0, lambda=1.0
+        # Two phase soft gating tests
+        - {lambda_reg: 0.0, gate_target: h, use_hard_concrete: false, phase2_training: true, temp_start: 1.0, utility_bias: 3.0} # baseline - no pruning
+        - {lambda_reg: 0.1, gate_target: h, use_hard_concrete: false, phase2_training: true, temp_start: 1.0, utility_bias: 3.0} # 2-phase soft gate h
+        - {lambda_reg: 0.1, gate_target: v, use_hard_concrete: false, phase2_training: true, temp_start: 1.0, utility_bias: 3.0} # 2-phase value-only gate v

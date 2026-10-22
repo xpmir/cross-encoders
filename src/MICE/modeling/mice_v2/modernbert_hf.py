@@ -228,7 +228,7 @@ class UtilityPredictor(nn.Module):
         beta = max(float(self.temperature.item()), 1e-4)
 
         if not self.use_hard_concrete:
-            u = torch.sigmoid(logits / beta)
+            u = torch.sigmoid(logits / beta).to(h.dtype)
             if return_p_active:
                 return u, None
             return u
@@ -236,7 +236,7 @@ class UtilityPredictor(nn.Module):
         # Hard Concrete L0 formulation:
         # Closed-form retention probability: P(u > 0) = sigma(z - beta * log(-gamma / zeta))
         offset = beta * math.log(-self.hc_gamma / self.hc_zeta)
-        p_active = torch.sigmoid(logits - offset)
+        p_active = torch.sigmoid(logits - offset).to(h.dtype)
 
         if self.training:
             # Clamped uniform noise to avoid log(0)
@@ -247,7 +247,7 @@ class UtilityPredictor(nn.Module):
             s = torch.sigmoid(logits / beta)
 
         s_bar = s * (self.hc_zeta - self.hc_gamma) + self.hc_gamma
-        u_clamped = torch.clamp(s_bar, min=0.0, max=1.0)
+        u_clamped = torch.clamp(s_bar, min=0.0, max=1.0).to(h.dtype)
         if return_p_active:
             return u_clamped, p_active
         return u_clamped
@@ -871,8 +871,22 @@ class ModernBertMiceCrossAttention(nn.Module):
 
             if d_utilities is not None:
                 # Value-only gating: broadcast [1, total_d, 1] -> [1, 1, total_d, 1] over heads & head_dim
-                u_scale = d_utilities.squeeze(-1)[:, None, :, None]
+                u_scale = d_utilities.squeeze(-1)[:, None, :, None].to(
+                    value_states.dtype
+                )
                 value_states = value_states * u_scale
+
+            if (
+                query_states.dtype != value_states.dtype
+                or query_states.dtype != key_states.dtype
+            ):
+                logger.warning(
+                    f"[ModernBertMiceCrossAttention] Attention dtype mismatch in varlen path: "
+                    f"query={query_states.dtype}, key={key_states.dtype}, value={value_states.dtype}. "
+                    f"Casting key and value to {query_states.dtype} to prevent FlashAttention kernel failure."
+                )
+                key_states = key_states.to(query_states.dtype)
+                value_states = value_states.to(query_states.dtype)
 
             attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
                 attn_impl, eager_attention_forward
@@ -917,7 +931,7 @@ class ModernBertMiceCrossAttention(nn.Module):
 
         if d_utilities is not None:
             # Value-only gating: broadcast [B, d_len, 1] -> [B, 1, d_len, 1] over heads & head_dim
-            u_scale = d_utilities.squeeze(-1)[:, None, :, None]
+            u_scale = d_utilities.squeeze(-1)[:, None, :, None].to(value_states.dtype)
             value_states = value_states * u_scale
 
         if q_mask is None:
@@ -953,7 +967,16 @@ class ModernBertMiceCrossAttention(nn.Module):
 
             if d_utilities is not None:
                 u_unpadded, _, _, _, _ = _unpad_input(d_utilities, d_mask)
-                V_un = V_un * u_unpadded.view(1, -1, 1, 1)
+                V_un = V_un * u_unpadded.view(1, -1, 1, 1).to(V_un.dtype)
+
+            if Q_un.dtype != V_un.dtype or Q_un.dtype != K_un.dtype:
+                logger.warning(
+                    f"[ModernBertMiceCrossAttention] Attention dtype mismatch in 3D unpad fallback path: "
+                    f"query={Q_un.dtype}, key={K_un.dtype}, value={V_un.dtype}. "
+                    f"Casting key and value to {Q_un.dtype} to prevent FlashAttention kernel failure."
+                )
+                K_un = K_un.to(Q_un.dtype)
+                V_un = V_un.to(Q_un.dtype)
 
             attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
                 attn_impl, eager_attention_forward
@@ -992,6 +1015,18 @@ class ModernBertMiceCrossAttention(nn.Module):
             attn_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
                 fallback_impl, eager_attention_forward
             )
+            if (
+                query_states.dtype != value_states.dtype
+                or query_states.dtype != key_states.dtype
+            ):
+                logger.warning(
+                    f"[ModernBertMiceCrossAttention] Attention dtype mismatch in SDPA fallback path: "
+                    f"query={query_states.dtype}, key={key_states.dtype}, value={value_states.dtype}. "
+                    f"Casting key and value to {query_states.dtype}."
+                )
+                key_states = key_states.to(query_states.dtype)
+                value_states = value_states.to(query_states.dtype)
+
             attn_output, _ = attn_interface(
                 self,
                 query_states,
@@ -1081,7 +1116,7 @@ class ModernBertMiceTopLayer(nn.Module):
             gate_target = getattr(self.config, "gate_target", "h")
             if gate_target == "h":
                 if d_utilities is not None:
-                    norm_d_hidden = norm_d_hidden * d_utilities
+                    norm_d_hidden = norm_d_hidden * d_utilities.to(norm_d_hidden.dtype)
                 cross_attn_utilities = None
             elif gate_target == "v":
                 cross_attn_utilities = d_utilities
@@ -1987,13 +2022,13 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                 if gate_target == "h" and not getattr(
                     self.config, "top_layers_doc_ln", False
                 ):
-                    d_hidden = d_hidden * pruned_utilities
+                    d_hidden = d_hidden * pruned_utilities.to(d_hidden.dtype)
             else:
                 gate_target = getattr(self.config, "gate_target", "h")
                 if gate_target == "h":
                     if not getattr(self.config, "top_layers_doc_ln", False):
                         # Legacy soft gating: multiply in post-processing
-                        d_hidden = d_hidden * utilities
+                        d_hidden = d_hidden * utilities.to(d_hidden.dtype)
                     else:
                         # Defer soft gating to top_layers (applied post-doc_cross_attn_norm)
                         pass
@@ -2332,7 +2367,7 @@ class ModernBertMiceForSequenceClassification(ModernBertPreTrainedModel):
                         "[ModernBertMiceModel] gate_target='v' was configured but use_cross_attn=False (Concat-Self Attention mode). "
                         "Falling back to gating d_hidden directly."
                     )
-                d_hidden = d_hidden * d_utilities
+                d_hidden = d_hidden * d_utilities.to(d_hidden.dtype)
 
             # 2. Concatenate [query, doc] into a single joint sequence [CLS] q [SEP] d [SEP]
             #    and recompute RoPE embeddings across the entire concatenated sequence.
