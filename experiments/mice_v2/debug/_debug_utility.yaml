@@ -10,7 +10,7 @@ nb_repetitions: 1
 base: cross-encoder/ettin-reranker-68m-v1
 
 learner:
-    requirements: duration=2h & cpu(cores=8, mem=10G) & cuda(mem=40G)
+    requirements: duration=4h & cpu(cores=8, mem=10G) & cuda(mem=40G) * 2
 
 
 # Eval only on BEIR

@@ -135,18 +135,29 @@ def anonymize_experimaestro_json(
 
 
 def find_job_params_json(
-    identifier: str, workspace_path: Optional[Path] = None
+    identifier: str,
+    reference_path: Optional[Path] = None,
+    workspace_path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Locates the params.json corresponding to a given job identifier.
 
     Searches:
-    1. Provided `workspace_path / jobs/*/<identifier>/params.json`
-    2. Experimaestro workspaces configured in settings
-    3. Standard local paths (~/code/experiments, etc.)
+    1. Upward from reference_path (looking for an ancestor that contains a `jobs/` directory)
+    2. Provided `workspace_path / jobs/*/<identifier>/params.json`
+    3. Experimaestro workspaces configured in settings
+    4. Environment variables (EXPERIMENTS_DIR)
     """
     candidates: List[Path] = []
     if workspace_path and workspace_path.exists():
         candidates.append(workspace_path)
+
+    # Ascend from reference_path to locate enclosing workspace with a jobs/ directory
+    if reference_path and reference_path.exists():
+        ref_resolved = reference_path.resolve()
+        for parent in [ref_resolved, *ref_resolved.parents]:
+            if (parent / "jobs").is_dir():
+                candidates.append(parent / "jobs")
+                break
 
     # Try looking in default experimaestro workspace paths
     try:
@@ -164,7 +175,7 @@ def find_job_params_json(
         candidates.append(Path(env_xp))
 
     for base in candidates:
-        jobs_dir = base / "jobs" if (base / "jobs").exists() else base
+        jobs_dir = base / "jobs" if (base / "jobs").is_dir() else base
         matches = list(jobs_dir.glob(f"*/{identifier}*/params.json"))
         if matches:
             return matches[0]
@@ -206,13 +217,29 @@ def hydrate_task_stubs(
         int(o["id"]): o for o in data if "id" in o
     }
 
-    # Find stubs: task objects where fields is empty, or task is None while being referenced as task
+    # Find tasks referenced by configurations (e.g. SimpleModuleLoader.task)
+    task_refs: Set[int] = {int(o["task"]) for o in data if o.get("task") is not None}
+
+    # Find stubs:
+    # 1) Explicit stub: obj.get("stub") is True
+    # 2) An object referenced as a task by another config, having empty fields and task is None
     stubs_to_hydrate: List[Tuple[Dict[str, Any], str]] = []
     for obj in data:
         ident = obj.get("identifier")
         fields = obj.get("fields")
+        obj_id = int(obj["id"]) if "id" in obj else None
+
         is_stub = obj.get("stub", False) or (
-            ident and fields == {} and obj.get("task") is None
+            fields == {}
+            and obj.get("task") is None
+            and (
+                obj_id in task_refs
+                or any(
+                    k in str(obj.get("typename", "")).lower()
+                    for k in ("learner", "task", "trainer")
+                )
+                or obj.get("type", "") in ("Learner", "Task")
+            )
         )
         if is_stub and ident:
             stubs_to_hydrate.append((obj, ident))
@@ -225,7 +252,9 @@ def hydrate_task_stubs(
     hydrated_count = 0
 
     for stub_obj, ident in stubs_to_hydrate:
-        params_file = find_job_params_json(ident, workspace_path=workspace_path)
+        params_file = find_job_params_json(
+            ident, reference_path=target, workspace_path=workspace_path
+        )
         if not params_file or not params_file.exists():
             logger.warning(
                 f"Could not locate params.json for TaskStub {ident[:8]}... leaving stub as-is."
@@ -283,6 +312,8 @@ def hydrate_task_stubs(
                                 id_map.get(int(t), int(t))
                                 for t in u_obj.get("init-tasks", [])
                             ]
+                        # Remove stub marker if present
+                        stub_obj.pop("stub", None)
                         hydrated_count += 1
                     # Already exists in graph, skip adding duplicate
                     continue
@@ -361,7 +392,7 @@ def render_model_dag(
     """Builds and renders a standalone DAG from an exported experimaestro.json.
 
     - Automatically defaults all task statuses to 'done' (green).
-    - Preserves terminal config (e.g. SimpleModuleLoader) at the final stage.
+    - Preserves terminal deliverable configs (e.g. SimpleModuleLoader) at the final stage.
     - Extracts scalar parameters into node tags.
     """
     from experimaestro.ui.graph import (
@@ -380,11 +411,20 @@ def render_model_dag(
     model_name = model_path.parent.name if model_path.is_file() else model_path.name
     graph = build_experiment_graph(model_name, "snapshot", data, {}, set())
 
-    # 1. Preserve terminal config at the end of the DAG
-    if data:
-        sink_id = data[-1].get("identifier")
-        if sink_id and sink_id in graph.nodes:
-            graph.nodes[sink_id].kind = NodeKind.ACTION
+    # 1. Find sink configs (deliverables that no other object depends on)
+    dependents: Dict[str, List[str]] = {n: [] for n in graph.nodes}
+    for n, node in graph.nodes.items():
+        for d in node.depends_on:
+            if d in dependents:
+                dependents[d].append(n)
+
+    sink_configs = [
+        n
+        for n, deps in dependents.items()
+        if not deps and graph.nodes[n].kind == NodeKind.CONFIG
+    ]
+    for sink_id in sink_configs:
+        graph.nodes[sink_id].kind = NodeKind.ACTION
 
     # 2. Extract scalar task parameters into tags
     for obj in data:
