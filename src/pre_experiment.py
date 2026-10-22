@@ -45,7 +45,6 @@ modules_to_mock = [
     "xpmir.learning.losses",
     "xpmir.neural._sparton",
     "xpm_torch.datasets",
-    "MICE.modeling.mice_v2.modernbert_hf",
 ]
 logger.info(
     f"Mocking (not importing) the following modules in experiment manager: {modules_to_mock}"

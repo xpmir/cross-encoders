@@ -27,7 +27,7 @@ def test_anonymize_path_str():
     assert "linkhome" not in anon_dm
 
     # Cluster lustre jobs
-    lustre_job = "/lustre/fsn1/projects/rech/npl/commun/micev2/jobs/xpm_torch.learner.learner/f41f415aeba64bcb1e755c835afb4fec0daea919d5194cade4cfe83d691e34a2/checkpoints"
+    lustre_job = "/lustre/fsn1/projects/rech/npl/commun/cross_encoders/jobs/xpm_torch.learner.learner/f41f415aeba64bcb1e755c835afb4fec0daea919d5194cade4cfe83d691e34a2/checkpoints"
     anon_job = anonymize_path_str(lustre_job)
     assert anon_job == "<workspace>/jobs/xpm_torch.learner.learner/f41f415aeba64bcb1e755c835afb4fec0daea919d5194cade4cfe83d691e34a2/checkpoints"
     assert "lustre" not in anon_job

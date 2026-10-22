@@ -14,54 +14,6 @@ from xpmir.neural.sentence_transformers import st_multivector_scorer
 from retrievers import plaid_retriever
 from index_utils import _indexes
 from configuration import Indexation, PlaidConfiguration
-from MICE.modeling.mice_v2.modernbert_xpm import mice_v2_scorer
-
-
-def test_modernbert_mice_multivector_protocol():
-    """Verify ModernBertMiceScorer implements the multi-vector protocol for PLAID."""
-    model_id = "jhu-clsp/ettin-encoder-17m"
-    scorer_cfg, init_tasks = mice_v2_scorer(
-        hf_id=model_id,
-        n_contextualization_layers=2,
-    )
-    scorer = scorer_cfg.instance()
-    for task in init_tasks:
-        task.instance().execute()
-    scorer.initialize()
-    scorer.eval()
-
-    # Check duck-typed protocol properties
-    assert hasattr(scorer, "dimension")
-    assert isinstance(scorer.dimension, int)
-    assert scorer.dimension > 0
-    assert hasattr(scorer, "model")
-    assert isinstance(scorer.model, torch.nn.Module)
-
-    # Check document_token_embeddings
-    docs = [
-        IDTextRecord(id="d1", text="A sunny day in Paris."),
-        IDTextRecord(id="d2", text="Deep learning for retrieval."),
-    ]
-    with torch.no_grad():
-        doc_embs = scorer.document_token_embeddings(docs)
-    assert isinstance(doc_embs, list)
-    assert len(doc_embs) == 2
-    for t in doc_embs:
-        assert isinstance(t, torch.Tensor)
-        assert t.ndim == 2
-        assert t.shape[1] == scorer.dimension
-
-    # Check query_token_embeddings
-    queries = [
-        IDTextRecord(id="q1", text="Paris weather"),
-        IDTextRecord(id="q2", text="neural search"),
-    ]
-    with torch.no_grad():
-        q_embs = scorer.query_token_embeddings(queries)
-    assert isinstance(q_embs, torch.Tensor)
-    assert q_embs.ndim == 3
-    assert q_embs.shape[0] == 2
-    assert q_embs.shape[2] == scorer.dimension
 
 
 def test_plaid_retriever_retrieve_all_batching(tmp_path: Path):

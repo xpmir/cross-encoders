@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Benchmark saved cross-encoder / MICE models.
+Benchmark saved cross-encoder models.
 Supports loading from local paths or remote paths (HOST:/lustre/...) using scp.
 Currently computes theoretical FLOPs (standard and with document precomputation).
 """
@@ -528,7 +528,7 @@ def print_results(res: Dict[str, Any]):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark Cross-Encoder / MICE model FLOPs from local or remote (scp) paths."
+        description="Benchmark Cross-Encoder model FLOPs from local or remote (scp) paths."
     )
     parser.add_argument(
         "model_path",

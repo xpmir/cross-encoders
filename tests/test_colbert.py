@@ -1,5 +1,5 @@
 """
-Tests for the ColBERT model using the MICE test framework.
+Tests for the ColBERT model using xpmir.
 """
 
 import torch

@@ -13,6 +13,6 @@ repos:
     hooks:
     -   id: ruff
         args: [ --fix ]
-        files: ^(src/|experimaestro-python/src/)
+        files: ^src/
     -   id: ruff-format
-        files: ^(src/|experimaestro-python/src/)
+        files: ^src/
