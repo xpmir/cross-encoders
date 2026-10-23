@@ -50,13 +50,13 @@ from xpmir.letor.distillation.pairwise import (
     DistillationPairwiseTrainer,
     MSEDifferenceLoss,
 )
-from pointwise_distillation import (
+from xpmir.letor.distillation.pointwise import (
     DistillationPointwiseLoss,
     PointwiseDistillationSampler,
     PointwiseDistillationTrainer,
     PointwiseMSELoss,
-    FlattenAndShuffleDataset,
 )
+from datamaestro.data.huggingface import FlattenAndShuffleDataset
 
 from samplers import prepare_collection
 from configuration import Losses, CE_FineTuning, ScorerType

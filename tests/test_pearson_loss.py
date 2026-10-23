@@ -7,7 +7,7 @@ import numpy as np
 from configuration import Losses, CE_FineTuning, ScorerType
 from training_utils import PearsonLoss, build_trainer
 from cross_encoders_training.experiment import build_STMultiVectorEncoder
-from pointwise_distillation import PointwiseDistillationTrainer
+from xpmir.letor.distillation.pointwise import PointwiseDistillationTrainer
 from datamaestro_ir.data.huggingface import HuggingFacePointwiseDistillationSamples
 
 

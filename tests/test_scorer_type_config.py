@@ -190,7 +190,7 @@ def test_build_trainer_pointwise_mse_scaling(monkeypatch):
     from configuration import Losses
     import training_utils
     from training_utils import build_trainer
-    from pointwise_distillation import PointwiseDistillationTrainer
+    from xpmir.letor.distillation.pointwise import PointwiseDistillationTrainer
     from datamaestro_ir.data.huggingface import HuggingFacePointwiseDistillationSamples
 
     dummy_ds = HuggingFacePointwiseDistillationSamples.C(
@@ -217,7 +217,7 @@ def test_build_trainer_pointwise_mse_scaling(monkeypatch):
 
 def test_pointwise_mse_loss_teacher_scaling():
     import torch
-    from pointwise_distillation import PointwiseMSELoss
+    from xpmir.letor.distillation.pointwise import PointwiseMSELoss
 
     # Without scaling
     loss_unscaled = PointwiseMSELoss.C().instance()
