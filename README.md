@@ -20,6 +20,7 @@
 [![Paper](https://img.shields.io/badge/Paper-Arxiv-red)](http://arxiv.org/abs/2603.03010)
 [![All Models](https://img.shields.io/badge/🤗%20Hugging%20Face%20Models-blue)](https://huggingface.co/collections/xpmir/reproducing-cross-encoders)
 [![Demo Space](https://img.shields.io/badge/🤗%20Hugging%20Face-Interactive%20Demo-yellow)](https://huggingface.co/spaces/hugging-apps/cross-encoder-reranker-demo)
+[![Interactive Pipeline](https://img.shields.io/badge/Interactive%20DAG-Experimaestro-purple)](https://xpmir.github.io/cross-encoders/)
 [![GitHub](https://img.shields.io/badge/GitHub-Code-blue)](https://github.com/xpmir/cross-encoders)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Experimaestro](https://img.shields.io/badge/orchestrated%20by-experimaestro-orange)](https://github.com/experimaestro/experimaestro-python)
@@ -40,6 +41,11 @@ Built upon the [Experimaestro](https://github.com/experimaestro/experimaestro-py
 - Rigorous, distributed multi-benchmark evaluation (TREC-DL, BEIR, LoTTE, Robust04, NanoBEIR, LIMIT).
 - Pretrained models released on Hugging Face: [`xpmir/reproducing-cross-encoders`](https://huggingface.co/collections/xpmir/reproducing-cross-encoders).
 - Interactive demo on Hugging Face Spaces: [Cross-Encoder Reranker Demo](https://huggingface.co/spaces/hugging-apps/cross-encoder-reranker-demo).
+
+### 🌐 Interactive Pipeline & Experimaestro Guide
+
+Explore how Experimaestro orchestrates cross-encoder training, candidate caching, and multi-benchmark evaluation in an interactive DAG viewer:
+👉 **[Interactive Pipeline & Experimaestro Guide](https://xpmir.github.io/cross-encoders/)**
 
 ### 🎮 Interactive Demo
 
@@ -96,6 +102,8 @@ evaluation:
     robust04: true      # Robust04
 ```
 Experimaestro automatically schedules and launches the evaluation of all benchmark datasets **in parallel** across available GPUs/cluster nodes at the very moment the Learner finishes !
+
+> 🔍 **Interactive Visualization**: Explore the full experimental DAG with hover tooltips and all 74 configuration nodes on our **[Interactive Showcase & Guide](https://xpmir.github.io/cross-encoders/)**.
 
 ---
 
