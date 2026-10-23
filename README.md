@@ -49,7 +49,7 @@ This framework implements a wide spectrum of objective functions and negative sa
 - **MarginMSE** ([Hofstätter et al. 2020](https://www.semanticscholar.org/paper/Improving-Efficient-Neural-Ranking-Models-with-Hofst%C3%A4tter-Althammer/102f40abbd5f64a0f7c341ceaf8af4fb536e35f8)): Pairwise margin distillation matching teacher score differences $\Delta s = s(q, d^+) - s(q, d^-)$ between positive and negative documents from a cross-encoder teacher ensemble.
 - **DistillRankNET** ([Schlatt et al. 2025](http://arxiv.org/abs/2405.07920)): Pairwise distillation targeting soft probability distributions over pair preferences induced by LLM / teacher scores.
 - **ADR-MSE (Approximate Distributional Ranking MSE)** ([Schlatt et al. 2025](http://arxiv.org/abs/2405.07920)): Listwise distillation matching the Plackett-Luce distribution over top-$k$ candidates with teacher predictions.
-- **Pointwise MSE & Pearson Correlation**: Distillation against dense teacher scores (e.g. `cross-encoder/ettin-reranker-v1-data` or Mixedbread-large) using pointwise squared error or batch Pearson correlation loss ($1 - r$).
+- **Pointwise MSE & Pearson Correlation**: Distillation against dense teacher scores (e.g. `cross-encoder/ettin-reranker-v1-data` with Mixedbread-large, used to train [the ettin reranker family](https://huggingface.co/blog/ettin-reranker)) using pointwise squared error or batch Pearson correlation loss ($1 - r$).
 
 ### 2. Supervised & Contrastive Objectives
 - **InfoNCE (with In-Batch Negatives)**: Contrastive listwise ranking objective maximizing the likelihood of positive documents against in-batch negatives ([Schlatt et al. 2025](http://arxiv.org/abs/2405.07920)).
@@ -88,7 +88,7 @@ evaluation:
     lotte_search: true  # 5 LoTTE search domains
     robust04: true      # Robust04
 ```
-Experimaestro automatically schedules and launches the evaluation of all benchmark datasets **in parallel** across available GPUs/cluster nodes as soon as a model checkpoint becomes available.
+Experimaestro automatically schedules and launches the evaluation of all benchmark datasets **in parallel** across available GPUs/cluster nodes at the very moment the Learner finishes !
 
 ---
 
@@ -107,8 +107,7 @@ This repository uses [`uv`](https://docs.astral.sh/uv/) for fast, deterministic 
    uv sync
    ```
 
-3. **(Optional) Flash-Attention 2:**
-   For accelerated attention and unpadded sequence processing:
+3. **(Optional) Flash-Attention 2** for accelerated attention and unpadded sequence processing is highly recommended for training with longer sequences (e.g ettin-reranker-data with `MSE_mixedbread_large` strategy). You can install it manually or use the HF kernel:
    ```bash
    uvx hf download kernels-community/flash-attn2
    ```

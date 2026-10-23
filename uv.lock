@@ -566,7 +566,7 @@ requires-dist = [
     { name = "experimaestro-ir", extras = ["neural"], git = "https://github.com/experimaestro/experimaestro-ir.git?tag=v1.5.0" },
     { name = "fast-plaid", specifier = ">=1.5.0" },
     { name = "impact-index", specifier = ">=1.7.0" },
-    { name = "ir-datasets", git = "https://github.com/bpiwowar/ir_datasets.git" },
+    { name = "ir-datasets" },
     { name = "pandas", specifier = ">=3.0.0" },
     { name = "sentence-transformers", specifier = ">=6" },
     { name = "sentencepiece", specifier = ">=0.2.1" },
@@ -1364,7 +1364,7 @@ wheels = [
 [[package]]
 name = "ir-datasets"
 version = "0.5.11"
-source = { git = "https://github.com/bpiwowar/ir_datasets.git#1eee5d2b0bdfa5667b3f7c985c2715d3a2a77bcd" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "ijson", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -1381,6 +1381,10 @@ dependencies = [
     { name = "warc3-wet", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "warc3-wet-clueweb09", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "zlib-state", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/80/c6/f02811c51fec845ee87a10bb3675516a2d71935b203e5ddb80b7eb59b1da/ir_datasets-0.5.11.tar.gz", hash = "sha256:06c90af634ae5063c813286b35065debca1a974d26e136403d899f3ecd7ad463", size = 758463, upload-time = "2025-06-24T07:58:31.375Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/38/73fa582d6997362d9b4901b2a8ba1177b2d2896aa59ab8d069a3884e2e0d/ir_datasets-0.5.11-py3-none-any.whl", hash = "sha256:ae78549e5a7fa45e50462b7acb9f0765fc344fec6054108bf3dd063050555206", size = 866095, upload-time = "2025-06-24T07:58:29.958Z" },
 ]
 
 [[package]]

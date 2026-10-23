@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cross-encoders"
 version = "0.1.0"
-description = "Add your description here"
+description = "Training and Evaluating IR Scorers with experimaestro"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
@@ -52,7 +52,6 @@ explicit = true
 torch = { index = "pytorch-cu126", marker = "sys_platform != 'darwin'" }
 experimaestro = { git = "https://github.com/experimaestro/experimaestro-python.git" }
 experimaestro-ir = { git = "https://github.com/experimaestro/experimaestro-ir.git", tag = "v1.5.0" }
-ir-datasets = { git = "https://github.com/bpiwowar/ir_datasets.git" }
 
 
 [dependency-groups]
