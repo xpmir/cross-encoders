@@ -87,7 +87,6 @@
     /* Article Header */
     .article-header {
       margin-bottom: 2.5rem;
-      max-width: 900px;
     }
     .article-meta {
       font-size: 0.85rem;
@@ -117,6 +116,10 @@
       font-size: 1.12rem;
       color: #b1bac4;
       line-height: 1.65;
+      text-align: justify;
+      text-justify: inter-word;
+      hyphens: auto;
+      -webkit-hyphens: auto;
     }
 
     /* Interactive DAG Box */
@@ -177,7 +180,7 @@
     }
     .dag-guide strong { color: var(--heading); }
 
-    /* Sections */
+    /* Sections & Typography Consistency */
     section { margin-bottom: 3.5rem; }
     h2 {
       font-size: 1.45rem;
@@ -189,6 +192,25 @@
       font-weight: 600;
     }
     p { margin-bottom: 1.1rem; }
+
+    section > p,
+    section > ol,
+    .callout {
+      text-align: justify;
+      text-justify: inter-word;
+      hyphens: auto;
+      -webkit-hyphens: auto;
+    }
+
+    @media (max-width: 640px) {
+      .lead,
+      section > p,
+      section > ol,
+      .callout {
+        text-align: left;
+        hyphens: none;
+      }
+    }
 
     /* Grid cards */
     .grid {
