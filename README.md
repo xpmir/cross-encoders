@@ -171,9 +171,3 @@ If you find this work or codebase useful, please cite:
       url={https://arxiv.org/abs/2603.03010},
 }
 ```
-
----
-
-## 🙏 Acknowledgments
-
-We would like to warmly thank the Hugging Face team for their support, computational resources, and for building the interactive [Cross-Encoder Reranker Demo Space](https://huggingface.co/spaces/hugging-apps/cross-encoder-reranker-demo).
