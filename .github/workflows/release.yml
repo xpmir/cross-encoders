@@ -1,0 +1,40 @@
+name: GitHub Release & Assets
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  release:
+    name: Build & Attach Release Assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Required to update release notes and attach assets
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed for changelog & dynamic versioning
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Generate changelog for this release
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: release-notes.md
+
+      - name: Build python package
+        run: uv build
+
+      - name: Update GitHub Release notes and attach wheel/sdist
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          files: dist/*
