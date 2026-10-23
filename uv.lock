@@ -317,7 +317,6 @@ wheels = [
 
 [[package]]
 name = "cross-encoders"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
