@@ -37,6 +37,7 @@ plugins = ["experimaestro.mypy"]
 mypy_path = "src"
 
 [tool.uv]
+default-groups = []
 environments = [
     "sys_platform == 'darwin'",
     "sys_platform == 'linux'"
@@ -56,19 +57,13 @@ experimaestro-ir = { git = "https://github.com/experimaestro/experimaestro-ir.gi
 
 [dependency-groups]
 dev = [
-    "adjusttext>=1.3.0",
-    "circuitsvis>=1.43.3",
-    "matplotlib>=3.10.8",
     "mypy>=1.10.0",
-    "notebook>=7.5.4",
-    "plotly>=7.0.0",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
     "pytest-dependency>=0.6.0",
     "pytest-order>=1.0.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.9.9",
-    "seaborn>=0.13.2",
 ]
 docs = [
     "sphinx>=6",

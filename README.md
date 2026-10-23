@@ -103,8 +103,13 @@ This repository uses [`uv`](https://docs.astral.sh/uv/) for fast, deterministic 
    ```
 
 2. **Synchronize dependencies:**
+   For training and cluster execution (runtime dependencies only):
    ```bash
    uv sync
+   ```
+   To also include development and testing tools (`pytest`, `ruff`, `mypy`):
+   ```bash
+   uv sync --group dev
    ```
 
 3. **(Optional) Flash-Attention 2** for accelerated attention and unpadded sequence processing is highly recommended for training with longer sequences (e.g ettin-reranker-data with `MSE_mixedbread_large` strategy). You can install it manually or use the HF kernel:
@@ -132,15 +137,15 @@ The YAML configurations in `experiments/repro_paper/` cover all model backbones 
 | [`Negatives/RankDistiLLMNeg_base.yaml`](experiments/repro_paper/Negatives/RankDistiLLMNeg_base.yaml) | Base models trained with RankDistiLLM negative pools |
 
 ### Validating with a Dry Run
-To inspect the tasks and execution DAG without submitting jobs:
+To inspect the tasks and execution DAG without submitting jobs :
 ```bash
-uv run experimaestro run-experiment experiments/repro_paper/core_mini_debug.yaml --run-mode DRY_RUN
+uv run experimaestro run experiments/repro_paper/core_mini_debug.yaml --run-mode DRY_RUN
 ```
 
 ### Launching Experiments
 To launch an experiment (local execution or automated SLURM dispatch depending on your launchers):
 ```bash
-uv run experimaestro run-experiment experiments/repro_paper/core_base_paper.yaml
+uv run experimaestro run experiments/repro_paper/core_base_paper.yaml
 ```
 
 ---
