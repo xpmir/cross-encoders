@@ -19,6 +19,7 @@
 
 [![Paper](https://img.shields.io/badge/Paper-Arxiv-red)](http://arxiv.org/abs/2603.03010)
 [![All Models](https://img.shields.io/badge/🤗%20Hugging%20Face%20Models-blue)](https://huggingface.co/collections/xpmir/reproducing-cross-encoders)
+[![Demo Space](https://img.shields.io/badge/🤗%20Hugging%20Face-Interactive%20Demo-yellow)](https://huggingface.co/spaces/hugging-apps/cross-encoder-reranker-demo)
 [![GitHub](https://img.shields.io/badge/GitHub-Code-blue)](https://github.com/xpmir/cross-encoders)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Experimaestro](https://img.shields.io/badge/orchestrated%20by-experimaestro-orange)](https://github.com/experimaestro/experimaestro-python)
@@ -38,6 +39,12 @@ Built upon the [Experimaestro](https://github.com/experimaestro/experimaestro-py
 - Advanced supervised training and knowledge distillation strategies.
 - Rigorous, distributed multi-benchmark evaluation (TREC-DL, BEIR, LoTTE, Robust04, NanoBEIR, LIMIT).
 - Pretrained models released on Hugging Face: [`xpmir/reproducing-cross-encoders`](https://huggingface.co/collections/xpmir/reproducing-cross-encoders).
+- Interactive demo on Hugging Face Spaces: [Cross-Encoder Reranker Demo](https://huggingface.co/spaces/hugging-apps/cross-encoder-reranker-demo).
+
+### 🎮 Interactive Demo
+
+Try out the models directly in your browser! The Hugging Face team built an interactive demo showcasing our cross-encoder rerankers:
+👉 **[Hugging Face Cross-Encoder Reranker Demo](https://huggingface.co/spaces/hugging-apps/cross-encoder-reranker-demo)**
 
 ---
 
@@ -164,3 +171,9 @@ If you find this work or codebase useful, please cite:
       url={https://arxiv.org/abs/2603.03010},
 }
 ```
+
+---
+
+## 🙏 Acknowledgments
+
+We would like to warmly thank the Hugging Face team for their support, computational resources, and for building the interactive [Cross-Encoder Reranker Demo Space](https://huggingface.co/spaces/hugging-apps/cross-encoder-reranker-demo).
