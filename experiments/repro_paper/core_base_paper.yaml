@@ -46,7 +46,9 @@ retrieval:
     k: 1000
 
 evaluation:
-    all_datasets: true
+    in_domain: true
+    beir13: true
+    lotte_search: true
 
 #### Params that are grid searched
 grid_search:

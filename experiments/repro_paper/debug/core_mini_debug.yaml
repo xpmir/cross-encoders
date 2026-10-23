@@ -1,8 +1,9 @@
-parent: core_mini # load configuration from core base.
 id: core_mini_debug
 title: "Validation comparison experiment"
 description:
     Compare initial experiment with new version of code (should be faster)
+parent: ../core_mini # load configuration from core mini.
+pre_experiment: pre_experiment
 
 seed: 12 # To mimick the HF xp
 nb_repetitions: 1
@@ -18,14 +19,18 @@ learner:
     validation: msmarco
     requirements: duration=30h & cpu(cores=4) & cuda(mem=16G)
 
+# Debug: only top 100 for faster retrieval
 retrieval:
     # Use H100 for faster evals..
     requirements: duration=30h & cpu(cores=4) & cuda(mem=16G)
-    k: 1000
+    k: 100
 
-evaluation:
+
+evaluation: #Eval only on MsMarco, Trec DL19 and Trec DL20
+    all_datasets: false
+    beir13: false
+    lotte_search: false
     in_domain: true
-
 
 #### Empty grid search overriding core_mini
 

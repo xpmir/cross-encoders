@@ -18,11 +18,10 @@ retrieval:
     k: 1000
 
 evaluation:
-    all_datasets: false
     in_domain: true
     beir13: true
-    robust04: true
     lotte_search: true
+    # robust04: true # this needs to manually add Robust04 as it is not open
     # nanobeir: true
 
 

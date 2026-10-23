@@ -125,8 +125,7 @@ The YAML configurations in `experiments/repro_paper/` cover all model backbones 
 
 | Configuration | Description |
 |---|---|
-| [`core_debug.yaml`](experiments/repro_paper/core_debug.yaml) | Fast sanity-check configuration for local debugging |
-| [`core_mini_debug.yaml`](experiments/repro_paper/core_mini_debug.yaml) | MiniLM debug configuration with limited query sets |
+| [`debug/core_mini_debug.yaml`](experiments/repro_paper/debug/core_mini_debug.yaml) | MiniLM debug configuration with limited query sets for fast local checks |
 | [`core_mini.yaml`](experiments/repro_paper/core_mini.yaml) | MiniLM & small backbones (17M, 32M, 68M) across 6 loss functions |
 | [`core_base_paper.yaml`](experiments/repro_paper/core_base_paper.yaml) | Base models (BERT, RoBERTa, ELECTRA, DeBERTa-v3, Ettin-150M) |
 | [`core_base_deberta.yaml`](experiments/repro_paper/core_base_deberta.yaml) | DeBERTa-v3 base model training |
@@ -139,7 +138,7 @@ The YAML configurations in `experiments/repro_paper/` cover all model backbones 
 ### Validating with a Dry Run
 To inspect the tasks and execution DAG without submitting jobs :
 ```bash
-uv run experimaestro run experiments/repro_paper/core_mini_debug.yaml --run-mode DRY_RUN
+uv run experimaestro run experiments/repro_paper/debug/core_mini_debug.yaml --run-mode DRY_RUN
 ```
 
 ### Launching Experiments
